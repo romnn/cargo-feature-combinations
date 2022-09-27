@@ -1,49 +1,13 @@
 pub mod config;
-pub mod features;
+// pub mod features;
 
 use anyhow::Result;
-use features::feature_combinations;
-use std::collections::{HashMap, HashSet};
-// use clap::{Parser, Subcommand};
+use cargo_metadata::{Metadata, MetadataCommand};
 use config::Config;
+// use features::feature_combinations;
+use itertools::Itertools;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-// use cargo::Config;
-// use cargo::util::toml::TomlManifest;
-
-// #[derive(Subcommand, Debug)]
-// enum Command {
-//     #[clap(name = "feature-matrix")]
-//     FeatureMatrix {
-//         #[clap(multiple_values = true)]
-//         args: Vec<String>,
-//     },
-// }
-
-// /// Command line arguments
-// #[derive(Parser, Debug)]
-// #[clap(
-//     name = "cargo-feature-combinations",
-//     version = option_env!("CARGO_PKG_VERSION").unwrap_or("unknown"),
-//     about = "run cargo commands for all feature combinations",
-//     author = "romnn <contact@romnn.com>",
-// )]
-// // trailing_var_arg=true
-// struct Args {
-//     /// Cargo manifest path
-//     #[clap(long = "manifest-path")]
-//     manifest_path: Option<PathBuf>,
-
-//     #[clap(subcommand)]
-//     command: Option<Command>,
-
-//     /// Command and args to execute (must be last argument).
-//     // #[clap(allow_hyphen_values = true, multiple_values = true)]
-//     #[clap(multiple_values = true)]
-//     args: Vec<String>,
-//     // /// Number of times to greet
-//     // #[clap(short, long, value_parser, default_value_t = 1)]
-//     // count: u8,
-// }
 
 #[derive(Debug, Default)]
 struct Args {
@@ -52,75 +16,105 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    println!("hello");
-    // let args = Args::parse();
-    //use clap::{arg, command, AppSettings, Arg, ArgAction};
-
-    //let matches = command!()
-    //    // .global_setting(AppSettings::DeriveDisplayOrder)
-    //    // .allow_negative_numbers(true)
-    //    .arg(Arg::new("manifest-path").long("manifest-path"))
-    //    // arg!(--manifest-path <PATH>).required(false))
-    //    // .arg(arg!(--two <VALUE>).action(ArgAction::Set))
-    //    // .arg(arg!(--one <VALUE>).action(ArgAction::Set))
-    //    //
-    //    // .subcommand_required(true)
-    //    // .arg_required_else_help(true)
-    //    // .subcommand(
-    //    //     Command::new("feature-matrix").about("output the feature matrix for cargo"), // .arg(arg!([NAME])),
-    //    // )
-    //    .get_matches();
-    //// .get_matches();
-    //dbg!(&matches);
-    // dbg!(&args);
-
-    // dbg!(&std::env::args());
-    let mut args: Vec<String> = std::env::args().into_iter().skip(1).collect();
-    // .skip_while(|val| !val.starts_with("--manifest-path"));
-
+    let mut args: Vec<String> = std::env::args()
+        .into_iter()
+        .skip(1)
+        // .map(|s| s.as_str())
+        .collect();
     let mut config = Args::default();
-    // let mut feature_matrix = false;
-    // let mut manifest_path: Option<String> = None;
 
     let mut args_iter = args.iter();
     while let Some(arg) = args_iter.next() {
-        if arg == "--manifest-path" {
-            config.manifest_path = args_iter.next().cloned();
+        if arg == &"--manifest-path" {
+            config.manifest_path = args_iter.next().map(ToString::to_string);
         } else if arg.starts_with("--manifest-path=") {
-            config.manifest_path = Some(arg.trim_start_matches("--manifest-path=").into());
+            let path = arg.trim_start_matches("--manifest-path=").into();
+            config.manifest_path = Some(path);
         } else if *arg == "feature-matrix" {
             config.feature_matrix = true;
         }
-        // Some(ref p) if p == "--manifest-path" => {
-        //     cmd.manifest_path(args.next().unwrap());
-        // }
-        // Some(p) => {
-        //     cmd.manifest_path(p.trim_start_matches("--manifest-path="));
-        // }
-        // None => {}
     }
 
-    args.retain(|arg| arg != "feature-matrix");
+    // remove our extra arguments
+    // args.retain(|arg| arg != "feature-matrix");
 
-    dbg!(&config);
-    dbg!(&args);
-    // let manifest_path = match args.next() {
-    //     Some(ref p) if p == "--manifest-path" => {
-    //         cmd.manifest_path(args.next().unwrap());
-    //     }
-    //     Some(p) => {
-    //         cmd.manifest_path(p.trim_start_matches("--manifest-path="));
-    //     }
-    //     None => {}
-    // };
+    // dbg!(&config);
+    // dbg!(&args);
 
-    let mut cmd = cargo_metadata::MetadataCommand::new();
+    let mut cmd = MetadataCommand::new();
     if let Some(manifest_path) = config.manifest_path {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
-    // dbg!(&metadata);
-    dbg!(&metadata.workspace_members);
+
+    if config.feature_matrix {
+        print_feature_matrix(metadata)
+    } else {
+        run_cargo_command(metadata, args)
+    }
+}
+
+pub trait Package {
+    fn config(&self) -> Result<Config>;
+    fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>>;
+    fn feature_matrix(&self, config: &Config) -> Vec<String>;
+}
+
+impl Package for cargo_metadata::Package {
+    fn config(&self) -> Result<Config> {
+        match self.metadata.get("cargo-feature-combinations") {
+            Some(config) => {
+                let config: Config = serde_json::from_value(config.clone())?;
+                Ok(config)
+            }
+            None => Ok(Config::default()),
+        }
+    }
+
+    fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>> {
+        self.features
+            .keys()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|ft| !config.denylist.contains(*ft))
+            .powerset()
+            .filter_map(|set| {
+                let set: HashSet<_> = set.into_iter().cloned().collect();
+                let skip = config
+                    .skip_feature_sets
+                    .iter()
+                    .any(|skip_set| skip_set.is_subset(&set));
+                if skip {
+                    None
+                } else {
+                    Some(set)
+                }
+            })
+            .collect()
+    }
+
+    fn feature_matrix(&self, config: &Config) -> Vec<String> {
+        self.feature_combinations(config)
+            .into_iter()
+            .map(|features| features.iter().join(","))
+            .collect()
+    }
+}
+
+fn print_feature_matrix(metadata: Metadata) -> Result<()> {
+    let root_package = metadata
+        .root_package()
+        .ok_or(anyhow::anyhow!("no root package"))?;
+    // dbg!(&root_package.features);
+    let config = root_package.config()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&root_package.feature_matrix(&config))?
+    );
+    Ok(())
+}
+
+fn run_cargo_command(metadata: Metadata, mut args: Vec<String>) -> Result<()> {
     let workspace_members: HashSet<_> = metadata.workspace_members.iter().collect();
     let all_packages: HashMap<_, _> = metadata
         .packages
@@ -131,73 +125,122 @@ fn main() -> Result<()> {
         .iter()
         .flat_map(|pkg_id| all_packages.get(pkg_id))
         .collect();
-    dbg!(&packages.len());
-    // let packages = metadata.packages.filter(|pkg_kd| pk
-
-    // let root_package = metadata
-    //     .root_package()
-    //     .ok_or(anyhow::anyhow!("no root package"))?;
-    // dbg!(&root_package.features);
+    // dbg!(&packages.len());
 
     for package in packages {
-        let config = match package.metadata.get("cargo-feature-combinations") {
-            Some(config) => {
-                let config: Config = serde_json::from_value(config.clone())?;
-                config
+        let config = package.config()?;
+        for features in package.feature_combinations(&config) {
+            // let mut command = Command::new("cargo")
+            // || ffi::OsString::from("cargo"));
+            // dbg!(&features);
+            // dbg!(&args);
+            let cargo = std::env::var_os("CARGO").unwrap_or("cargo".into());
+            use std::process::{Command, Stdio};
+            let mut command = Command::new(cargo);
+            // .args(&["build", "--message-format=json-render-diagnostics"])
+            let cargo_args_idx = args.iter().position(|arg| arg.as_str() == "--");
+            let extra_args = args.split_off(cargo_args_idx.unwrap_or(args.len()));
+
+            command
+                .args(&args)
+                .arg("--no-default-features")
+                .arg(format!("--features={}", &features.iter().join(",")))
+                .args(&extra_args);
+
+            // .stdout(Stdio::piped())
+            // .stdout(Stdio::null())
+            // .output()?;
+
+            use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+            println!("");
+            let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+            let mut color_spec = ColorSpec::new();
+            color_spec.set_fg(Some(Color::Cyan));
+            color_spec.set_bold(true);
+            let _ = stdout.set_color(&color_spec);
+
+            if args.contains(&"build".into()) {
+                print!("    Building ")
+            } else if args.contains(&"check".into()) || args.contains(&"clippy".into()) {
+                print!("    Checking ")
+            } else if args.contains(&"test".into()) {
+                print!("     Testing ")
+            } else {
+                print!("     Running ")
             }
-            None => Config::default(),
-        };
-        dbg!(&config);
-        let features = feature_combinations(&package, &config);
-        // .features.keys());
-        dbg!(&features.collect::<Vec<_>>());
+            stdout.reset().unwrap();
+            println!(
+                "{} ( features = [{}] )",
+                package.name,
+                features.iter().join(", ")
+            );
+            println!("");
+
+            let manifest_path = &package.manifest_path;
+            let working_dir = manifest_path.parent().ok_or(anyhow::anyhow!(
+                "could not find parent dir of package {}",
+                manifest_path.to_string()
+            ))?;
+            // dbg!(&command);
+            let output = command
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .current_dir(&working_dir)
+                .output()?;
+            if !output.status.success() {
+                std::process::exit(output.status.code().unwrap());
+            }
+            // break;
+        }
+        // let config = match package.metadata.get("cargo-feature-combinations") {
+        //     Some(config) => {
+        //         let config: Config = serde_json::from_value(config.clone())?;
+        //         config
+        //     }
+        //     None => Config::default(),
+        // };
+        // dbg!(&config);
+        // let features = feature_combinations(&package, &config);
+        // // .features.keys());
+        // dbg!(&features.collect::<Vec<_>>());
         // dbg!(&features.count());
     }
 
     return Ok(());
     // return Ok(());
 
-    use cargo_metadata::Message;
-    use std::process::{Command, Stdio};
+    // use cargo_metadata::Message;
 
     // args.push("--message-format=json-render-diagnostics".to_string());
-    args.extend([
-        "--message-format".to_string(),
-        "json-render-diagnostics".to_string(),
-    ]);
-    dbg!(&args);
+    // args.extend([
+    //     "--message-format".to_string(),
+    //     "json-render-diagnostics".to_string(),
+    // ]);
 
-    let mut command = Command::new("cargo")
-        // .args(&["build", "--message-format=json-render-diagnostics"])
-        .args(args)
-        .stdout(Stdio::piped())
-        // .stdout(Stdio::null())
-        .spawn()?;
+    // if let Some(stdout) = command.stdout.take() {
+    //     // panic!("test");
+    //     let reader = std::io::BufReader::new(stdout);
+    //     for message in cargo_metadata::Message::parse_stream(reader) {
+    //         match message {
+    //             Ok(Message::CompilerMessage(msg)) => {
+    //                 eprintln!("compiler message: {:?}", msg);
+    //             }
+    //             Ok(Message::CompilerArtifact(artifact)) => {
+    //                 // eprintln!("compiler artifact: {:?}", artifact);
+    //             }
+    //             Ok(Message::BuildScriptExecuted(script)) => {
+    //                 // eprintln!("build script: {:?}", script);
+    //             }
+    //             Ok(Message::BuildFinished(finished)) => {
+    //                 eprintln!("build finished: {:?}", finished);
+    //             }
+    //             Ok(other) => println!("unknown message: {:?}", other),
+    //             // Err(err) => println!("error: {:?}", err),
+    //             _ => {}
+    //         }
+    //     }
+    // }
 
-    if let Some(stdout) = command.stdout.take() {
-        // panic!("test");
-        let reader = std::io::BufReader::new(stdout);
-        for message in cargo_metadata::Message::parse_stream(reader) {
-            match message {
-                Ok(Message::CompilerMessage(msg)) => {
-                    eprintln!("compiler message: {:?}", msg);
-                }
-                Ok(Message::CompilerArtifact(artifact)) => {
-                    // eprintln!("compiler artifact: {:?}", artifact);
-                }
-                Ok(Message::BuildScriptExecuted(script)) => {
-                    // eprintln!("build script: {:?}", script);
-                }
-                Ok(Message::BuildFinished(finished)) => {
-                    eprintln!("build finished: {:?}", finished);
-                }
-                Ok(other) => println!("unknown message: {:?}", other),
-                // Err(err) => println!("error: {:?}", err),
-                _ => {}
-            }
-        }
-    }
-
-    let output = command.wait().expect("Couldn't get cargo's exit status");
+    // let output = command.wait().expect("");
     Ok(())
 }

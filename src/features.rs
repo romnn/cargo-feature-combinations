@@ -8,6 +8,7 @@ pub trait Dependency {
 
 pub trait Package {
     fn optional_dependencies(&self) -> Vec<String>;
+    fn config(&self) -> Config;
 }
 
 impl Dependency for cargo_metadata::Dependency {
