@@ -146,7 +146,11 @@ impl Package for cargo_metadata::Package {
                     Some(set)
                 }
             })
-            .sorted()
+            .sorted_by(|a, b| Ord::cmp(a, b))
+            // .sorted_by(|a, b| match Ord::cmp(&a.len(), &b.len()) {
+            //     Ordering::Equal => Ord::cmp(a, b),
+            //     ordering => ordering,
+            // })
             .collect()
     }
 
