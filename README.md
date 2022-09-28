@@ -32,11 +32,12 @@ For details, please refer to `--help`:
 $ cargo feature-combinations --help
 
 USAGE:
-    cargo [+toolchain] [SUBCOMMAND]
+    cargo [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
     cargo [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 
 SUBCOMMAND:
     matrix                  Print JSON feature combination matrix to stdout
+        --pretty            Print pretty JSON
 
 OPTIONS:
     --silent                Hide cargo output and only show summary

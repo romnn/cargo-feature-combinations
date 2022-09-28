@@ -30,7 +30,7 @@ struct Summary {
 
 #[derive(Debug)]
 enum Subcommand {
-    FeatureMatrix,
+    FeatureMatrix { pretty: bool },
     Help,
 }
 
@@ -178,15 +178,17 @@ impl Package for cargo_metadata::Package {
 }
 
 #[inline]
-fn print_feature_matrix(md: &cargo_metadata::Metadata) -> Result<()> {
+fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<()> {
     let root_package = md
         .root_package()
         .ok_or_else(|| anyhow::anyhow!("no root package"))?;
     let config = root_package.config()?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&root_package.feature_matrix(&config))?
-    );
+    let matrix = if pretty {
+        serde_json::to_string_pretty(&root_package.feature_matrix(&config))
+    } else {
+        serde_json::to_string(&root_package.feature_matrix(&config))
+    }?;
+    println!("{}", matrix);
     Ok(())
 }
 
@@ -391,11 +393,12 @@ fn print_help() {
     let help = r#"Run cargo commands for all feature combinations
 
 USAGE:
-    cargo [+toolchain] [SUBCOMMAND]
+    cargo [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
     cargo [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 
 SUBCOMMAND:
     matrix                  Print JSON feature combination matrix to stdout
+        --pretty            Print pretty JSON
 
 OPTIONS:
     --silent                Hide cargo output and only show summary
@@ -429,10 +432,16 @@ fn main() -> Result<()> {
         options.manifest_path = Some(manifest_path);
     }
     if let Some((_, _)) = args.get("matrix", false) {
-        options.command = Some(Subcommand::FeatureMatrix);
+        options.command = Some(Subcommand::FeatureMatrix { pretty: false });
     }
     if let Some((_, _)) = args.get("--help", false) {
         options.command = Some(Subcommand::Help);
+    }
+    if let Some((span, _)) = args.get("--pretty", false) {
+        if let Some(Subcommand::FeatureMatrix { ref mut pretty }) = options.command {
+            *pretty = true;
+        }
+        args.drain(span);
     }
     if let Some((span, _)) = args.get("--silent", false) {
         options.silent = true;
@@ -456,7 +465,7 @@ fn main() -> Result<()> {
             print_help();
             Ok(())
         }
-        Some(Subcommand::FeatureMatrix) => print_feature_matrix(&metadata),
+        Some(Subcommand::FeatureMatrix { pretty }) => print_feature_matrix(&metadata, pretty),
         None => run_cargo_command(args, &metadata, &options),
     }
 }
