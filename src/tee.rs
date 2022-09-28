@@ -14,10 +14,6 @@ impl<R, W> TeeReader<R, W> {
             force_flush,
         }
     }
-
-    pub fn into_inner(self) -> (R, W) {
-        (self.read, self.output)
-    }
 }
 
 impl<R: Read, W: Write> Read for TeeReader<R, W> {

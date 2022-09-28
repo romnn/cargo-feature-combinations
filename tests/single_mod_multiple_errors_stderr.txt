@@ -1,0 +1,25 @@
+error[E0428]: the name `warning_regex` is defined multiple times
+   --> src/main.rs:415:5
+    |
+399 |     fn warning_regex() -> Result<()> {
+    |     -------------------------------- previous definition of the value `warning_regex` here
+...
+415 |     fn warning_regex() -> Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `warning_regex` redefined here
+    |
+    = note: `warning_regex` must be defined only once in the value namespace of this module
+
+error[E0425]: cannot find value `WARNING_REGEX` in this scope
+   --> src/main.rs:401:36
+    |
+401 |         let all_captures: Vec<_> = WARNING_REGEX
+    |                                    ^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this static
+    |
+394 |     use crate::WARNING_REGEX;
+    |
+
+Some errors have detailed explanations: E0425, E0428.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `cargo-feature-combinations` due to 2 previous errors

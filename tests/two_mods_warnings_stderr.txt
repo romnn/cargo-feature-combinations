@@ -1,0 +1,30 @@
+warning: variant `Custom` is never constructed
+   --> src/compression.rs:433:5
+    |
+426 | enum ContentTypeFilter {
+    |      ----------------- variant in this enum
+...
+433 |     Custom(Arc<Box<dyn Fn(Option<&ContentType>) -> bool + Send + Sync + 'static>>),
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+    = note: `ContentTypeFilter` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+    Checking imop v0.1.0 (/Users/roman/dev/imop)
+warning: `imop` (lib) generated 6 warnings
+warning: unused import: `crate::headers::Error`
+   --> src/headers/content_coding.rs:124:9
+    |
+124 |     use crate::headers::Error;
+    |         ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `RgbaImage`
+ --> src/image.rs:4:5
+  |
+4 |     RgbaImage,
+  |     ^^^^^^^^^
+
+warning: `imop` (lib test) generated 7 warnings (5 duplicates)
+    Finished dev [unoptimized + debuginfo] target(s) in 0.89s
