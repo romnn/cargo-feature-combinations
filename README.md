@@ -59,7 +59,7 @@ denylist = ["default", "full"]
 
 ### Usage with github-actions
 
-The GitHub actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature allows more efficient testing of all feature set combinations in CI.
+The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature allows more efficient testing of all feature set combinations in CI.
 
 The following workflow file uses `cargo-feature-combinations` to automatically generate a feature matrix and runs up to 256 feature combinations in a matrix job.
 
@@ -71,7 +71,7 @@ cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 
 #### Acknowledgements
 
-The [cargo-all-features](https://crates.io/crates/cargo-all-features) crate is similar yet offers more complex configuration and is lacking a summary.
+The `[cargo-all-features](https://crates.io/crates/cargo-all-features)` crate is similar yet offers more complex configuration and is lacking a summary.
 
 #### TODO
 - when `--silent`, still print the failing feature set
