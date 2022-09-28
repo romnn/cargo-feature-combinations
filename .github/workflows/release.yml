@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  tests:
+    uses: ./.github/workflows/test.yml
+
+  publish-crate:
+    needs: [tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - id: query
+        uses: romnn/query-git-action@master
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - uses: katyo/publish-crates@v1
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-release-binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - id: query
+        uses: romnnn/query-git-action@master
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Compile binaries
+        run: >-
+          cargo build
+          --release
+          --all-targets
+
+      - name: Upload release binaries
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: target/release/cargo-feature-combinations
+          tag: ${{ steps.query.outputs.stable_semver_version }}
+          release_name: ${{ steps.query.outputs.stable_semver_version }}
+          overwrite: true
+          file_glob: true
