@@ -2,7 +2,6 @@
 
 [<img alt="build status" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/build?label=build">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/build.yml)
 [<img alt="test status" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/test?label=test">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/test.yml)
-[<img alt="benchmarks" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/bench?label=bench">](https://romnn.github.io/cargo-feature-combinations/)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/cargo-feature-combinations">](https://crates.io/crates/cargo-feature-combinations)
 [<img alt="docs.rs" src="https://img.shields.io/docsrs/cargo-feature-combinations/latest?label=docs.rs">](https://docs.rs/cargo-feature-combinations)
 
