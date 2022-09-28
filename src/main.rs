@@ -2,7 +2,6 @@ mod config;
 mod tee;
 
 use anyhow::Result;
-use cargo_metadata::{Metadata, MetadataCommand};
 use config::Config;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -10,7 +9,6 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::process::{Command, Stdio};
-use tee::TeeReader;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 lazy_static! {
@@ -44,24 +42,28 @@ struct Args(Vec<String>);
 impl std::ops::Deref for Args {
     type Target = Vec<String>;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl std::ops::DerefMut for Args {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 impl Args {
+    #[inline]
     pub fn contains(&self, arg: &str) -> bool {
         self.0
             .iter()
             .any(|a| a == arg || a.starts_with(&format!("{}=", arg)))
     }
 
+    #[inline]
     pub fn get(
         &self,
         arg: &str,
@@ -86,13 +88,47 @@ impl Args {
     }
 }
 
-pub trait Package {
+trait Metadata {
+    fn workspace_packages(&self) -> Vec<&cargo_metadata::Package>;
+}
+
+impl Metadata for cargo_metadata::Metadata {
+    #[inline]
+    fn workspace_packages(&self) -> Vec<&cargo_metadata::Package> {
+        let workspace_members: HashSet<_> = self.workspace_members.iter().collect();
+        let all_packages: HashMap<_, _> = self
+            .packages
+            .iter()
+            .map(|pkg| (pkg.id.clone(), pkg))
+            .collect();
+        // find all packages in the workspace
+        let packages: Vec<_> = workspace_members
+            .iter()
+            .filter_map(|pkg_id| all_packages.get(pkg_id).copied())
+            .collect();
+        packages
+    }
+}
+
+trait Package {
+    /// Parses the config for this package if present.
+    ///
+    /// If the Cargo.toml manifest contains a configuration section,
+    /// the latter is parsed.
+    /// Otherwise, a default configuration is used.
+    ///
+    /// # Errors
+    ///
+    /// If the configuration in the manifest can not be parsed,
+    /// an Error is returned.
+    ///
     fn config(&self) -> Result<Config>;
     fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>>;
     fn feature_matrix(&self, config: &Config) -> Vec<String>;
 }
 
 impl Package for cargo_metadata::Package {
+    #[inline]
     fn config(&self) -> Result<Config> {
         match self.metadata.get("cargo-feature-combinations") {
             Some(config) => {
@@ -103,6 +139,7 @@ impl Package for cargo_metadata::Package {
         }
     }
 
+    #[inline]
     fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>> {
         self.features
             .keys()
@@ -125,6 +162,7 @@ impl Package for cargo_metadata::Package {
             .collect()
     }
 
+    #[inline]
     fn feature_matrix(&self, config: &Config) -> Vec<String> {
         self.feature_combinations(config)
             .into_iter()
@@ -133,10 +171,11 @@ impl Package for cargo_metadata::Package {
     }
 }
 
-fn print_feature_matrix(md: Metadata) -> Result<()> {
+#[inline]
+fn print_feature_matrix(md: &cargo_metadata::Metadata) -> Result<()> {
     let root_package = md
         .root_package()
-        .ok_or(anyhow::anyhow!("no root package"))?;
+        .ok_or_else(|| anyhow::anyhow!("no root package"))?;
     let config = root_package.config()?;
     println!(
         "{}",
@@ -145,6 +184,7 @@ fn print_feature_matrix(md: Metadata) -> Result<()> {
     Ok(())
 }
 
+#[inline]
 fn color_spec(color: Color, bold: bool) -> ColorSpec {
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(color));
@@ -152,18 +192,76 @@ fn color_spec(color: Color, bold: bool) -> ColorSpec {
     spec
 }
 
-fn run_cargo_command(md: Metadata, mut cargo_args: Args, options: Options) -> Result<()> {
-    let workspace_members: HashSet<_> = md.workspace_members.iter().collect();
-    let all_packages: HashMap<_, _> = md
-        .packages
-        .iter()
-        .map(|pkg| (pkg.id.clone(), pkg))
-        .collect();
-    // find all packages in the workspace
-    let packages: Vec<_> = workspace_members
-        .iter()
-        .flat_map(|pkg_id| all_packages.get(pkg_id))
-        .collect();
+#[inline]
+fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+    lazy_static! {
+        static ref WARNING_REGEX: Regex =
+            Regex::new(r"warning: .* generated (\d+) warnings?").unwrap();
+    }
+    WARNING_REGEX
+        .captures_iter(output)
+        .filter_map(|cap| cap.get(1))
+        .map(|m| m.as_str().parse::<usize>().unwrap_or(0))
+}
+
+#[inline]
+fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+    lazy_static! {
+        static ref ERROR_REGEX: Regex =
+            Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap();
+    }
+    ERROR_REGEX
+        .captures_iter(output)
+        .filter_map(|cap| cap.get(1))
+        .map(|m| m.as_str().parse::<usize>().unwrap_or(1))
+}
+
+#[inline]
+fn print_summary(mut stdout: termcolor::StandardStream, summary: Vec<Summary>) {
+    println!();
+    let mut first_bad_exit_code: Option<i32> = None;
+    let most_errors = summary.iter().map(|s| s.num_errors).max();
+    let most_warnings = summary.iter().map(|s| s.num_warnings).max();
+    let errors_width = most_errors.unwrap_or(0).to_string().len();
+    let warnings_width = most_warnings.unwrap_or(0).to_string().len();
+
+    for s in summary {
+        if !s.success || s.num_errors > 0 {
+            stdout.set_color(&RED).ok();
+            print!("        FAIL ");
+            first_bad_exit_code.get_or_insert(s.exit_code.unwrap());
+        } else if s.num_warnings > 0 {
+            stdout.set_color(&YELLOW).ok();
+            print!("        WARN ");
+        } else {
+            stdout.set_color(&GREEN).ok();
+            print!("        PASS ");
+        }
+        stdout.reset().ok();
+        println!(
+            "{} ( {:ew$} errors, {:ww$} warnings, features = [{}] )",
+            s.package_name,
+            s.num_errors,
+            s.num_warnings,
+            s.features.iter().join(", "),
+            ew = errors_width,
+            ww = warnings_width,
+        );
+    }
+    println!();
+
+    if let Some(exit_code) = first_bad_exit_code {
+        std::process::exit(exit_code);
+    }
+}
+
+#[inline]
+fn run_cargo_command(
+    mut cargo_args: Args,
+    md: &cargo_metadata::Metadata,
+    options: &Options,
+) -> Result<()> {
+    let packages = md.workspace_packages();
 
     // split into cargo and extra arguments after --
     let extra_args_idx = cargo_args
@@ -188,35 +286,37 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Args, options: Options) -> Re
             features.sort();
 
             if !options.silent {
-                println!("");
+                println!();
             }
-            let _ = stdout.set_color(&CYAN);
+            stdout.set_color(&CYAN).ok();
             if cargo_args.contains("build") {
-                print!("    Building ")
+                print!("    Building ");
             } else if cargo_args.contains("check") || cargo_args.contains("clippy") {
-                print!("    Checking ")
+                print!("    Checking ");
             } else if cargo_args.contains("test") {
-                print!("     Testing ")
+                print!("     Testing ");
             } else {
-                print!("     Running ")
+                print!("     Running ");
             }
-            let _ = stdout.reset();
+            stdout.reset().ok();
             println!(
                 "{} ( features = [{}] )",
                 package.name,
                 features.iter().join(", ")
             );
             if !options.silent {
-                println!("");
+                println!();
             }
 
             let manifest_path = &package.manifest_path;
-            let working_dir = manifest_path.parent().ok_or(anyhow::anyhow!(
-                "could not find parent dir of package {}",
-                manifest_path.to_string()
-            ))?;
+            let working_dir = manifest_path.parent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not find parent dir of package {}",
+                    manifest_path.to_string()
+                )
+            })?;
 
-            let cargo = std::env::var_os("CARGO").unwrap_or("cargo".into());
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
             let mut command = Command::new(&cargo);
 
             let args = [
@@ -251,7 +351,7 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Args, options: Options) -> Re
                 {
                     let proc_stderr = process.stderr.take().expect("open stderr");
                     let proc_reader = io::BufReader::new(proc_stderr);
-                    let mut tee_reader = TeeReader::new(proc_reader, &mut output, true);
+                    let mut tee_reader = tee::Reader::new(proc_reader, &mut output, true);
                     io::copy(&mut tee_reader, &mut stdout)?;
                 }
 
@@ -260,15 +360,6 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Args, options: Options) -> Re
                 let output = String::from_utf8_lossy(&output);
                 (output.to_string(), exit_status)
             };
-
-            // let num_errors = count_errors(&output);
-            // let mut num_warnings = 0usize;
-            // for warnings in WARNING_REGEX.captures(&output) {
-            //     num_warnings += warnings
-            //         .get(1)
-            //         .and_then(|w| w.as_str().parse::<usize>().ok())
-            //         .unwrap_or(0);
-            // }
 
             if options.fail_fast && !exit_status.success() {
                 std::process::exit(exit_status.code().unwrap());
@@ -285,41 +376,7 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Args, options: Options) -> Re
         }
     }
 
-    // print summary
-    println!("");
-    let mut first_bad_exit_code: Option<i32> = None;
-    let most_errors = summary.iter().map(|s| s.num_errors).max();
-    let most_warnings = summary.iter().map(|s| s.num_warnings).max();
-    let errors_width = most_errors.unwrap_or(0).to_string().len();
-    let warnings_width = most_warnings.unwrap_or(0).to_string().len();
-
-    for s in summary {
-        if !s.success || s.num_errors > 0 {
-            stdout.set_color(&RED).ok();
-            print!("        FAIL ");
-            first_bad_exit_code.get_or_insert(s.exit_code.unwrap());
-        } else if s.num_warnings > 0 {
-            stdout.set_color(&YELLOW).ok();
-            print!("        WARN ");
-        } else {
-            stdout.set_color(&GREEN).ok();
-            print!("        PASS ");
-        }
-        stdout.reset().ok();
-        println!(
-            "{} ( {:ew$} errors, {:ww$} warnings, features = [{}] )",
-            s.package_name,
-            s.num_errors,
-            s.num_warnings,
-            s.features.iter().join(", "),
-            ew = errors_width,
-            ww = warnings_width,
-        );
-    }
-
-    if let Some(code) = first_bad_exit_code {
-        std::process::exit(code);
-    }
+    print_summary(stdout, summary);
     Ok(())
 }
 
@@ -345,50 +402,18 @@ fn main() -> Result<()> {
     // dbg!(&options);
     // dbg!(&args);
 
-    let mut cmd = MetadataCommand::new();
+    let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
 
     if options.feature_matrix {
-        print_feature_matrix(metadata)
+        print_feature_matrix(&metadata)
     } else {
-        run_cargo_command(metadata, args, options)
+        run_cargo_command(args, &metadata, &options)
     }
 }
-
-fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static! {
-        static ref WARNING_REGEX: Regex =
-            Regex::new(r"warning: .* generated (\d+) warnings?").unwrap();
-    }
-    WARNING_REGEX
-        .captures_iter(&output)
-        .flat_map(|cap| cap.get(1))
-        .map(|m| m.as_str().parse::<usize>().unwrap_or(0))
-}
-
-fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static! {
-        static ref ERROR_REGEX: Regex =
-            Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap();
-    }
-    ERROR_REGEX
-        .captures_iter(&output)
-        .flat_map(|cap| cap.get(1))
-        .map(|m| m.as_str().parse::<usize>().unwrap_or(1))
-}
-
-// let mut num_errors = 0usize;
-//             for errors in ERROR_REGEX.captures(&output) {
-//                 num_errors += errors
-//                     .get(1)
-//                     .and_then(|e| e.as_str().parse::<usize>().ok())
-//                     .unwrap_or(1);
-//             }
-
-// }
 
 #[cfg(test)]
 mod test {
@@ -415,16 +440,6 @@ mod test {
     #[test]
     fn warning_regex_two_mod_multiple_warnings() -> Result<()> {
         let stderr = open!("../tests/two_mods_warnings_stderr.txt")?;
-        // let warnings = warning_counts(&stderr)
-        // let all_captures: Vec<_> = WARNING_REGEX
-        //     .captures_iter()
-        //     .collect();
-        // dbg!(&all_captures);
-        // let warnings: Vec<_> = all_captures
-        //     .into_iter()
-        //     .flat_map(|c| c.get(1))
-        //     .map(|m| m.as_str())
-        //     .collect();
         let warnings: Vec<_> = warning_counts(stderr).collect();
         assert_eq!(&warnings, &vec![6, 7]);
         Ok(())
