@@ -26,6 +26,7 @@ jobs:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish-release-binaries:
+    needs: [tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2

@@ -71,7 +71,7 @@ cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 
 #### Acknowledgements
 
-The `[cargo-all-features](https://crates.io/crates/cargo-all-features)` crate is similar yet offers more complex configuration and is lacking a summary.
+The [`cargo-all-features`](https://crates.io/crates/cargo-all-features) crate is similar yet offers more complex configuration and is lacking a summary.
 
 #### TODO
 - when `--silent`, still print the failing feature set
