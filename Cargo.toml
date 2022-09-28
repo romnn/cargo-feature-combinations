@@ -8,15 +8,22 @@ license-file = "LICENSE"
 readme = "README.md"
 homepage = "https://github.com/romnn/cargo-feature-combinations"
 repository = "https://github.com/romnn/cargo-feature-combinations"
-categories = [ "encoding" ]
-keywords = [
-  "serde",
-  "json",
-  "merge",
-  "sort",
-  "iter"
+categories = [
+  "command-line-utilities",
+  "development-tools",
+  "development-tools::cargo-plugins"
+  "development-tools::testing"
 ]
-exclude = []
+keywords = [
+  "cargo",
+  "features",
+  "combinations",
+  "tool",
+  "subcommand"
+]
+exclude = [
+  "tests/"
+]
 
 [dependencies]
 anyhow = "1"

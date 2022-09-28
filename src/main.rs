@@ -28,10 +28,16 @@ struct Summary {
     num_errors: usize,
 }
 
+#[derive(Debug)]
+enum Subcommand {
+    FeatureMatrix,
+    Help,
+}
+
 #[derive(Debug, Default)]
 struct Options {
     manifest_path: Option<String>,
-    feature_matrix: bool,
+    command: Option<Subcommand>,
     silent: bool,
     fail_fast: bool,
 }
@@ -380,6 +386,42 @@ fn run_cargo_command(
     Ok(())
 }
 
+#[inline]
+fn print_help() -> Result<()> {
+    let help = r#"Run cargo commands for all feature combinations
+
+USAGE:
+    cargo [+toolchain] [SUBCOMMAND]
+    cargo [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
+
+SUBCOMMAND:
+    matrix                  Print JSON feature combination matrix to stdout
+
+OPTIONS:
+    --silent                Hide cargo output and only show summary
+    --fail-fast             Fail fast on the first bad feature combination
+    --help                  Print help information
+
+Feature sets can be configured in your Cargo.toml configuration.
+For example:
+
+```toml
+[package.metadata.cargo-feature-combinations]
+# Exclude groupings of features that are incompatible or do not make sense
+skip_feature_sets = [ ["foo", "bar"], ]
+
+# Exclude features from the feature combination matrix
+denylist = ["default", "full"]
+```
+
+For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
+
+See 'cargo help <command>' for more information on a specific command.
+    "#;
+    println!("{}", help);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args: Args = Args(std::env::args().into_iter().skip(1).collect());
     let mut options = Options::default();
@@ -387,9 +429,11 @@ fn main() -> Result<()> {
     if let Some((_, manifest_path)) = args.get("--manifest-path", true) {
         options.manifest_path = Some(manifest_path);
     }
-    if let Some((span, _)) = args.get("feature-matrix", false) {
-        options.feature_matrix = true;
-        args.drain(span);
+    if let Some((_, _)) = args.get("matrix", false) {
+        options.command = Some(Subcommand::FeatureMatrix);
+    }
+    if let Some((_, _)) = args.get("--help", false) {
+        options.command = Some(Subcommand::Help);
     }
     if let Some((span, _)) = args.get("--silent", false) {
         options.silent = true;
@@ -408,10 +452,10 @@ fn main() -> Result<()> {
     }
     let metadata = cmd.exec()?;
 
-    if options.feature_matrix {
-        print_feature_matrix(&metadata)
-    } else {
-        run_cargo_command(args, &metadata, &options)
+    match options.command {
+        Some(Subcommand::Help) => print_help(),
+        Some(Subcommand::FeatureMatrix) => print_feature_matrix(&metadata),
+        None => run_cargo_command(args, &metadata, &options),
     }
 }
 
