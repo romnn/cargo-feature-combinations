@@ -14,7 +14,7 @@ Plugin for `cargo` to run commands against selected combinations of features.
 cargo install cargo-feature-combinations
 ```
 
-#### Usage
+### Usage
 
 In most cases, just use the command as if it was `cargo`.
 However, there are a few optional flags and the `matrix` subcommand.
@@ -57,7 +57,7 @@ skip_feature_sets = [ ["foo", "bar"], ]
 denylist = ["default", "full"]
 ```
 
-#### Usage with github-actions
+### Usage with github-actions
 
 The GitHub actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature allows more efficient testing of all feature set combinations in CI.
 

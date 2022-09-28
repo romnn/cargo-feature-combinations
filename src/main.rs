@@ -387,7 +387,7 @@ fn run_cargo_command(
 }
 
 #[inline]
-fn print_help() -> Result<()> {
+fn print_help() {
     let help = r#"Run cargo commands for all feature combinations
 
 USAGE:
@@ -419,7 +419,6 @@ For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
 See 'cargo help <command>' for more information on a specific command.
     "#;
     println!("{}", help);
-    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -453,7 +452,10 @@ fn main() -> Result<()> {
     let metadata = cmd.exec()?;
 
     match options.command {
-        Some(Subcommand::Help) => print_help(),
+        Some(Subcommand::Help) => {
+            print_help();
+            Ok(())
+        }
         Some(Subcommand::FeatureMatrix) => print_feature_matrix(&metadata),
         None => run_cargo_command(args, &metadata, &options),
     }
