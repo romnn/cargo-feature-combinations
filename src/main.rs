@@ -1,4 +1,5 @@
-pub mod config;
+mod config;
+mod tee;
 
 use anyhow::Result;
 use cargo_metadata::{Metadata, MetadataCommand};
@@ -7,7 +8,9 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::process::{Command, Stdio};
+use tee::TeeReader;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 #[derive(Debug)]
@@ -18,14 +21,12 @@ struct Summary {
     success: bool,
     num_warnings: usize,
     num_errors: usize,
-    // pedantic_success: Option<bool>,
 }
 
 #[derive(Debug, Default)]
 struct Options {
     manifest_path: Option<String>,
     feature_matrix: bool,
-    pedantic: bool,
     silent: bool,
     fail_fast: bool,
 }
@@ -174,10 +175,39 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Vec<String>, options: Options
             command.args(&args);
             command.current_dir(&working_dir);
             if !options.silent {
-                command.stdout(Stdio::piped());
+                // command.stdout(Stdio::piped());
                 command.stderr(Stdio::piped());
+                // command.stderr(Stdio::piped());
             }
-            let output = command.output()?;
+            let mut process = command.spawn()?;
+            let output = Vec::<u8>::new();
+            let output = io::Cursor::new(output);
+            let mut output = strip_ansi_escapes::Writer::new(output);
+            // let output = command.output()?;
+
+            {
+                // use std::io::BufRead;
+                let mut stderr = process.stderr.take().unwrap();
+                let reader = io::BufReader::new(stderr);
+                let mut tee_reader = TeeReader::new(reader, &mut output, true);
+                // let mut handle = std::io::Tee::tee(reader, &mut io::stdout());
+
+                // use std::io::Read;
+                // tee_reader.read_all(&mut output);
+                // io::copy(&mut stderr, &mut io::stdout());
+                io::copy(&mut tee_reader, &mut stdout);
+                // io::stdout());
+                // io::copy(&mut tee_reader, &mut output);
+                // for line in handle.lines() {
+                //     println!("{}", line.unwrap());
+                // }
+            }
+
+            // --color always
+
+            let exit_status = process.wait()?;
+            let output = output.into_inner()?;
+            let output: Vec<u8> = output.into_inner();
 
             lazy_static! {
                 static ref WARNING_REGEX: Regex =
@@ -187,56 +217,43 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Vec<String>, options: Options
                         .unwrap();
             }
 
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let output = String::from_utf8_lossy(&output);
+            dbg!(&output);
+            assert!(output.len() > 0);
+
             let mut num_errors = 0usize;
-            for errors in ERROR_REGEX.captures(&stderr) {
+            for errors in ERROR_REGEX.captures(&output) {
                 num_errors += errors
                     .get(1)
                     .and_then(|e| e.as_str().parse::<usize>().ok())
                     .unwrap_or(1);
             }
             let mut num_warnings = 0usize;
-            for warnings in WARNING_REGEX.captures(&stderr) {
+            for warnings in WARNING_REGEX.captures(&output) {
                 num_warnings += warnings
                     .get(1)
                     .and_then(|w| w.as_str().parse::<usize>().ok())
                     .unwrap_or(0);
             }
 
-            if options.fail_fast && !output.status.success() {
-                std::process::exit(output.status.code().unwrap());
+            if options.fail_fast && !exit_status.success() {
+                std::process::exit(exit_status.code().unwrap());
             }
-
-            // let pedantic_success = if !output.status.success() {
-            //     Some(false)
-            // } else if options.pedantic {
-            //     Command::new(&cargo)
-            //         .args(&args)
-            //         .arg("-Dwarnings")
-            //         .stdout(Stdio::null())
-            //         .stderr(Stdio::null())
-            //         .current_dir(&working_dir)
-            //         .output()
-            //         .ok()
-            //         .map(|output| output.status.success())
-            // } else {
-            //     None
-            // };
 
             summary.push(Summary {
                 package_name: package.name.clone(),
                 features,
-                exit_code: output.status.code(),
-                success: output.status.success(),
+                exit_code: exit_status.code(),
+                success: exit_status.success(),
                 num_warnings,
                 num_errors,
-                // pedantic_success,
             });
         }
     }
 
     // print summary
     println!("");
+    let mut first_bad_exit_code: Option<i32> = None;
     let most_errors = summary.iter().map(|s| s.num_errors).max();
     let most_warnings = summary.iter().map(|s| s.num_warnings).max();
     let errors_width = most_errors.unwrap_or(0).to_string().len();
@@ -246,6 +263,7 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Vec<String>, options: Options
         if !s.success || s.num_errors > 0 {
             let _ = stdout.set_color(&RED);
             print!("        FAIL ");
+            first_bad_exit_code.get_or_insert(s.exit_code.unwrap());
         } else if s.num_warnings > 0 {
             let _ = stdout.set_color(&YELLOW);
             print!("        WARN ")
@@ -263,6 +281,10 @@ fn run_cargo_command(md: Metadata, mut cargo_args: Vec<String>, options: Options
             ew = errors_width,
             ww = warnings_width,
         );
+    }
+
+    if let Some(code) = first_bad_exit_code {
+        std::process::exit(code);
     }
     Ok(())
 }
@@ -287,10 +309,6 @@ fn main() -> Result<()> {
 
             ("feature-matrix", _) => {
                 options.feature_matrix = true;
-                args.remove(pos);
-            }
-            ("--pedantic", _) => {
-                options.pedantic = true;
                 args.remove(pos);
             }
             ("--silent", _) => {
