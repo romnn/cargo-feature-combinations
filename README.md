@@ -40,9 +40,11 @@ SUBCOMMAND:
         --pretty            Print pretty JSON
 
 OPTIONS:
+    --help                  Print help information
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
-    --help                  Print help information
+    --pedantic              Treat warnings like errors in summary and 
+                            when using --fail-fast
 ```
 
 ### Configuration
@@ -72,6 +74,3 @@ cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 #### Acknowledgements
 
 The [`cargo-all-features`](https://crates.io/crates/cargo-all-features) crate is similar yet offers more complex configuration and is lacking a summary.
-
-#### TODO
-- when `--silent`, still print the failing feature set

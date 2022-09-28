@@ -6,9 +6,10 @@ use config::Config;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::io;
+use std::collections::HashSet;
+use std::io::{self, Write};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 lazy_static! {
@@ -23,9 +24,9 @@ struct Summary {
     package_name: String,
     features: Vec<String>,
     exit_code: Option<i32>,
-    success: bool,
-    num_warnings: usize,
-    num_errors: usize,
+    pedantic_success: bool,
+    num_warnings: Option<usize>,
+    num_errors: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -39,6 +40,7 @@ struct Options {
     manifest_path: Option<String>,
     command: Option<Subcommand>,
     silent: bool,
+    pedantic: bool,
     fail_fast: bool,
 }
 
@@ -94,28 +96,6 @@ impl Args {
     }
 }
 
-trait Metadata {
-    fn workspace_packages(&self) -> Vec<&cargo_metadata::Package>;
-}
-
-impl Metadata for cargo_metadata::Metadata {
-    #[inline]
-    fn workspace_packages(&self) -> Vec<&cargo_metadata::Package> {
-        let workspace_members: HashSet<_> = self.workspace_members.iter().collect();
-        let all_packages: HashMap<_, _> = self
-            .packages
-            .iter()
-            .map(|pkg| (pkg.id.clone(), pkg))
-            .collect();
-        // find all packages in the workspace
-        let packages: Vec<_> = workspace_members
-            .iter()
-            .filter_map(|pkg_id| all_packages.get(pkg_id).copied())
-            .collect();
-        packages
-    }
-}
-
 trait Package {
     /// Parses the config for this package if present.
     ///
@@ -129,7 +109,7 @@ trait Package {
     /// an Error is returned.
     ///
     fn config(&self) -> Result<Config>;
-    fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>>;
+    fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>>;
     fn feature_matrix(&self, config: &Config) -> Vec<String>;
 }
 
@@ -146,25 +126,27 @@ impl Package for cargo_metadata::Package {
     }
 
     #[inline]
-    fn feature_combinations(&self, config: &Config) -> Vec<HashSet<String>> {
+    fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
         self.features
             .keys()
             .collect::<HashSet<_>>()
             .into_iter()
             .filter(|ft| !config.denylist.contains(*ft))
             .powerset()
-            .filter_map(|set| {
-                let set: HashSet<_> = set.into_iter().cloned().collect();
+            .filter_map(|mut set: Vec<&String>| {
+                set.sort();
+                let hset: HashSet<_> = set.iter().copied().cloned().collect();
                 let skip = config
                     .skip_feature_sets
                     .iter()
-                    .any(|skip_set| skip_set.is_subset(&set));
+                    .any(|skip_set| skip_set.is_subset(&hset));
                 if skip {
                     None
                 } else {
                     Some(set)
                 }
             })
+            .sorted()
             .collect()
     }
 
@@ -225,20 +207,40 @@ fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 }
 
 #[inline]
-fn print_summary(mut stdout: termcolor::StandardStream, summary: Vec<Summary>) {
+fn print_summary(summary: Vec<Summary>, mut stdout: termcolor::StandardStream, elapsed: Duration) {
+    let num_packages = summary
+        .iter()
+        .map(|s| &s.package_name)
+        .collect::<HashSet<_>>()
+        .len();
+    let num_feature_sets = summary
+        .iter()
+        .map(|s| (&s.package_name, s.features.iter().collect::<Vec<_>>()))
+        .collect::<HashSet<_>>()
+        .len();
+
     println!();
+    stdout.set_color(&CYAN).ok();
+    print!("    Finished ");
+    stdout.reset().ok();
+    println!(
+        "{} total feature combination(s) for {} package(s) in {:?}",
+        num_feature_sets, num_packages, elapsed
+    );
+    println!();
+
     let mut first_bad_exit_code: Option<i32> = None;
-    let most_errors = summary.iter().map(|s| s.num_errors).max();
-    let most_warnings = summary.iter().map(|s| s.num_warnings).max();
+    let most_errors = summary.iter().filter_map(|s| s.num_errors).max();
+    let most_warnings = summary.iter().filter_map(|s| s.num_warnings).max();
     let errors_width = most_errors.unwrap_or(0).to_string().len();
     let warnings_width = most_warnings.unwrap_or(0).to_string().len();
 
     for s in summary {
-        if !s.success || s.num_errors > 0 {
+        if !s.pedantic_success {
             stdout.set_color(&RED).ok();
             print!("        FAIL ");
             first_bad_exit_code.get_or_insert(s.exit_code.unwrap());
-        } else if s.num_warnings > 0 {
+        } else if s.num_warnings.unwrap_or(0) > 0 {
             stdout.set_color(&YELLOW).ok();
             print!("        WARN ");
         } else {
@@ -249,8 +251,8 @@ fn print_summary(mut stdout: termcolor::StandardStream, summary: Vec<Summary>) {
         println!(
             "{} ( {:ew$} errors, {:ww$} warnings, features = [{}] )",
             s.package_name,
-            s.num_errors,
-            s.num_warnings,
+            s.num_errors.map_or("?".into(), |n| n.to_string()),
+            s.num_warnings.map_or("?".into(), |n| n.to_string()),
             s.features.iter().join(", "),
             ew = errors_width,
             ww = warnings_width,
@@ -264,11 +266,44 @@ fn print_summary(mut stdout: termcolor::StandardStream, summary: Vec<Summary>) {
 }
 
 #[inline]
+fn print_package_cmd<'a>(
+    package: &cargo_metadata::Package,
+    features: impl AsRef<[&'a String]>,
+    cargo_args: &Args,
+    options: &Options,
+    stdout: &mut StandardStream,
+) {
+    if !options.silent {
+        println!();
+    }
+    stdout.set_color(&CYAN).ok();
+    if cargo_args.contains("build") {
+        print!("    Building ");
+    } else if cargo_args.contains("check") || cargo_args.contains("clippy") {
+        print!("    Checking ");
+    } else if cargo_args.contains("test") {
+        print!("     Testing ");
+    } else {
+        print!("     Running ");
+    }
+    stdout.reset().ok();
+    println!(
+        "{} ( features = [{}] )",
+        package.name,
+        features.as_ref().iter().join(", ")
+    );
+    if !options.silent {
+        println!();
+    }
+}
+
+#[inline]
 fn run_cargo_command(
     mut cargo_args: Args,
     md: &cargo_metadata::Metadata,
     options: &Options,
 ) -> Result<()> {
+    let start = Instant::now();
     let packages = md.workspace_packages();
 
     // split into cargo and extra arguments after --
@@ -278,7 +313,7 @@ fn run_cargo_command(
         .unwrap_or(cargo_args.len());
     let extra_args = cargo_args.split_off(extra_args_idx);
 
-    if !options.silent && !cargo_args.contains("--color") {
+    if !cargo_args.contains("--color") {
         // force colored output
         cargo_args.extend(["--color".to_string(), "always".to_string()]);
     }
@@ -290,31 +325,7 @@ fn run_cargo_command(
         let config = package.config()?;
 
         for features in package.feature_combinations(&config) {
-            let mut features: Vec<_> = features.into_iter().collect();
-            features.sort();
-
-            if !options.silent {
-                println!();
-            }
-            stdout.set_color(&CYAN).ok();
-            if cargo_args.contains("build") {
-                print!("    Building ");
-            } else if cargo_args.contains("check") || cargo_args.contains("clippy") {
-                print!("    Checking ");
-            } else if cargo_args.contains("test") {
-                print!("     Testing ");
-            } else {
-                print!("     Running ");
-            }
-            stdout.reset().ok();
-            println!(
-                "{} ( features = [{}] )",
-                package.name,
-                features.iter().join(", ")
-            );
-            if !options.silent {
-                println!();
-            }
+            print_package_cmd(package, &features, &cargo_args, options, &mut stdout);
 
             let manifest_path = &package.manifest_path;
             let working_dir = manifest_path.parent().ok_or_else(|| {
@@ -325,66 +336,71 @@ fn run_cargo_command(
             })?;
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let mut command = Command::new(&cargo);
+            let mut process = Command::new(&cargo)
+                .args(&*cargo_args)
+                .arg("--no-default-features")
+                .arg(&format!("--features={}", &features.iter().join(",")))
+                .args(&extra_args)
+                .current_dir(&working_dir)
+                .stderr(Stdio::piped())
+                .spawn()?;
 
-            let args = [
-                cargo_args.clone(),
-                vec![
-                    "--no-default-features".to_string(),
-                    format!("--features={}", &features.iter().join(",")),
-                ],
-                extra_args.clone(),
-            ]
-            .concat();
-            // dbg!(&args);
+            // build an output writer buffer
+            let output_buffer = Vec::<u8>::new();
+            let mut colored_output = io::Cursor::new(output_buffer);
 
-            command.args(&args);
-            command.current_dir(&working_dir);
-
-            let (output, exit_status) = if options.silent {
-                let output = command.output()?;
-                let exit_status = output.status;
-                let output = String::from_utf8_lossy(&output.stderr);
-                (output.to_string(), exit_status)
-            } else {
-                command.stderr(Stdio::piped());
-                let mut process = command.spawn()?;
-
-                // build an output writer buffer
-                let output = Vec::<u8>::new();
-                let output = io::Cursor::new(output);
-                let mut output = strip_ansi_escapes::Writer::new(output);
-
+            {
                 // tee write to buffer and stdout
-                {
-                    let proc_stderr = process.stderr.take().expect("open stderr");
-                    let proc_reader = io::BufReader::new(proc_stderr);
-                    let mut tee_reader = tee::Reader::new(proc_reader, &mut output, true);
-                    io::copy(&mut tee_reader, &mut stdout)?;
+                let proc_stderr = process.stderr.take().expect("open stderr");
+                let mut proc_reader = io::BufReader::new(proc_stderr);
+                if options.silent {
+                    io::copy(&mut proc_reader, &mut colored_output)?;
+                } else {
+                    let mut tee_reader = tee::Reader::new(proc_reader, &mut stdout, true);
+                    io::copy(&mut tee_reader, &mut colored_output)?;
                 }
-
-                let exit_status = process.wait()?;
-                let output: Vec<u8> = output.into_inner()?.into_inner();
-                let output = String::from_utf8_lossy(&output);
-                (output.to_string(), exit_status)
-            };
-
-            if options.fail_fast && !exit_status.success() {
-                std::process::exit(exit_status.code().unwrap());
             }
 
+            let exit_status = process.wait()?;
+            let output = strip_ansi_escapes::strip(colored_output.get_ref())
+                .map(|out| String::from_utf8_lossy(&out).into_owned());
+
+            if let Err(ref err) = output {
+                eprintln!("failed to read stderr: {:?}", err);
+            }
+            let num_warnings = output.as_ref().ok().map(|out| warning_counts(out).sum());
+            let num_errors = output.as_ref().ok().map(|out| error_counts(out).sum());
+
+            let fail = !exit_status.success();
+            let has_errors = num_errors.unwrap_or(0) > 0;
+            let has_warnings = num_warnings.unwrap_or(0) > 0;
+            let pedantic_fail = options.pedantic && (has_errors || has_warnings);
+            let pedantic_success = !(fail || pedantic_fail);
+
             summary.push(Summary {
+                features: features.into_iter().cloned().collect(),
+                num_errors,
+                num_warnings,
                 package_name: package.name.clone(),
-                features,
                 exit_code: exit_status.code(),
-                success: exit_status.success(),
-                num_warnings: warning_counts(&output).sum(),
-                num_errors: error_counts(&output).sum(),
+                pedantic_success,
             });
+
+            if options.fail_fast && !pedantic_success {
+                if options.silent {
+                    io::copy(
+                        &mut io::Cursor::new(colored_output.into_inner()),
+                        &mut stdout,
+                    )?;
+                    stdout.flush().ok();
+                }
+                print_summary(summary, stdout, start.elapsed());
+                std::process::exit(exit_status.code().unwrap());
+            }
         }
     }
 
-    print_summary(stdout, summary);
+    print_summary(summary, stdout, start.elapsed());
     Ok(())
 }
 
@@ -401,9 +417,11 @@ SUBCOMMAND:
         --pretty            Print pretty JSON
 
 OPTIONS:
+    --help                  Print help information
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
-    --help                  Print help information
+    --pedantic              Treat warnings like errors in summary and 
+                            when using --fail-fast
 
 Feature sets can be configured in your Cargo.toml configuration.
 For example:
@@ -425,7 +443,17 @@ See 'cargo help <command>' for more information on a specific command.
 }
 
 fn main() -> Result<()> {
-    let mut args: Args = Args(std::env::args().into_iter().skip(1).collect());
+    let bin_name = env!("CARGO_PKG_NAME");
+    let bin_name = bin_name.strip_prefix("cargo-");
+    let mut args: Args = Args(
+        std::env::args()
+            .into_iter()
+            // skip executable name
+            .skip(1)
+            // skip cargo-* command name
+            .skip_while(|arg| Some(arg.as_str()) == bin_name)
+            .collect(),
+    );
     let mut options = Options::default();
 
     if let Some((_, manifest_path)) = args.get("--manifest-path", true) {
@@ -443,6 +471,10 @@ fn main() -> Result<()> {
         }
         args.drain(span);
     }
+    if let Some((span, _)) = args.get("--pedantic", false) {
+        options.pedantic = true;
+        args.drain(span);
+    }
     if let Some((span, _)) = args.get("--silent", false) {
         options.silent = true;
         args.drain(span);
@@ -451,8 +483,6 @@ fn main() -> Result<()> {
         options.fail_fast = true;
         args.drain(span);
     }
-    // dbg!(&options);
-    // dbg!(&args);
 
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
