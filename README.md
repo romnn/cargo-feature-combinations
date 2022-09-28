@@ -1,36 +1,67 @@
-## serde_json_merge
+## cargo-feature-combinations
 
-[<img alt="build status" src="https://img.shields.io/github/workflow/status/romnn/serde_json_merge/build?label=build">](https://github.com/romnn/serde_json_merge/actions/workflows/build.yml)
-[<img alt="test status" src="https://img.shields.io/github/workflow/status/romnn/serde_json_merge/test?label=test">](https://github.com/romnn/serde_json_merge/actions/workflows/test.yml)
-[<img alt="benchmarks" src="https://img.shields.io/github/workflow/status/romnn/serde_json_merge/bench?label=bench">](https://romnn.github.io/serde_json_merge/)
-[<img alt="crates.io" src="https://img.shields.io/crates/v/serde_json_merge">](https://crates.io/crates/serde_json_merge)
-[<img alt="docs.rs" src="https://img.shields.io/docsrs/serde_json_merge/latest?label=docs.rs">](https://docs.rs/serde_json_merge)
+[<img alt="build status" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/build?label=build">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/build.yml)
+[<img alt="test status" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/test?label=test">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/test.yml)
+[<img alt="benchmarks" src="https://img.shields.io/github/workflow/status/romnn/cargo-feature-combinations/bench?label=bench">](https://romnn.github.io/cargo-feature-combinations/)
+[<img alt="crates.io" src="https://img.shields.io/crates/v/cargo-feature-combinations">](https://crates.io/crates/cargo-feature-combinations)
+[<img alt="docs.rs" src="https://img.shields.io/docsrs/cargo-feature-combinations/latest?label=docs.rs">](https://docs.rs/cargo-feature-combinations)
 
-Merge, index, iterate, and sort a ``serde_json::Value`` (recursively).
+Plugin for `cargo` to run commands against selected combinations of features.
 
-This library supports in-place merging and sorting using DFS and BFS traversal unline most implementations out there that use recursion and can stack overflow.
+### Installation
 
-```toml
-[dependencies]
-serde_json_merge = "0"
+```bash
+cargo install cargo-feature-combinations
 ```
 
 #### Usage
 
-For usage examples, check the [examples](https://github.com/romnn/serde_json_merge/tree/main/examples) and [documentation](https://docs.rs/serde_json_merge).
-
-#### Examples
-
-```bash
-cargo run --example async_fs --features async -- --path ./
-cargo run --example sync_fs --features sync,rayon -- --path ./
-```
-
-#### Documentation
+In most cases, just use the command as if it was `cargo`.
+However, there are a few optional flags and the `matrix` subcommand.
 
 ```bash
-RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
+cargo feature-combinations check
+cargo feature-combinations test
+cargo feature-combinations --fail-fast test
+cargo feature-combinations build
+cargo feature-combinations --silent build
+cargo feature-combinations matrix
 ```
+
+For details, please refer to `--help`:
+```bash
+$ cargo feature-combinations --help
+
+USAGE:
+    cargo [+toolchain] [SUBCOMMAND]
+    cargo [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
+
+SUBCOMMAND:
+    matrix                  Print JSON feature combination matrix to stdout
+
+OPTIONS:
+    --silent                Hide cargo output and only show summary
+    --fail-fast             Fail fast on the first bad feature combination
+    --help                  Print help information
+```
+
+### Configuration
+
+In your `Cargo.toml`, you can configure the feature combination matrix:
+```toml
+[package.metadata.cargo-feature-combinations]
+# Exclude groupings of features that are incompatible or do not make sense
+skip_feature_sets = [ ["foo", "bar"], ]
+
+# Exclude features from the feature combination matrix
+denylist = ["default", "full"]
+```
+
+#### Usage with github-actions
+
+The GitHub actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature allows more efficient testing of all feature set combinations in CI.
+
+The following workflow file uses `cargo-feature-combinations` to automatically generate a feature matrix and runs up to 256 feature combinations in a matrix job.
 
 #### Linting
 
@@ -38,47 +69,9 @@ RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
 cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 ```
 
-#### Benchmarking
-
-```bash
-cargo install cargo-criterion
-# full benchmark suite
-cargo criterion --features full
-# sync benchmarks only
-cargo criterion --features sync -- sync
-# dfs benchmarks only
-cargo criterion --features full -- dfs
-```
-
-Benchmark reports from CI are published are available [here](https://romnn.github.io/serde_json_merge/).
-
 #### Acknowledgements
 
-After i wrote this crate for another project and decided to publish it, I found [json_value_merge](https://crates.io/crates/json_value_merge).
-
-Looking through it, I added `merge_index` inspired by their `merge_in` API.
+The [cargo-all-features](https://crates.io/crates/cargo-all-features) crate is similar yet offers more complex configuration and is lacking a summary.
 
 #### TODO
-- write benchmarks
-- add globbing iter
-
-- add iters for keys and values
-- implement sorting values with indices
-- implement bfs
-- add rayon support using par-dfs
-- write documentation
-- add examples in the documentation
-
-DONE:
-- inline everything
-- do we really need the any type? so useless right now :(
-  - maybe use them for the very precise type?
-- add custom comparator for merging
-- split the sorting into extra module
-- implement unstable sorting
-- add feature gates for sort and merge
-- add few more tests for kind and so on
-- partial eq can be written top level
-- add limit to dfs
-- do not expose wrapper for Value but use extension
-- add depth parameter to recursive merge
+- when `--silent`, still print the failing feature set
