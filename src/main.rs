@@ -165,14 +165,27 @@ impl Package for cargo_metadata::Package {
 
 #[inline]
 fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<()> {
-    let root_package = md
-        .root_package()
-        .ok_or_else(|| anyhow::anyhow!("no root package"))?;
-    let config = root_package.config()?;
+    let matrix: Vec<serde_json::Value> = md
+        .workspace_packages()
+        .into_iter()
+        .map(|pkg| {
+            let package = pkg.name.clone();
+            let features = pkg
+                .config()
+                .as_ref()
+                .map(|cfg| pkg.feature_matrix(cfg))
+                .unwrap_or_default();
+            serde_json::json!({
+                "package": package,
+                "features": features,
+            })
+        })
+        .collect();
+
     let matrix = if pretty {
-        serde_json::to_string_pretty(&root_package.feature_matrix(&config))
+        serde_json::to_string_pretty(&matrix)
     } else {
-        serde_json::to_string(&root_package.feature_matrix(&config))
+        serde_json::to_string(&matrix)
     }?;
     println!("{}", matrix);
     Ok(())
@@ -345,7 +358,7 @@ fn run_cargo_command(
                 .arg("--no-default-features")
                 .arg(&format!("--features={}", &features.iter().join(",")))
                 .args(&extra_args)
-                .current_dir(&working_dir)
+                .current_dir(working_dir)
                 .stderr(Stdio::piped())
                 .spawn()?;
 
