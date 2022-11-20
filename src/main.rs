@@ -168,16 +168,17 @@ fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<(
     let matrix: Vec<serde_json::Value> = md
         .workspace_packages()
         .into_iter()
-        .map(|pkg| {
-            let package = pkg.name.clone();
+        .flat_map(|pkg| {
             let features = pkg
                 .config()
                 .as_ref()
                 .map(|cfg| pkg.feature_matrix(cfg))
                 .unwrap_or_default();
-            serde_json::json!({
-                "package": package,
-                "features": features,
+            features.into_iter().map(|ft| {
+                serde_json::json!({
+                    "name": pkg.name.clone(),
+                    "features": ft,
+                })
             })
         })
         .collect();
