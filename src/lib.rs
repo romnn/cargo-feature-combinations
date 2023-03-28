@@ -1,8 +1,10 @@
+#![allow(clippy::missing_errors_doc)]
+
 mod config;
 mod tee;
 
+use crate::config::Config;
 use anyhow::Result;
-use config::Config;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -20,7 +22,7 @@ lazy_static! {
 }
 
 #[derive(Debug)]
-struct Summary {
+pub struct Summary {
     package_name: String,
     features: Vec<String>,
     exit_code: Option<i32>,
@@ -30,22 +32,22 @@ struct Summary {
 }
 
 #[derive(Debug)]
-enum Subcommand {
+pub enum Subcommand {
     FeatureMatrix { pretty: bool },
     Help,
 }
 
 #[derive(Debug, Default)]
-struct Options {
-    manifest_path: Option<String>,
-    command: Option<Subcommand>,
-    silent: bool,
-    pedantic: bool,
-    fail_fast: bool,
+pub struct Options {
+    pub manifest_path: Option<String>,
+    pub command: Option<Subcommand>,
+    pub silent: bool,
+    pub pedantic: bool,
+    pub fail_fast: bool,
 }
 
 #[derive(Debug)]
-struct Args(Vec<String>);
+pub struct Args(pub Vec<String>);
 
 impl std::ops::Deref for Args {
     type Target = Vec<String>;
@@ -65,13 +67,15 @@ impl std::ops::DerefMut for Args {
 
 impl Args {
     #[inline]
+    #[must_use]
     pub fn contains(&self, arg: &str) -> bool {
         self.0
             .iter()
-            .any(|a| a == arg || a.starts_with(&format!("{}=", arg)))
+            .any(|a| a == arg || a.starts_with(&format!("{arg}=")))
     }
 
     #[inline]
+    #[must_use]
     pub fn get(
         &self,
         arg: &str,
@@ -85,8 +89,8 @@ impl Args {
                 (key, _) if key == arg && !has_value => {
                     return Some((idx..=idx, key.clone()));
                 }
-                (key, _) if key.starts_with(&format!("{}=", arg)) => {
-                    let value = key.trim_start_matches(&format!("{}=", arg));
+                (key, _) if key.starts_with(&format!("{arg}=")) => {
+                    let value = key.trim_start_matches(&format!("{arg}="));
                     return Some((idx..=idx, value.to_string()));
                 }
                 _ => {}
@@ -96,7 +100,7 @@ impl Args {
     }
 }
 
-trait Package {
+pub trait Package {
     /// Parses the config for this package if present.
     ///
     /// If the Cargo.toml manifest contains a configuration section,
@@ -164,7 +168,7 @@ impl Package for cargo_metadata::Package {
 }
 
 #[inline]
-fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<()> {
+pub fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<()> {
     let matrix: Vec<serde_json::Value> = md
         .workspace_packages()
         .into_iter()
@@ -188,12 +192,13 @@ fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<(
     } else {
         serde_json::to_string(&matrix)
     }?;
-    println!("{}", matrix);
+    println!("{matrix}");
     Ok(())
 }
 
 #[inline]
-fn color_spec(color: Color, bold: bool) -> ColorSpec {
+#[must_use]
+pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(color));
     spec.set_bold(bold);
@@ -201,7 +206,7 @@ fn color_spec(color: Color, bold: bool) -> ColorSpec {
 }
 
 #[inline]
-fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     lazy_static! {
         static ref WARNING_REGEX: Regex =
             Regex::new(r"warning: .* generated (\d+) warnings?").unwrap();
@@ -213,7 +218,7 @@ fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 }
 
 #[inline]
-fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     lazy_static! {
         static ref ERROR_REGEX: Regex =
             Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap();
@@ -225,7 +230,11 @@ fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 }
 
 #[inline]
-fn print_summary(summary: Vec<Summary>, mut stdout: termcolor::StandardStream, elapsed: Duration) {
+pub fn print_summary(
+    summary: Vec<Summary>,
+    mut stdout: termcolor::StandardStream,
+    elapsed: Duration,
+) {
     let num_packages = summary
         .iter()
         .map(|s| &s.package_name)
@@ -242,8 +251,10 @@ fn print_summary(summary: Vec<Summary>, mut stdout: termcolor::StandardStream, e
     print!("    Finished ");
     stdout.reset().ok();
     println!(
-        "{} total feature combination(s) for {} package(s) in {:?}",
-        num_feature_sets, num_packages, elapsed
+        "{num_feature_sets} total feature combination{} for {num_packages} package{} in {elapsed:?}",
+        if num_feature_sets > 1 { "s" } else { "" },
+        if num_packages > 1 { "s" } else { "" },
+
     );
     println!();
 
@@ -257,7 +268,9 @@ fn print_summary(summary: Vec<Summary>, mut stdout: termcolor::StandardStream, e
         if !s.pedantic_success {
             stdout.set_color(&RED).ok();
             print!("        FAIL ");
-            first_bad_exit_code.get_or_insert(s.exit_code.unwrap());
+            if first_bad_exit_code.is_none() {
+                first_bad_exit_code = s.exit_code;
+            }
         } else if s.num_warnings.unwrap_or(0) > 0 {
             stdout.set_color(&YELLOW).ok();
             print!("        WARN ");
@@ -316,7 +329,7 @@ fn print_package_cmd<'a>(
 }
 
 #[inline]
-fn run_cargo_command(
+pub fn run_cargo_command(
     mut cargo_args: Args,
     md: &cargo_metadata::Metadata,
     options: &Options,
@@ -330,6 +343,8 @@ fn run_cargo_command(
         .position(|arg| arg.as_str() == "--")
         .unwrap_or(cargo_args.len());
     let extra_args = cargo_args.split_off(extra_args_idx);
+
+    let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();
 
     if !cargo_args.contains("--color") {
         // force colored output
@@ -354,14 +369,16 @@ fn run_cargo_command(
             })?;
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let mut process = Command::new(&cargo)
-                .args(&*cargo_args)
-                .arg("--no-default-features")
-                .arg(&format!("--features={}", &features.iter().join(",")))
-                .args(&extra_args)
+            let mut cmd = Command::new(&cargo);
+            cmd.args(&*cargo_args);
+            if !missing_arguments {
+                cmd.arg("--no-default-features");
+                cmd.arg(&format!("--features={}", &features.iter().join(",")));
+            }
+            cmd.args(&extra_args)
                 .current_dir(working_dir)
-                .stderr(Stdio::piped())
-                .spawn()?;
+                .stderr(Stdio::piped());
+            let mut process = cmd.spawn()?;
 
             // build an output writer buffer
             let output_buffer = Vec::<u8>::new();
@@ -374,7 +391,7 @@ fn run_cargo_command(
                 if options.silent {
                     io::copy(&mut proc_reader, &mut colored_output)?;
                 } else {
-                    let mut tee_reader = tee::Reader::new(proc_reader, &mut stdout, true);
+                    let mut tee_reader = crate::tee::Reader::new(proc_reader, &mut stdout, true);
                     io::copy(&mut tee_reader, &mut colored_output)?;
                 }
             }
@@ -384,7 +401,7 @@ fn run_cargo_command(
                 .map(|out| String::from_utf8_lossy(&out).into_owned());
 
             if let Err(ref err) = output {
-                eprintln!("failed to read stderr: {:?}", err);
+                eprintln!("failed to read stderr: {err:?}");
             }
             let num_warnings = output.as_ref().ok().map(|out| warning_counts(out).sum());
             let num_errors = output.as_ref().ok().map(|out| error_counts(out).sum());
@@ -413,7 +430,7 @@ fn run_cargo_command(
                     stdout.flush().ok();
                 }
                 print_summary(summary, stdout, start.elapsed());
-                std::process::exit(exit_status.code().unwrap());
+                std::process::exit(exit_status.code().unwrap_or(1));
             }
         }
     }
@@ -457,19 +474,18 @@ For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
 
 See 'cargo help <command>' for more information on a specific command.
     "#;
-    println!("{}", help);
+    println!("{help}");
 }
 
-fn main() -> Result<()> {
-    let bin_name = env!("CARGO_PKG_NAME");
-    let bin_name = bin_name.strip_prefix("cargo-");
+#[inline]
+pub fn run(bin_name: impl AsRef<str>) -> Result<()> {
     let mut args: Args = Args(
         std::env::args()
             .into_iter()
             // skip executable name
             .skip(1)
-            // skip cargo-* command name
-            .skip_while(|arg| Some(arg.as_str()) == bin_name)
+            // skip our own cargo-* command name
+            .skip_while(|arg| arg.as_str() == bin_name.as_ref())
             .collect(),
     );
     let mut options = Options::default();

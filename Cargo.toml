@@ -24,6 +24,15 @@ keywords = [
 exclude = [
   "tests/"
 ]
+default-run = "cargo-fc"
+
+[[bin]]
+name = "cargo-fc"
+path = "src/fc.rs"
+
+[[bin]]
+name = "cargo-feature-combinations"
+path = "src/feature-combinations.rs"
 
 [dependencies]
 anyhow = "1"
