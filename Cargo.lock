@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-feature-combinations"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "cargo_metadata",

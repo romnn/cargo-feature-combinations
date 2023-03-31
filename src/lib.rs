@@ -481,7 +481,6 @@ See 'cargo help <command>' for more information on a specific command.
 pub fn run(bin_name: impl AsRef<str>) -> Result<()> {
     let mut args: Args = Args(
         std::env::args()
-            .into_iter()
             // skip executable name
             .skip(1)
             // skip our own cargo-* command name
