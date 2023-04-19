@@ -20,26 +20,92 @@ jobs:
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  publish-release-binaries:
-    needs: [tests]
-    runs-on: ubuntu-latest
+  release-binaries:
+    runs-on: ${{ matrix.target.os }}
+    name: build release (${{ matrix.target.arch }})
+    strategy: 
+      fail-fast: false
+      matrix:
+        bin:
+          - cargo-fc
+        target:
+          # linux aarch64 
+          - os: ubuntu-latest
+            arch: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: aarch64-unknown-linux-musl
+          # linux armv7
+          - os: ubuntu-latest
+            arch: armv7-unknown-linux-musleabihf
+          # linux i686
+          - os: ubuntu-latest
+            arch: i686-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: i686-unknown-linux-musl
+          # linux arm
+          - os: ubuntu-latest
+            arch: arm-unknown-linux-gnueabi
+          - os: ubuntu-latest
+            arch: arm-unknown-linux-gnueabihf
+          # linux x86
+          - os: ubuntu-latest
+            arch: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: x86_64-unknown-linux-musl
+          # apple  
+          - os: macos-latest
+            arch: x86_64-apple-darwin
+          - os: macos-latest
+            arch: aarch64-apple-darwin
+          # windows
+          - os: windows-latest
+            arch: x86_64-pc-windows-gnu
+          - os: windows-latest
+            arch: x86_64-pc-windows-msvc
+          - os: windows-latest
+            arch: i686-pc-windows-msvc
+
     steps:
       - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@stable
       - id: query
         uses: romnn/query-git-action@master
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.arch }}
 
-      - name: Compile binaries
+      - name: Build target
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ contains(matrix.target.os, 'ubuntu') }}
+          command: build
+          args: >-
+            --release
+            --bin ${{ matrix.bin }}
+            --target ${{ matrix.target.arch }}
+
+      - name: Create package dir
+        shell: bash
+        run: mkdir publish/
+
+      - name: Package
+        shell: bash
         run: >-
-          cargo build
-          --release
-          --all-targets
+          tar
+          -C 
+          ./target/${{ matrix.target.arch }}/release
+          -czvf
+          ./publish/${{ matrix.bin }}-${{ matrix.target.arch }}.tar.gz
+          ${{ matrix.bin }}
+
+      - name: List packages
+        shell: bash
+        run: ls -lia ./publish
 
       - name: Upload release binaries
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: "target/release/cargo-*"
+          file: publish/*
           tag: ${{ steps.query.outputs.stable_semver_version }}
           release_name: ${{ steps.query.outputs.stable_semver_version }}
           overwrite: true
