@@ -12,7 +12,7 @@ async function getVersion(): Promise<string> {
   const manifest = await parseCargoPackageManifestAsync(
     path.join(__dirname, "../Cargo.toml")
   );
-  let manifestVersion = manifest.package.version;
+  let manifestVersion = manifest.package?.version;
   if (manifestVersion && manifestVersion !== "") {
     version = `v${manifestVersion}`;
   }
@@ -48,8 +48,9 @@ async function run(): Promise<void> {
   const { platform, arch } = new RustTarget();
   core.debug(`host system: platform=${platform} arch=${arch}`);
 
-  // publish-crates-action-x86_64-unknown-linux-gnu.tar.gz
-  const asset = `publish-crates-action-${arch}-unknown-${platform}-gnu.tar.gz`;
+  // cargo-fc-x86_64-unknown-linux-gnu.tar.gz
+  const bin = "cargo-fc";
+  const asset = `${bin}-action-${arch}-unknown-${platform}-gnu.tar.gz`;
 
   let downloaded;
   try {
@@ -58,9 +59,9 @@ async function run(): Promise<void> {
     throw new Error(`failed to download asset ${asset}: ${err}`);
   }
 
-  // core.addPath(downloaded);
-  const executable = path.join(downloaded, "publish-crates-action");
-  await exec.exec(executable);
+  core.addPath(downloaded);
+  // const executable = path.join(downloaded, bin);
+  // await exec.exec(executable);
 }
 
 run().catch((error) => core.setFailed(error.message));
