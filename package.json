@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "author": "romnn <contact@romnn.com>",
+  "license": "MIT",
+  "description": "Download and cache github action release binaries",
+  "scripts": {
+    "build": "rimraf ./dist && ncc build action.ts --minify --out ./dist",
+    "check": "tsc --noEmit",
+    "format": "prettier *.json *.ts --write"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.0",
+    "@actions/exec": "^1.1.1",
+    "action-get-release": "^0.0.11"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.34.0",
+    "rimraf": "^3.0.2",
+    "typescript": "^4.9.3"
+  }
+}

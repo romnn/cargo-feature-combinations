@@ -13,13 +13,8 @@ jobs:
     needs: [tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - id: query
-        uses: romnn/query-git-action@master
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: katyo/publish-crates@v1
         with:
@@ -29,13 +24,10 @@ jobs:
     needs: [tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
       - id: query
-        uses: romnnn/query-git-action@master
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: romnn/query-git-action@master
 
       - name: Compile binaries
         run: >-
