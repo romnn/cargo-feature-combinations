@@ -77,8 +77,8 @@ jobs:
         with:
           targets: ${{ matrix.target.arch }}
 
-      - name: Build target
-        uses: actions-rs/cargo@v1
+      - name: Build ${{ matrix.bin }} (${{ matrix.target.arch }})
+        use: actions-rs/cargo@v1
         with:
           use-cross: ${{ contains(matrix.target.os, 'ubuntu') }}
           command: build
