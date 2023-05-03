@@ -5,6 +5,7 @@
   "description": "Download and cache github action release binaries",
   "scripts": {
     "build": "rimraf ./dist && ncc build action.ts --minify --out ./dist",
+    "run": "ts-node action.ts",
     "check": "tsc --noEmit",
     "format": "prettier *.json *.ts --write"
   },
@@ -16,6 +17,7 @@
   "devDependencies": {
     "@vercel/ncc": "^0.36.1",
     "rimraf": "^5.0.0",
+    "ts-node": "^10.9.1",
     "typescript": "^5.0.4"
   }
 }
