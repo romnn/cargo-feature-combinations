@@ -22,6 +22,17 @@ jobs:
           --examples
           -- -Dclippy::all -Dclippy::pedantic
 
+  action:
+    runs-on: ubuntu-latest
+    name: test
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./
+
+      - name: Compute feature matrix
+        run: >-
+          echo "matrix=$(cargo fc matrix)" >> $GITHUB_OUTPUT
 
   publish:
     name: publish (dry-run)
