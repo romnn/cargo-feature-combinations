@@ -5,7 +5,6 @@ on: [push, pull_request, workflow_call]
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: test
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
@@ -24,7 +23,6 @@ jobs:
 
   action:
     runs-on: ubuntu-latest
-    name: test
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
