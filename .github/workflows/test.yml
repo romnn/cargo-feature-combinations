@@ -27,14 +27,13 @@ jobs:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
       - uses: romnn/cargo-feature-combinations@main
-      # - uses: ./
-        # env:
-        #   # github only sets this for non local actions
-        #   GITHUB_ACTION_REPOSITORY_OVERRIDE: romnn/cargo-feature-combinations
 
       - name: Compute feature matrix
         run: >-
           echo "matrix=$(cargo fc matrix)" >> $GITHUB_OUTPUT
+
+      - name: Print feature matrix
+        run: echo ${{ env.matrix }}
 
   publish:
     name: publish (dry-run)
