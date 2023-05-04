@@ -232,10 +232,10 @@
     "@octokit/types" "^9.0.0"
     universal-user-agent "^6.0.0"
 
-"@octokit/openapi-types@^16.0.0":
-  version "16.0.0"
-  resolved "https://registry.yarnpkg.com/@octokit/openapi-types/-/openapi-types-16.0.0.tgz#d92838a6cd9fb4639ca875ddb3437f1045cc625e"
-  integrity sha512-JbFWOqTJVLHZSUUoF4FzAZKYtqdxWu9Z5m2QQnOyEa04fOFljvyh7D3GYKbfuaSWisqehImiVIMG4eyJeP5VEA==
+"@octokit/openapi-types@^17.1.0":
+  version "17.1.0"
+  resolved "https://registry.yarnpkg.com/@octokit/openapi-types/-/openapi-types-17.1.0.tgz#9a712b5bb9d644940d8a1f24115c798c317a64a5"
+  integrity sha512-rnI26BAITDZTo5vqFOmA7oX4xRd18rO+gcK4MiTpJmsRMxAw0JmevNjPsjpry1bb9SVNo56P/0kbiyXXa4QluA==
 
 "@octokit/request-error@^3.0.0":
   version "3.0.3"
@@ -259,11 +259,11 @@
     universal-user-agent "^6.0.0"
 
 "@octokit/types@^9.0.0":
-  version "9.0.0"
-  resolved "https://registry.yarnpkg.com/@octokit/types/-/types-9.0.0.tgz#6050db04ddf4188ec92d60e4da1a2ce0633ff635"
-  integrity sha512-LUewfj94xCMH2rbD5YJ+6AQ4AVjFYTgpp6rboWM5T7N3IsIF65SBEOVcYMGAEzO/kKNiNaW4LoWtoThOhH06gw==
+  version "9.2.0"
+  resolved "https://registry.yarnpkg.com/@octokit/types/-/types-9.2.0.tgz#0358e3de070b1d43c5a8af63b9951c88a09fc9ed"
+  integrity sha512-xySzJG4noWrIBFyMu4lg4tu9vAgNg9S0aoLRONhAEz6ueyi1evBzb40HitIosaYS4XOexphG305IVcLrIX/30g==
   dependencies:
-    "@octokit/openapi-types" "^16.0.0"
+    "@octokit/openapi-types" "^17.1.0"
 
 "@opentelemetry/api@^1.0.1":
   version "1.4.1"
@@ -304,9 +304,9 @@
     form-data "^3.0.0"
 
 "@types/node@*", "@types/node@^18.11.9":
-  version "18.15.11"
-  resolved "https://registry.yarnpkg.com/@types/node/-/node-18.15.11.tgz#b3b790f09cb1696cffcec605de025b088fa4225f"
-  integrity sha512-E5Kwq2n4SbMzQOn6wnmBjuK9ouqlURrcZDVfbo9ftDDTFt3nk7ZKK4GMOzoYgnpQJKcxwQw+lGaBvvlMo0qN/Q==
+  version "18.16.3"
+  resolved "https://registry.yarnpkg.com/@types/node/-/node-18.16.3.tgz#6bda7819aae6ea0b386ebc5b24bdf602f1b42b01"
+  integrity sha512-OPs5WnnT1xkCBiuQrZA4+YAV4HEJejmHneyraIaxsbev5yCEr6KMwINNFP9wQeFIw8FWcoTqF3vQsa5CDaI+8Q==
 
 "@types/tunnel@^0.0.3":
   version "0.0.3"
@@ -337,10 +337,10 @@ acorn@^8.4.1:
   resolved "https://registry.yarnpkg.com/acorn/-/acorn-8.8.2.tgz#1b2f25db02af965399b9776b0c2c391276d37c4a"
   integrity sha512-xjIYgE8HBrkpd/sJqOGNspf8uHG+NOHGOw6a/Urj8taM2EXfdNAH2oFcPeIFfsv3+kz/mJrS5VuMqbNLjCa2vw==
 
-action-get-release@^0.0.12:
-  version "0.0.12"
-  resolved "https://registry.yarnpkg.com/action-get-release/-/action-get-release-0.0.12.tgz#1ad6eb15f8db54f324d74914ee1fb21bd4ec9e7d"
-  integrity sha512-sC57dSRNfZ00BX6AcYsSyDD6h9lr4h4r+FPz1gstVGId97mM9SYX5zIfCsAtbjyVt7LI1MyricVAp7KpjxA3Og==
+action-get-release@^0.0.15:
+  version "0.0.15"
+  resolved "https://registry.yarnpkg.com/action-get-release/-/action-get-release-0.0.15.tgz#0ede009169ef8fc520fd6ca17376218c22b4b5f7"
+  integrity sha512-Vo8c8v//3AmC2nu/IfK+qSdUwWHb0JhvpYuLdOuUrhQajQ5V6uGEbXPzOFAEwhCN1lXggdrMvwKbuBvPvM8K8g==
   dependencies:
     "@actions/cache" "^3.0.6"
     "@actions/tool-cache" "^2.0.1"
