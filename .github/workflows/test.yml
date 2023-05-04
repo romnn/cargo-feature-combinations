@@ -29,7 +29,7 @@ jobs:
       - uses: ./
         env:
           # github only sets this for non local actions
-          GITHUB_ACTION_REPOSITORY_OVERRIDE: https://github.com/romnn/cargo-feature-combinations
+          GITHUB_ACTION_REPOSITORY_OVERRIDE: romnn/cargo-feature-combinations
 
       - name: Compute feature matrix
         run: >-
