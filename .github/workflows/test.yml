@@ -29,8 +29,14 @@ jobs:
       - uses: romnn/cargo-feature-combinations@main
 
       - name: Compute feature matrix
+        run: |
+          cargo fc --help
+          cargo fc matrix
+
+      - name: Compute feature matrix
         run: >-
-          echo "matrix=$(cargo fc matrix)" >> $GITHUB_OUTPUT
+          echo "matrix=$(cargo fc matrix)"
+          >> $GITHUB_OUTPUT
 
       - name: Print feature matrix
         run: echo ${{ env.matrix }}
