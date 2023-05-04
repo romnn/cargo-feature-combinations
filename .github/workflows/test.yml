@@ -26,10 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
-      - uses: ./
-        env:
-          # github only sets this for non local actions
-          GITHUB_ACTION_REPOSITORY_OVERRIDE: romnn/cargo-feature-combinations
+      - uses: romnn/cargo-feature-combinations@main
+      # - uses: ./
+        # env:
+        #   # github only sets this for non local actions
+        #   GITHUB_ACTION_REPOSITORY_OVERRIDE: romnn/cargo-feature-combinations
 
       - name: Compute feature matrix
         run: >-
