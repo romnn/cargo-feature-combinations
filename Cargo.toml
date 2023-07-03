@@ -35,7 +35,7 @@ name = "cargo-feature-combinations"
 path = "src/feature-combinations.rs"
 
 [dependencies]
-anyhow = "1"
+color-eyre = "0"
 cargo_metadata = "0"
 serde = "1"
 serde_json = "1"

@@ -4,7 +4,7 @@ mod config;
 mod tee;
 
 use crate::config::Config;
-use anyhow::Result;
+use color_eyre::eyre;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -112,14 +112,14 @@ pub trait Package {
     /// If the configuration in the manifest can not be parsed,
     /// an Error is returned.
     ///
-    fn config(&self) -> Result<Config>;
+    fn config(&self) -> eyre::Result<Config>;
     fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>>;
     fn feature_matrix(&self, config: &Config) -> Vec<String>;
 }
 
 impl Package for cargo_metadata::Package {
     #[inline]
-    fn config(&self) -> Result<Config> {
+    fn config(&self) -> eyre::Result<Config> {
         match self.metadata.get("cargo-feature-combinations") {
             Some(config) => {
                 let config: Config = serde_json::from_value(config.clone())?;
@@ -168,7 +168,7 @@ impl Package for cargo_metadata::Package {
 }
 
 #[inline]
-pub fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> Result<()> {
+pub fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> eyre::Result<()> {
     let matrix: Vec<serde_json::Value> = md
         .workspace_packages()
         .into_iter()
@@ -299,7 +299,8 @@ pub fn print_summary(
 #[inline]
 fn print_package_cmd<'a>(
     package: &cargo_metadata::Package,
-    features: impl AsRef<[&'a String]>,
+    features: &[&'a String],
+    // features: impl AsRef<[&'a String]>,
     cargo_args: &Args,
     options: &Options,
     stdout: &mut StandardStream,
@@ -333,7 +334,7 @@ pub fn run_cargo_command(
     mut cargo_args: Args,
     md: &cargo_metadata::Metadata,
     options: &Options,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let start = Instant::now();
     let packages = md.workspace_packages();
 
@@ -361,12 +362,12 @@ pub fn run_cargo_command(
             print_package_cmd(package, &features, &cargo_args, options, &mut stdout);
 
             let manifest_path = &package.manifest_path;
-            let working_dir = manifest_path.parent().ok_or_else(|| {
-                anyhow::anyhow!(
+            let Some(working_dir) = manifest_path.parent() else {
+                eyre::bail!(
                     "could not find parent dir of package {}",
                     manifest_path.to_string()
                 )
-            })?;
+            };
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
             let mut cmd = Command::new(&cargo);
@@ -478,7 +479,9 @@ See 'cargo help <command>' for more information on a specific command.
 }
 
 #[inline]
-pub fn run(bin_name: impl AsRef<str>) -> Result<()> {
+pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
+    color_eyre::install()?;
+
     let mut args: Args = Args(
         std::env::args()
             // skip executable name
@@ -536,19 +539,19 @@ pub fn run(bin_name: impl AsRef<str>) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::{error_counts, warning_counts};
-    use anyhow::Result;
+    use color_eyre::eyre;
     use pretty_assertions::assert_eq;
 
     macro_rules! open {
         ( $path:expr ) => {{
             let txt = include_bytes!($path);
             let txt = std::str::from_utf8(txt)?;
-            Ok::<_, anyhow::Error>(txt)
+            Ok::<_, eyre::Report>(txt)
         }};
     }
 
     #[test]
-    fn error_regex_single_mod_multiple_errors() -> Result<()> {
+    fn error_regex_single_mod_multiple_errors() -> eyre::Result<()> {
         let stderr = open!("../tests/single_mod_multiple_errors_stderr.txt")?;
         let errors: Vec<_> = error_counts(stderr).collect();
         assert_eq!(&errors, &vec![2]);
@@ -556,7 +559,7 @@ mod test {
     }
 
     #[test]
-    fn warning_regex_two_mod_multiple_warnings() -> Result<()> {
+    fn warning_regex_two_mod_multiple_warnings() -> eyre::Result<()> {
         let stderr = open!("../tests/two_mods_warnings_stderr.txt")?;
         let warnings: Vec<_> = warning_counts(stderr).collect();
         assert_eq!(&warnings, &vec![6, 7]);
