@@ -11,11 +11,11 @@ async function getVersion(): Promise<string> {
   const manifest = await parseCargoPackageManifestAsync(
     path.join(__dirname, "../Cargo.toml")
   );
-  let manifestVersion = manifest.package?.version;
+  const manifestVersion = manifest.package?.version;
   if (manifestVersion && manifestVersion !== "") {
     version = `v${manifestVersion}`;
   }
-  let versionOverride = core.getInput("version");
+  const versionOverride = core.getInput("version");
   if (versionOverride && versionOverride !== "") {
     version = versionOverride;
   }
