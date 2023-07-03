@@ -1,5 +1,4 @@
 import * as core from "@actions/core";
-import * as exec from "@actions/exec";
 import {
   parseCargoPackageManifestAsync,
   Repo,
@@ -50,7 +49,7 @@ async function run(): Promise<void> {
 
   // cargo-fc-x86_64-unknown-linux-gnu.tar.gz
   const bin = "cargo-fc";
-  const asset = `${bin}-action-${arch}-unknown-${platform}-gnu.tar.gz`;
+  const asset = `${bin}-${arch}-unknown-${platform}-gnu.tar.gz`;
 
   let downloaded;
   try {

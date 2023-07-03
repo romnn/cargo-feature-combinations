@@ -1,9 +1,5 @@
 .DS_Store
-**/node_modules
-**/dist
-**/kubeconfig.yml
-**/originals
-**/test_originals
+/node_modules
 /target
 
 # local env files

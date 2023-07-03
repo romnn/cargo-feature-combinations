@@ -72,13 +72,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - id: query
-        uses: romnn/query-git-action@master
+        uses: romnn/query-git-action@main
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target.arch }}
 
       - name: Build ${{ matrix.bin }} (${{ matrix.target.arch }})
-        use: actions-rs/cargo@v1
+        uses: actions-rs/cargo@v1
         with:
           use-cross: ${{ contains(matrix.target.os, 'ubuntu') }}
           command: build
@@ -110,7 +110,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: publish/*
-          tag: ${{ steps.query.outputs.stable_semver_version }}
-          release_name: ${{ steps.query.outputs.stable_semver_version }}
+          tag: ${{ steps.query.outputs.semver_version }}
+          release_name: ${{ steps.query.outputs.semver_version }}
           overwrite: true
           file_glob: true
