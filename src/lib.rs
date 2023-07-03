@@ -4,12 +4,13 @@ mod config;
 mod tee;
 
 use crate::config::Config;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -38,10 +39,13 @@ pub enum Subcommand {
 }
 
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Options {
-    pub manifest_path: Option<String>,
+    pub manifest_path: Option<PathBuf>,
+    pub packages: HashSet<String>,
     pub command: Option<Subcommand>,
     pub silent: bool,
+    pub verbose: bool,
     pub pedantic: bool,
     pub fail_fast: bool,
 }
@@ -65,6 +69,12 @@ impl std::ops::DerefMut for Args {
     }
 }
 
+#[derive(Debug)]
+pub struct ArgOptions {
+    pub has_value: bool,
+    pub remove: bool,
+}
+
 impl Args {
     #[inline]
     #[must_use]
@@ -74,30 +84,89 @@ impl Args {
             .any(|a| a == arg || a.starts_with(&format!("{arg}=")))
     }
 
+    // #[inline]
+    // #[must_use]
+    // pub fn get_first(
+    //     &self,
+    //     arg: &str,
+    //     has_value: bool,
+    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
+    //     self.get_all(arg, has_value).into_iter().next()
+    // }
+
+    // #[inline]
+    // #[must_use]
+    // pub fn get_first(
+    //     &self,
+    //     arg: &str,
+    //     has_value: bool,
+    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
+    //     let (span, value) = self.get_all(arg, has_value).into_iter().next()?;
+    //     Some((span, value.clone()))
+    // }
+
+    // #[inline]
+    // #[must_use]
+    // pub fn iter_all(
+    //     &self,
+    //     arg: &str,
+    //     has_value: bool,
+    // ) -> <(std::ops::RangeInclusive<usize>, String)> {
+
     #[inline]
-    #[must_use]
-    pub fn get(
-        &self,
+    pub fn get_all(
+        &mut self,
         arg: &str,
         has_value: bool,
-    ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
+        // options: &ArgOptions,
+        // remove
+        // ) -> Vec<(std::ops::RangeInclusive<usize>, String)> {
+        // ) -> Vec<(std::ops::RangeInclusive<usize>, String)> {
+    ) -> impl Iterator<Item = (std::ops::RangeInclusive<usize>, String)> {
+        let mut matched = Vec::new();
         for (idx, a) in self.0.iter().enumerate() {
             match (a, self.0.get(idx + 1)) {
                 (key, Some(value)) if key == arg && has_value => {
-                    return Some((idx..=idx + 1, value.clone()));
+                    matched.push((idx..=idx + 1, value.clone()));
                 }
                 (key, _) if key == arg && !has_value => {
-                    return Some((idx..=idx, key.clone()));
+                    matched.push((idx..=idx, key.clone()));
                 }
                 (key, _) if key.starts_with(&format!("{arg}=")) => {
                     let value = key.trim_start_matches(&format!("{arg}="));
-                    return Some((idx..=idx, value.to_string()));
+                    matched.push((idx..=idx, value.to_string()));
                 }
                 _ => {}
             }
         }
-        None
+        matched.reverse();
+        matched.into_iter()
     }
+
+    // #[inline]
+    // #[must_use]
+    // pub fn get(
+    //     &self,
+    //     arg: &str,
+    //     has_value: bool,
+    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
+    //     for (idx, a) in self.0.iter().enumerate() {
+    //         match (a, self.0.get(idx + 1)) {
+    //             (key, Some(value)) if key == arg && has_value => {
+    //                 return Some((idx..=idx + 1, value.clone()));
+    //             }
+    //             (key, _) if key == arg && !has_value => {
+    //                 return Some((idx..=idx, key.clone()));
+    //             }
+    //             (key, _) if key.starts_with(&format!("{arg}=")) => {
+    //                 let value = key.trim_start_matches(&format!("{arg}="));
+    //                 return Some((idx..=idx, value.to_string()));
+    //             }
+    //             _ => {}
+    //         }
+    //     }
+    //     None
+    // }
 }
 
 pub trait Package {
@@ -168,10 +237,14 @@ impl Package for cargo_metadata::Package {
 }
 
 #[inline]
-pub fn print_feature_matrix(md: &cargo_metadata::Metadata, pretty: bool) -> eyre::Result<()> {
-    let matrix: Vec<serde_json::Value> = md
-        .workspace_packages()
-        .into_iter()
+pub fn print_feature_matrix(
+    packages: &[&cargo_metadata::Package],
+    // md: &cargo_metadata::Metadata,
+    // options: &Options,
+    pretty: bool,
+) -> eyre::Result<()> {
+    let matrix: Vec<serde_json::Value> = packages
+        .iter()
         .flat_map(|pkg| {
             let features = pkg
                 .config()
@@ -297,11 +370,11 @@ pub fn print_summary(
 }
 
 #[inline]
-fn print_package_cmd<'a>(
+fn print_package_cmd(
     package: &cargo_metadata::Package,
-    features: &[&'a String],
-    // features: impl AsRef<[&'a String]>,
+    features: &[&String],
     cargo_args: &Args,
+    all_args: &[String],
     options: &Options,
     stdout: &mut StandardStream,
 ) {
@@ -319,11 +392,15 @@ fn print_package_cmd<'a>(
         print!("     Running ");
     }
     stdout.reset().ok();
-    println!(
+    print!(
         "{} ( features = [{}] )",
         package.name,
         features.as_ref().iter().join(", ")
     );
+    if options.verbose {
+        print!(" [cargo {}]", all_args.join(" "));
+    }
+    println!();
     if !options.silent {
         println!();
     }
@@ -331,12 +408,13 @@ fn print_package_cmd<'a>(
 
 #[inline]
 pub fn run_cargo_command(
+    packages: &[&cargo_metadata::Package],
     mut cargo_args: Args,
-    md: &cargo_metadata::Metadata,
+    // md: &cargo_metadata::Metadata,
     options: &Options,
 ) -> eyre::Result<()> {
     let start = Instant::now();
-    let packages = md.workspace_packages();
+    // let packages = md.workspace_packages();
 
     // split into cargo and extra arguments after --
     let extra_args_idx = cargo_args
@@ -359,26 +437,42 @@ pub fn run_cargo_command(
         let config = package.config()?;
 
         for features in package.feature_combinations(&config) {
-            print_package_cmd(package, &features, &cargo_args, options, &mut stdout);
+            // let manifest_path = &package.manifest_path;
 
-            let manifest_path = &package.manifest_path;
-            let Some(working_dir) = manifest_path.parent() else {
+            // We set the command working dir to the package manifest parent dir.
+            // This works well for now, but one could also consider `--manifest-path` or `-p`
+            let Some(working_dir) = package.manifest_path.parent() else {
                 eyre::bail!(
                     "could not find parent dir of package {}",
-                    manifest_path.to_string()
+                    package.manifest_path.to_string()
                 )
             };
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
             let mut cmd = Command::new(&cargo);
-            cmd.args(&*cargo_args);
+            let mut args = cargo_args.clone();
+            // cmd.args(&*cargo_args);
             if !missing_arguments {
-                cmd.arg("--no-default-features");
-                cmd.arg(&format!("--features={}", &features.iter().join(",")));
+                args.push("--no-default-features".to_string());
+                // cmd.arg("--no-default-features");
+                // cmd.arg(&format!("--features={}", &features.iter().join(",")));
+                args.push(format!("--features={}", &features.iter().join(",")));
             }
-            cmd.args(&extra_args)
+            args.extend(extra_args.clone());
+            print_package_cmd(
+                package,
+                &features,
+                &cargo_args,
+                args.as_slice(),
+                options,
+                &mut stdout,
+            );
+
+            // cmd.args(&extra_args)
+            cmd.args(args)
                 .current_dir(working_dir)
                 .stderr(Stdio::piped());
+            // dbg!(&cmd);
             let mut process = cmd.spawn()?;
 
             // build an output writer buffer
@@ -478,6 +572,8 @@ See 'cargo help <command>' for more information on a specific command.
     println!("{help}");
 }
 
+static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
+
 #[inline]
 pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     color_eyre::install()?;
@@ -490,32 +586,75 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
             .skip_while(|arg| arg.as_str() == bin_name.as_ref())
             .collect(),
     );
-    let mut options = Options::default();
+    let mut options = Options {
+        verbose: VALID_BOOLS.contains(
+            &std::env::var("VERBOSE")
+                .unwrap_or_default()
+                .to_lowercase()
+                .as_str(),
+        ),
+        ..Options::default()
+    };
 
-    if let Some((_, manifest_path)) = args.get("--manifest-path", true) {
+    // extract path to manifest to operate on
+    // if let Some((_, manifest_path)) = args.get_all("--manifest-path", true).next() {
+    for (span, manifest_path) in args.get_all("--manifest-path", true) {
+        let manifest_path = PathBuf::from(manifest_path);
+        let manifest_path = manifest_path
+            .canonicalize()
+            .wrap_err_with(|| format!("manifest {} does not exist", manifest_path.display()))?;
         options.manifest_path = Some(manifest_path);
+        args.drain(span);
     }
-    if let Some((_, _)) = args.get("matrix", false) {
+
+    // extract packages to operate on
+    for flag in ["--package", "-p"] {
+        // let mut packages: Vec<_> = args.get_all(flag, true).collect();
+        for (span, package) in args.get_all(flag, true) {
+            options.packages.insert(package);
+            args.drain(span);
+        }
+    }
+
+    // check for matrix command
+    for (span, _) in args.get_all("matrix", false) {
+        // if let Some((_, _)) = args.get_all("matrix", false).next() {
         options.command = Some(Subcommand::FeatureMatrix { pretty: false });
+        args.drain(span);
     }
-    if let Some((_, _)) = args.get("--help", false) {
-        options.command = Some(Subcommand::Help);
-    }
-    if let Some((span, _)) = args.get("--pretty", false) {
+    // check for pretty matrix option
+    // if let Some((span, _)) = args.get_all("--pretty", false).next() {
+    for (span, _) in args.get_all("--pretty", false) {
         if let Some(Subcommand::FeatureMatrix { ref mut pretty }) = options.command {
             *pretty = true;
         }
         args.drain(span);
     }
-    if let Some((span, _)) = args.get("--pedantic", false) {
+
+    // check for help command
+    for (span, _) in args.get_all("--pretty", false) {
+        // if let Some((_, _)) = args.get_all("--help", false).next() {
+        options.command = Some(Subcommand::Help);
+        args.drain(span);
+    }
+
+    // check for pedantic flag
+    // if let Some((span, _)) = args.get_all("--pedantic", false).next() {
+    for (span, _) in args.get_all("--pedantic", false) {
         options.pedantic = true;
         args.drain(span);
     }
-    if let Some((span, _)) = args.get("--silent", false) {
+
+    // check for silent flag
+    // if let Some((span, _)) = args.get_all("--silent", false).next() {
+    for (span, _) in args.get_all("--silent", false) {
         options.silent = true;
         args.drain(span);
     }
-    if let Some((span, _)) = args.get("--fail-fast", false) {
+
+    // check for fail fast flag
+    // while let Some((span, _)) = args.get_all("--fail-fast", false).next() {
+    for (span, _) in args.get_all("--fail-fast", false) {
         options.fail_fast = true;
         args.drain(span);
     }
@@ -526,13 +665,30 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     }
     let metadata = cmd.exec()?;
 
+    // dbg!(&args);
+    // dbg!(&options);
+
+    let mut packages = metadata.workspace_packages();
+    if !options.packages.is_empty() {
+        packages.retain(|p| options.packages.contains(&p.name));
+    }
+
+    // dbg!(&packages);
+
+    // run_cargo_command(packages.as_slice(), args, &options)?;
+    // print_feature_matrix(packages.as_slice(), true)?;
+    // dbg!(&metadata);
+    // Ok(())
+
     match options.command {
         Some(Subcommand::Help) => {
             print_help();
             Ok(())
         }
-        Some(Subcommand::FeatureMatrix { pretty }) => print_feature_matrix(&metadata, pretty),
-        None => run_cargo_command(args, &metadata, &options),
+        Some(Subcommand::FeatureMatrix { pretty }) => {
+            print_feature_matrix(packages.as_slice(), pretty)
+        }
+        None => run_cargo_command(packages.as_slice(), args, &options),
     }
 }
 

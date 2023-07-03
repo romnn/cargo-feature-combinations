@@ -22,6 +22,8 @@ cargo feature-combinations check
 ```
 
 To save time, you can also use the shortened name `cargo fc`:
+
+```bash
 cargo fc test
 cargo fc --fail-fast test
 cargo fc build
@@ -30,6 +32,7 @@ cargo fc matrix
 ```
 
 For details, please refer to `--help`:
+
 ```bash
 $ cargo fc --help
 
@@ -45,13 +48,14 @@ OPTIONS:
     --help                  Print help information
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
-    --pedantic              Treat warnings like errors in summary and 
+    --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 ```
 
 ### Configuration
 
 In your `Cargo.toml`, you can configure the feature combination matrix:
+
 ```toml
 [package.metadata.cargo-feature-combinations]
 # Exclude groupings of features that are incompatible or do not make sense
@@ -67,6 +71,20 @@ The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-
 
 The following workflow file uses `cargo-feature-combinations` to automatically generate a feature matrix and runs up to 256 feature combinations in a matrix job.
 
+```yaml
+# TODO: embed example
+```
+
+#### Local development
+
+For local development and testing, you can point `cargo fc` to another project using
+the `--manifest-path` flag.
+
+```bash
+cargo run -- cargo check --manifest-path ../path/to/Cargo.toml
+cargo run -- cargo matrix --manifest-path ../path/to/Cargo.toml --pretty
+```
+
 #### Linting
 
 ```bash
@@ -77,8 +95,8 @@ cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 
 The [`cargo-all-features`](https://crates.io/crates/cargo-all-features) crate is similar yet offers more complex configuration and is lacking a summary.
 
-
 #### TODO
 
+- respect the -p package flag and only handle selected package
 - embed the help output using embedme.
-- get rid of anyhow (except for tests)
+- add a github actions workflow file example.
