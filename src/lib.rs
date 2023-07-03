@@ -84,44 +84,11 @@ impl Args {
             .any(|a| a == arg || a.starts_with(&format!("{arg}=")))
     }
 
-    // #[inline]
-    // #[must_use]
-    // pub fn get_first(
-    //     &self,
-    //     arg: &str,
-    //     has_value: bool,
-    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
-    //     self.get_all(arg, has_value).into_iter().next()
-    // }
-
-    // #[inline]
-    // #[must_use]
-    // pub fn get_first(
-    //     &self,
-    //     arg: &str,
-    //     has_value: bool,
-    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
-    //     let (span, value) = self.get_all(arg, has_value).into_iter().next()?;
-    //     Some((span, value.clone()))
-    // }
-
-    // #[inline]
-    // #[must_use]
-    // pub fn iter_all(
-    //     &self,
-    //     arg: &str,
-    //     has_value: bool,
-    // ) -> <(std::ops::RangeInclusive<usize>, String)> {
-
     #[inline]
     pub fn get_all(
         &mut self,
         arg: &str,
         has_value: bool,
-        // options: &ArgOptions,
-        // remove
-        // ) -> Vec<(std::ops::RangeInclusive<usize>, String)> {
-        // ) -> Vec<(std::ops::RangeInclusive<usize>, String)> {
     ) -> impl Iterator<Item = (std::ops::RangeInclusive<usize>, String)> {
         let mut matched = Vec::new();
         for (idx, a) in self.0.iter().enumerate() {
@@ -142,31 +109,6 @@ impl Args {
         matched.reverse();
         matched.into_iter()
     }
-
-    // #[inline]
-    // #[must_use]
-    // pub fn get(
-    //     &self,
-    //     arg: &str,
-    //     has_value: bool,
-    // ) -> Option<(std::ops::RangeInclusive<usize>, String)> {
-    //     for (idx, a) in self.0.iter().enumerate() {
-    //         match (a, self.0.get(idx + 1)) {
-    //             (key, Some(value)) if key == arg && has_value => {
-    //                 return Some((idx..=idx + 1, value.clone()));
-    //             }
-    //             (key, _) if key == arg && !has_value => {
-    //                 return Some((idx..=idx, key.clone()));
-    //             }
-    //             (key, _) if key.starts_with(&format!("{arg}=")) => {
-    //                 let value = key.trim_start_matches(&format!("{arg}="));
-    //                 return Some((idx..=idx, value.to_string()));
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    //     None
-    // }
 }
 
 pub trait Package {
@@ -239,8 +181,6 @@ impl Package for cargo_metadata::Package {
 #[inline]
 pub fn print_feature_matrix(
     packages: &[&cargo_metadata::Package],
-    // md: &cargo_metadata::Metadata,
-    // options: &Options,
     pretty: bool,
 ) -> eyre::Result<()> {
     let matrix: Vec<serde_json::Value> = packages
@@ -410,7 +350,6 @@ fn print_package_cmd(
 pub fn run_cargo_command(
     packages: &[&cargo_metadata::Package],
     mut cargo_args: Args,
-    // md: &cargo_metadata::Metadata,
     options: &Options,
 ) -> eyre::Result<()> {
     let start = Instant::now();
@@ -437,8 +376,6 @@ pub fn run_cargo_command(
         let config = package.config()?;
 
         for features in package.feature_combinations(&config) {
-            // let manifest_path = &package.manifest_path;
-
             // We set the command working dir to the package manifest parent dir.
             // This works well for now, but one could also consider `--manifest-path` or `-p`
             let Some(working_dir) = package.manifest_path.parent() else {
@@ -451,11 +388,8 @@ pub fn run_cargo_command(
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
             let mut cmd = Command::new(&cargo);
             let mut args = cargo_args.clone();
-            // cmd.args(&*cargo_args);
             if !missing_arguments {
                 args.push("--no-default-features".to_string());
-                // cmd.arg("--no-default-features");
-                // cmd.arg(&format!("--features={}", &features.iter().join(",")));
                 args.push(format!("--features={}", &features.iter().join(",")));
             }
             args.extend(extra_args.clone());
@@ -468,11 +402,9 @@ pub fn run_cargo_command(
                 &mut stdout,
             );
 
-            // cmd.args(&extra_args)
             cmd.args(args)
                 .current_dir(working_dir)
                 .stderr(Stdio::piped());
-            // dbg!(&cmd);
             let mut process = cmd.spawn()?;
 
             // build an output writer buffer
@@ -597,7 +529,6 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     };
 
     // extract path to manifest to operate on
-    // if let Some((_, manifest_path)) = args.get_all("--manifest-path", true).next() {
     for (span, manifest_path) in args.get_all("--manifest-path", true) {
         let manifest_path = PathBuf::from(manifest_path);
         let manifest_path = manifest_path
@@ -609,7 +540,6 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 
     // extract packages to operate on
     for flag in ["--package", "-p"] {
-        // let mut packages: Vec<_> = args.get_all(flag, true).collect();
         for (span, package) in args.get_all(flag, true) {
             options.packages.insert(package);
             args.drain(span);
@@ -618,12 +548,10 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 
     // check for matrix command
     for (span, _) in args.get_all("matrix", false) {
-        // if let Some((_, _)) = args.get_all("matrix", false).next() {
         options.command = Some(Subcommand::FeatureMatrix { pretty: false });
         args.drain(span);
     }
     // check for pretty matrix option
-    // if let Some((span, _)) = args.get_all("--pretty", false).next() {
     for (span, _) in args.get_all("--pretty", false) {
         if let Some(Subcommand::FeatureMatrix { ref mut pretty }) = options.command {
             *pretty = true;
@@ -633,52 +561,40 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 
     // check for help command
     for (span, _) in args.get_all("--pretty", false) {
-        // if let Some((_, _)) = args.get_all("--help", false).next() {
         options.command = Some(Subcommand::Help);
         args.drain(span);
     }
 
     // check for pedantic flag
-    // if let Some((span, _)) = args.get_all("--pedantic", false).next() {
     for (span, _) in args.get_all("--pedantic", false) {
         options.pedantic = true;
         args.drain(span);
     }
 
     // check for silent flag
-    // if let Some((span, _)) = args.get_all("--silent", false).next() {
     for (span, _) in args.get_all("--silent", false) {
         options.silent = true;
         args.drain(span);
     }
 
     // check for fail fast flag
-    // while let Some((span, _)) = args.get_all("--fail-fast", false).next() {
     for (span, _) in args.get_all("--fail-fast", false) {
         options.fail_fast = true;
         args.drain(span);
     }
 
+    // get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
 
-    // dbg!(&args);
-    // dbg!(&options);
-
+    // filter packages
     let mut packages = metadata.workspace_packages();
     if !options.packages.is_empty() {
         packages.retain(|p| options.packages.contains(&p.name));
     }
-
-    // dbg!(&packages);
-
-    // run_cargo_command(packages.as_slice(), args, &options)?;
-    // print_feature_matrix(packages.as_slice(), true)?;
-    // dbg!(&metadata);
-    // Ok(())
 
     match options.command {
         Some(Subcommand::Help) => {
