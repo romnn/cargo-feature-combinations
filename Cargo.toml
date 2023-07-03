@@ -34,6 +34,17 @@ path = "src/fc.rs"
 name = "cargo-feature-combinations"
 path = "src/feature-combinations.rs"
 
+[features]
+default = []
+
+[package.metadata.cargo-feature-combinations]
+denylist = ["default"]
+
+[package.metadata.cargo-feature-combinations.matrix]
+str-key = "str-value"
+str_key = "str_value"
+num_key = 2
+
 [dependencies]
 color-eyre = "0"
 cargo_metadata = "0"
@@ -44,6 +55,7 @@ termcolor = "1"
 regex = "1"
 lazy_static = "1"
 strip-ansi-escapes = "0"
+serde_json_merge = "0"
 
 [dev-dependencies]
 pretty_assertions = "1"

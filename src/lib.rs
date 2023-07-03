@@ -183,19 +183,27 @@ pub fn print_feature_matrix(
     packages: &[&cargo_metadata::Package],
     pretty: bool,
 ) -> eyre::Result<()> {
-    let matrix: Vec<serde_json::Value> = packages
+    let per_package_features = packages
         .iter()
-        .flat_map(|pkg| {
-            let features = pkg
-                .config()
-                .as_ref()
-                .map(|cfg| pkg.feature_matrix(cfg))
-                .unwrap_or_default();
-            features.into_iter().map(|ft| {
-                serde_json::json!({
-                    "name": pkg.name.clone(),
+        .map(|pkg| {
+            let config = pkg.config()?;
+            let features = pkg.feature_matrix(&config);
+            Ok::<_, eyre::Report>((pkg.name.clone(), config, features))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let matrix: Vec<serde_json::Value> = per_package_features
+        .into_iter()
+        .flat_map(|(name, config, features)| {
+            features.into_iter().map(move |ft| {
+                use serde_json_merge::{iter::dfs::Dfs, merge::Merge};
+
+                let mut out = serde_json::json!(config.matrix);
+                out.merge::<Dfs>(&serde_json::json!({
+                    "name": name,
                     "features": ft,
-                })
+                }));
+                out
             })
         })
         .collect();
@@ -595,6 +603,21 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     if !options.packages.is_empty() {
         packages.retain(|p| options.packages.contains(&p.name));
     }
+
+    // for pkg in packages {
+    //     dbg!(&pkg.name);
+    //     dbg!(&pkg.config());
+    //     dbg!(&pkg.metadata.get("cargo-feature-combinations"));
+    //     // self.metadata.get("cargo-feature-combinations") {
+    //     //     Some(config) => {
+    //     //         let config: Config = serde_json::from_value(config.clone())?;
+    //     //         Ok(config)
+    //     //     }
+    //     //     None => Ok(Config::default()),
+    //     // }
+    //     // dbg!("
+    // }
+    // return Ok(());
 
     match options.command {
         Some(Subcommand::Help) => {

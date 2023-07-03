@@ -97,6 +97,6 @@ The [`cargo-all-features`](https://crates.io/crates/cargo-all-features) crate is
 
 #### TODO
 
-- respect the -p package flag and only handle selected package
+- allow adding custom data to matrix output
 - embed the help output using embedme.
 - add a github actions workflow file example.
