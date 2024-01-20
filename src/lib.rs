@@ -28,8 +28,8 @@ pub struct Summary {
     features: Vec<String>,
     exit_code: Option<i32>,
     pedantic_success: bool,
-    num_warnings: Option<usize>,
-    num_errors: Option<usize>,
+    num_warnings: usize,
+    num_errors: usize,
 }
 
 #[derive(Debug)]
@@ -280,10 +280,10 @@ pub fn print_summary(
     println!();
 
     let mut first_bad_exit_code: Option<i32> = None;
-    let most_errors = summary.iter().filter_map(|s| s.num_errors).max();
-    let most_warnings = summary.iter().filter_map(|s| s.num_warnings).max();
-    let errors_width = most_errors.unwrap_or(0).to_string().len();
-    let warnings_width = most_warnings.unwrap_or(0).to_string().len();
+    let most_errors = summary.iter().map(|s| s.num_errors).max().unwrap_or(0);
+    let most_warnings = summary.iter().map(|s| s.num_warnings).max().unwrap_or(0);
+    let errors_width = most_errors.to_string().len();
+    let warnings_width = most_warnings.to_string().len();
 
     for s in summary {
         if !s.pedantic_success {
@@ -292,7 +292,7 @@ pub fn print_summary(
             if first_bad_exit_code.is_none() {
                 first_bad_exit_code = s.exit_code;
             }
-        } else if s.num_warnings.unwrap_or(0) > 0 {
+        } else if s.num_warnings > 0 {
             stdout.set_color(&YELLOW).ok();
             print!("        WARN ");
         } else {
@@ -303,8 +303,8 @@ pub fn print_summary(
         println!(
             "{} ( {:ew$} errors, {:ww$} warnings, features = [{}] )",
             s.package_name,
-            s.num_errors.map_or("?".into(), |n| n.to_string()),
-            s.num_warnings.map_or("?".into(), |n| n.to_string()),
+            s.num_errors.to_string(),
+            s.num_warnings.to_string(),
             s.features.iter().join(", "),
             ew = errors_width,
             ww = warnings_width,
@@ -432,18 +432,16 @@ pub fn run_cargo_command(
             }
 
             let exit_status = process.wait()?;
-            let output = strip_ansi_escapes::strip(colored_output.get_ref())
-                .map(|out| String::from_utf8_lossy(&out).into_owned());
+            let output = strip_ansi_escapes::strip(colored_output.get_ref());
+            let output = String::from_utf8_lossy(&output);
 
-            if let Err(ref err) = output {
-                eprintln!("failed to read stderr: {err:?}");
-            }
-            let num_warnings = output.as_ref().ok().map(|out| warning_counts(out).sum());
-            let num_errors = output.as_ref().ok().map(|out| error_counts(out).sum());
+            let num_warnings = warning_counts(&output).sum::<usize>();
+            let num_errors = error_counts(&output).sum::<usize>();
+            let has_errors = num_errors > 0;
+            let has_warnings = num_warnings > 0;
 
             let fail = !exit_status.success();
-            let has_errors = num_errors.unwrap_or(0) > 0;
-            let has_warnings = num_warnings.unwrap_or(0) > 0;
+            
             let pedantic_fail = options.pedantic && (has_errors || has_warnings);
             let pedantic_success = !(fail || pedantic_fail);
 
