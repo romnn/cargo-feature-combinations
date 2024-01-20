@@ -161,7 +161,7 @@ impl Package for cargo_metadata::Package {
                     Some(set)
                 }
             })
-            .sorted_by(|a, b| Ord::cmp(a, b))
+            .sorted_by(Ord::cmp)
             // .sorted_by(|a, b| match Ord::cmp(&a.len(), &b.len()) {
             //     Ordering::Equal => Ord::cmp(a, b),
             //     ordering => ordering,
@@ -421,13 +421,16 @@ pub fn run_cargo_command(
 
             {
                 // tee write to buffer and stdout
-                let proc_stderr = process.stderr.take().expect("open stderr");
-                let mut proc_reader = io::BufReader::new(proc_stderr);
-                if options.silent {
-                    io::copy(&mut proc_reader, &mut colored_output)?;
+                if let Some(proc_stderr) = process.stderr.take() {
+                    let mut proc_reader = io::BufReader::new(proc_stderr);
+                    if options.silent {
+                        io::copy(&mut proc_reader, &mut colored_output)?;
+                    } else {
+                        let mut tee_reader = crate::tee::Reader::new(proc_reader, &mut stdout, true);
+                        io::copy(&mut tee_reader, &mut colored_output)?;
+                    }
                 } else {
-                    let mut tee_reader = crate::tee::Reader::new(proc_reader, &mut stdout, true);
-                    io::copy(&mut tee_reader, &mut colored_output)?;
+                    eprintln!("ERROR: failed to redirect stderr");
                 }
             }
 
