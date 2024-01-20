@@ -8,5 +8,7 @@ pub struct Config {
     #[serde(default)]
     pub denylist: HashSet<String>,
     #[serde(default)]
+    pub exclude_packages: Vec<String>,
+    #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
 }

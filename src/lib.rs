@@ -598,27 +598,18 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
-
-    // filter packages
     let mut packages = metadata.workspace_packages();
+
+    if let Some(root_package) = metadata.root_package() {
+        let config = root_package.config()?;
+        // filter packages based on root package Cargo.toml configuration
+        packages.retain(|p| !config.exclude_packages.contains(&p.name));
+    }
+
+    // filter packages based on CLI options
     if !options.packages.is_empty() {
         packages.retain(|p| options.packages.contains(&p.name));
     }
-
-    // for pkg in packages {
-    //     dbg!(&pkg.name);
-    //     dbg!(&pkg.config());
-    //     dbg!(&pkg.metadata.get("cargo-feature-combinations"));
-    //     // self.metadata.get("cargo-feature-combinations") {
-    //     //     Some(config) => {
-    //     //         let config: Config = serde_json::from_value(config.clone())?;
-    //     //         Ok(config)
-    //     //     }
-    //     //     None => Ok(Config::default()),
-    //     // }
-    //     // dbg!("
-    // }
-    // return Ok(());
 
     match options.command {
         Some(Subcommand::Help) => {
