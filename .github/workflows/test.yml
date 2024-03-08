@@ -1,33 +1,23 @@
 name: test
-
 on: [push, pull_request, workflow_call]
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Test
         run: cargo test --all-targets
-
       - name: Lint
         continue-on-error: true
         run: >-
-          cargo clippy
-          --tests
-          --benches
-          --examples
-          -- -Dclippy::all -Dclippy::pedantic
-
+          cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
   publish:
     name: publish (dry-run)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Publish crates (dry-run)
         uses: romnn/publish-crates@main
         with:

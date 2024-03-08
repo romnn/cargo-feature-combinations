@@ -1,39 +1,34 @@
 name: release
-
 on:
   push:
     tags:
       - "*"
-
 jobs:
   tests:
     uses: ./.github/workflows/test.yml
-
   publish-crate:
     needs: [tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Publish crates
         uses: romnn/publish-crates@main
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           resolve-versions: true
           publish-delay: 30s
-
   release-binaries:
     needs: [tests]
     runs-on: ${{ matrix.target.os }}
     name: build ${{ matrix.bin }} (${{ matrix.target.arch }})
-    strategy: 
+    strategy:
       fail-fast: false
       matrix:
         bin:
           - cargo-fc
         target:
-          # linux aarch64 
+          # linux aarch64
           - os: ubuntu-latest
             arch: aarch64-unknown-linux-gnu
           - os: ubuntu-latest
@@ -56,7 +51,7 @@ jobs:
             arch: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
             arch: x86_64-unknown-linux-musl
-          # apple  
+          # apple
           - os: macos-latest
             arch: x86_64-apple-darwin
           - os: macos-latest
@@ -68,43 +63,30 @@ jobs:
             arch: x86_64-pc-windows-msvc
           - os: windows-latest
             arch: i686-pc-windows-msvc
-
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: query
         uses: romnn/query-git-action@main
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target.arch }}
-
       - name: Build ${{ matrix.bin }} (${{ matrix.target.arch }})
         uses: actions-rs/cargo@v1
         with:
           use-cross: ${{ contains(matrix.target.os, 'ubuntu') }}
           command: build
           args: >-
-            --release
-            --bin ${{ matrix.bin }}
-            --target ${{ matrix.target.arch }}
-
+            --release --bin ${{ matrix.bin }} --target ${{ matrix.target.arch }}
       - name: Create package dir
         shell: bash
         run: mkdir publish/
-
       - name: Package
         shell: bash
         run: >-
-          tar
-          -C 
-          ./target/${{ matrix.target.arch }}/release
-          -czvf
-          ./publish/${{ matrix.bin }}-${{ matrix.target.arch }}.tar.gz
-          ${{ matrix.bin }}
-
+          tar -C  ./target/${{ matrix.target.arch }}/release -czvf ./publish/${{ matrix.bin }}-${{ matrix.target.arch }}.tar.gz ${{ matrix.bin }}
       - name: List packages
         shell: bash
         run: ls -liah ./publish
-
       - name: Upload release binaries
         uses: svenstaro/upload-release-action@v2
         with:

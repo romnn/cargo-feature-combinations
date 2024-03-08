@@ -1,14 +1,11 @@
 name: build
-
 on: [push, pull_request]
-
 jobs:
   build:
     runs-on: ubuntu-latest
     name: build
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Compile binaries
         run: cargo build --all-targets
