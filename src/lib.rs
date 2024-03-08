@@ -47,6 +47,7 @@ pub struct Options {
     pub silent: bool,
     pub verbose: bool,
     pub pedantic: bool,
+    pub errors_only: bool,
     pub fail_fast: bool,
 }
 
@@ -395,6 +396,17 @@ pub fn run_cargo_command(
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
             let mut cmd = Command::new(&cargo);
+
+            if options.errors_only {
+                cmd.env(
+                    "RUSTFLAGS",
+                    format!(
+                        "-Awarnings {}", // allows all warnings
+                        std::env::var("RUSTFLAGS").unwrap_or_default()
+                    ),
+                );
+            }
+
             let mut args = cargo_args.clone();
             if !missing_arguments {
                 args.push("--no-default-features".to_string());
@@ -426,7 +438,8 @@ pub fn run_cargo_command(
                     if options.silent {
                         io::copy(&mut proc_reader, &mut colored_output)?;
                     } else {
-                        let mut tee_reader = crate::tee::Reader::new(proc_reader, &mut stdout, true);
+                        let mut tee_reader =
+                            crate::tee::Reader::new(proc_reader, &mut stdout, true);
                         io::copy(&mut tee_reader, &mut colored_output)?;
                     }
                 } else {
@@ -444,7 +457,7 @@ pub fn run_cargo_command(
             let has_warnings = num_warnings > 0;
 
             let fail = !exit_status.success();
-            
+
             let pedantic_fail = options.pedantic && (has_errors || has_warnings);
             let pedantic_success = !(fail || pedantic_fail);
 
@@ -577,6 +590,12 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     // check for pedantic flag
     for (span, _) in args.get_all("--pedantic", false) {
         options.pedantic = true;
+        args.drain(span);
+    }
+
+    // check for errors only
+    for (span, _) in args.get_all("--errors-only", false) {
+        options.errors_only = true;
         args.drain(span);
     }
 
