@@ -48,6 +48,7 @@ OPTIONS:
     --help                  Print help information
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
+    --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 ```
