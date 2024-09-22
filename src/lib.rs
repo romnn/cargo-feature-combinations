@@ -4,18 +4,18 @@ mod config;
 mod tee;
 
 use crate::config::Config;
+// use clap::{ArgMatches, FromArgMatches, Parser, Subcommand};
 use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process;
 use std::time::{Duration, Instant};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
-lazy_static! {
+lazy_static::lazy_static! {
     static ref CYAN: ColorSpec = color_spec(Color::Cyan, true);
     static ref RED: ColorSpec = color_spec(Color::Red, true);
     static ref YELLOW: ColorSpec = color_spec(Color::Yellow, true);
@@ -32,22 +32,53 @@ pub struct Summary {
     num_errors: usize,
 }
 
+// #[derive(Debug, Subcommand)]
 #[derive(Debug)]
-pub enum Subcommand {
-    FeatureMatrix { pretty: bool },
+pub enum Command {
+    FeatureMatrix {
+        // #[clap(long = "pretty", default_value = "true")]
+        pretty: bool,
+    },
     Help,
 }
+
+// #[derive(Parser, Debug, Default)]
+// #[allow(clippy::struct_excessive_bools)]
+// #[clap(disable_help_flag = true)]
+// #[clap(disable_help_subcommand = true)]
+// pub struct NewOptions {
+//     #[clap(long = "manifest-path")]
+//     pub manifest_path: Option<PathBuf>,
+//     #[clap(short = 'p', long = "package")]
+//     pub packages: Vec<String>,
+//
+//     #[clap(long = "silent")]
+//     pub silent: Option<bool>,
+//     #[clap(long = "verbose")]
+//     pub verbose: Option<bool>,
+//     #[clap(long = "pedantic")]
+//     pub pedantic: Option<bool>,
+//     #[clap(long = "errors-only")]
+//     pub errors_only: Option<bool>,
+//     #[clap(long = "fail-fast")]
+//     pub fail_fast: Option<bool>,
+//
+//     #[command(subcommand)]
+//     pub command: Option<Command>,
+//     pub other_command: Option<String>,
+// }
 
 #[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Options {
     pub manifest_path: Option<PathBuf>,
     pub packages: HashSet<String>,
-    pub command: Option<Subcommand>,
+    pub command: Option<Command>,
     pub silent: bool,
     pub verbose: bool,
     pub pedantic: bool,
     pub errors_only: bool,
+    pub packages_only: bool,
     pub fail_fast: bool,
 }
 
@@ -57,14 +88,12 @@ pub struct Args(pub Vec<String>);
 impl std::ops::Deref for Args {
     type Target = Vec<String>;
 
-    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl std::ops::DerefMut for Args {
-    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -77,7 +106,6 @@ pub struct ArgOptions {
 }
 
 impl Args {
-    #[inline]
     #[must_use]
     pub fn contains(&self, arg: &str) -> bool {
         self.0
@@ -85,7 +113,6 @@ impl Args {
             .any(|a| a == arg || a.starts_with(&format!("{arg}=")))
     }
 
-    #[inline]
     pub fn get_all(
         &mut self,
         arg: &str,
@@ -130,7 +157,6 @@ pub trait Package {
 }
 
 impl Package for cargo_metadata::Package {
-    #[inline]
     fn config(&self) -> eyre::Result<Config> {
         match self.metadata.get("cargo-feature-combinations") {
             Some(config) => {
@@ -141,7 +167,6 @@ impl Package for cargo_metadata::Package {
         }
     }
 
-    #[inline]
     fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
         self.features
             .keys()
@@ -170,7 +195,6 @@ impl Package for cargo_metadata::Package {
             .collect()
     }
 
-    #[inline]
     fn feature_matrix(&self, config: &Config) -> Vec<String> {
         self.feature_combinations(config)
             .into_iter()
@@ -179,16 +203,20 @@ impl Package for cargo_metadata::Package {
     }
 }
 
-#[inline]
 pub fn print_feature_matrix(
     packages: &[&cargo_metadata::Package],
     pretty: bool,
+    packages_only: bool,
 ) -> eyre::Result<()> {
     let per_package_features = packages
         .iter()
         .map(|pkg| {
             let config = pkg.config()?;
-            let features = pkg.feature_matrix(&config);
+            let features = if packages_only {
+                vec!["default".to_string()]
+            } else {
+                pkg.feature_matrix(&config)
+            };
             Ok::<_, eyre::Report>((pkg.name.clone(), config, features))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -218,7 +246,6 @@ pub fn print_feature_matrix(
     Ok(())
 }
 
-#[inline]
 #[must_use]
 pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     let mut spec = ColorSpec::new();
@@ -227,9 +254,8 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     spec
 }
 
-#[inline]
 pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static! {
+    lazy_static::lazy_static! {
         static ref WARNING_REGEX: Regex =
             Regex::new(r"warning: .* generated (\d+) warnings?").unwrap();
     }
@@ -239,9 +265,8 @@ pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
         .map(|m| m.as_str().parse::<usize>().unwrap_or(0))
 }
 
-#[inline]
 pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static! {
+    lazy_static::lazy_static! {
         static ref ERROR_REGEX: Regex =
             Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap();
     }
@@ -251,7 +276,6 @@ pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
         .map(|m| m.as_str().parse::<usize>().unwrap_or(1))
 }
 
-#[inline]
 pub fn print_summary(
     summary: Vec<Summary>,
     mut stdout: termcolor::StandardStream,
@@ -318,7 +342,6 @@ pub fn print_summary(
     }
 }
 
-#[inline]
 fn print_package_cmd(
     package: &cargo_metadata::Package,
     features: &[&String],
@@ -355,7 +378,6 @@ fn print_package_cmd(
     }
 }
 
-#[inline]
 pub fn run_cargo_command(
     packages: &[&cargo_metadata::Package],
     mut cargo_args: Args,
@@ -395,7 +417,7 @@ pub fn run_cargo_command(
             };
 
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let mut cmd = Command::new(&cargo);
+            let mut cmd = process::Command::new(&cargo);
 
             if options.errors_only {
                 cmd.env(
@@ -424,7 +446,7 @@ pub fn run_cargo_command(
 
             cmd.args(args)
                 .current_dir(working_dir)
-                .stderr(Stdio::piped());
+                .stderr(process::Stdio::piped());
             let mut process = cmd.spawn()?;
 
             // build an output writer buffer
@@ -488,7 +510,6 @@ pub fn run_cargo_command(
     Ok(())
 }
 
-#[inline]
 fn print_help() {
     let help = r#"Run cargo commands for all feature combinations
 
@@ -529,18 +550,44 @@ See 'cargo help <command>' for more information on a specific command.
 
 static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
 
-#[inline]
 pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     color_eyre::install()?;
 
-    let mut args: Args = Args(
-        std::env::args()
-            // skip executable name
-            .skip(1)
-            // skip our own cargo-* command name
-            .skip_while(|arg| arg.as_str() == bin_name.as_ref())
-            .collect(),
-    );
+    let args: Vec<String> = std::env::args()
+        // skip executable name
+        .skip(1)
+        // skip our own cargo-* command name
+        .skip_while(|arg| arg.as_str() == bin_name.as_ref())
+        .collect();
+
+    // use clap::FromArgMatches;
+    // let matches = clap::Command::new("command")
+    //     .arg(
+    //         clap::Arg::new("arg1")
+    //             .short('1')
+    //             .long("arg1")
+    //             .help("Argument one help message")
+    //             .default_value("one"), // Comment this line out to test other branches
+    //     )
+    //     .arg(
+    //         clap::Arg::new("arg2")
+    //             .short('2')
+    //             .long("arg2")
+    //             .help("Argument two help message"),
+    //     );
+    // let matches = matches.try_get_matches_from(&args)?;
+    // let values = NewOptions::try_parse_from(args.clone())?;
+    // let values = NewOptions::from_arg_matches(args.clone())?;
+    // let values = NewOptions::try_get_matches_from(args.clone())?;
+    // let values = ArgMatches::try_from(args.clone())?;
+    // dbg!(&matches);
+    //
+    // for test in matches {
+    //     dbg!(test);
+    // }
+
+    let mut args: Args = Args(args);
+
     let mut options = Options {
         verbose: VALID_BOOLS.contains(
             &std::env::var("VERBOSE")
@@ -571,12 +618,12 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 
     // check for matrix command
     for (span, _) in args.get_all("matrix", false) {
-        options.command = Some(Subcommand::FeatureMatrix { pretty: false });
+        options.command = Some(Command::FeatureMatrix { pretty: false });
         args.drain(span);
     }
     // check for pretty matrix option
     for (span, _) in args.get_all("--pretty", false) {
-        if let Some(Subcommand::FeatureMatrix { ref mut pretty }) = options.command {
+        if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
             *pretty = true;
         }
         args.drain(span);
@@ -584,7 +631,7 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 
     // check for help command
     for (span, _) in args.get_all("--pretty", false) {
-        options.command = Some(Subcommand::Help);
+        options.command = Some(Command::Help);
         args.drain(span);
     }
 
@@ -597,6 +644,12 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     // check for errors only
     for (span, _) in args.get_all("--errors-only", false) {
         options.errors_only = true;
+        args.drain(span);
+    }
+
+    // packages only
+    for (span, _) in args.get_all("--packages-only", false) {
+        options.packages_only = true;
         args.drain(span);
     }
 
@@ -632,12 +685,12 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
     }
 
     match options.command {
-        Some(Subcommand::Help) => {
+        Some(Command::Help) => {
             print_help();
             Ok(())
         }
-        Some(Subcommand::FeatureMatrix { pretty }) => {
-            print_feature_matrix(packages.as_slice(), pretty)
+        Some(Command::FeatureMatrix { pretty }) => {
+            print_feature_matrix(packages.as_slice(), pretty, options.packages_only)
         }
         None => run_cargo_command(packages.as_slice(), args, &options),
     }
