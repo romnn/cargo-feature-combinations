@@ -3,6 +3,7 @@ current_version = "0.0.20"
 commit = true
 tag = true
 
-[bumpversion:file:Cargo.toml]
+[[tool.bumpversion.files]]
+filename = "Cargo.toml"
 search = "version = \"{current_version}\""
 replace = "version = \"{new_version}\""
