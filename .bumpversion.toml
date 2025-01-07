@@ -2,6 +2,13 @@
 current_version = "0.0.21"
 commit = true
 tag = true
+pre_commit_hooks = [
+  # update lockfile with new version
+  "cargo check"
+]
+additional_files = [
+  "Cargo.lock"
+]
 
 [[tool.bumpversion.files]]
 filename = "Cargo.toml"
