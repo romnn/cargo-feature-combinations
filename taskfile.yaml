@@ -1,0 +1,120 @@
+version: "3"
+includes:
+  dev:tools:install:
+    taskfile: deps.taskfile.yaml
+    dir: ./
+
+tasks:
+  default:
+    cmds:
+      - task: run
+
+  run:
+    desc: "run cargo-feature-combinations"
+    ignore_error: true
+    interactive: true
+    cmds:
+      - cargo run --bin cargo-fc -- {{.CLI_ARGS}}
+
+  build:
+    desc: "build cargo-feature-combinations"
+    cmds:
+      - cargo build --all-targets {{.CLI_ARGS}}
+
+  build:release:
+    desc: "build cargo-feature-combinations in release mode"
+    cmds:
+      - cargo build --all-targets --release {{.CLI_ARGS}}
+
+  typos:
+    desc: "check repository for typos"
+    aliases: [spellcheck]
+    cmds:
+      - typos
+
+  check:
+    desc: "check cargo workspace"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - cargo check --workspace --all-targets {{.CLI_ARGS}}
+
+  check:fc:
+    desc: "check cargo workspace"
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - cargo fc check --workspace --all-targets {{.CLI_ARGS}}
+
+  clean:
+    desc: "clean cargo workspace"
+    cmds:
+      - cargo clean {{.CLI_ARGS}}
+
+  docs:
+    desc: "open documentation preview"
+    env:
+      RUSTDOCFLAGS: "--cfg docsrs"
+    cmds:
+      - cargo +nightly watchdoc --all-features {{.CLI_ARGS}}
+
+  outdated:
+    desc: "check for outdated cargo workspace dependencies"
+    cmds:
+      - cargo outdated --workspace --ignore-external-rel --exit-code 1 -v {{.CLI_ARGS}}
+
+  unused:
+    desc: "check for unused cargo workspace dependencies"
+    aliases: [unused-dependencies]
+    cmds:
+      - cargo +nightly udeps {{.CLI_ARGS}}
+
+  audit:
+    desc: "audit cargo workspace dependencies"
+    cmds:
+      - cargo audit {{.CLI_ARGS}}
+
+  format:
+    desc: "format cargo workspace"
+    cmds:
+      - cargo fmt {{.CLI_ARGS}}
+
+  test:
+    desc: "test cargo workspace"
+    cmds:
+      - cargo test --workspace --all-targets {{.CLI_ARGS}}
+
+  test:fc:
+    desc: "test cargo workspace for all combinations of features"
+    cmds:
+      - cargo fc test --workspace --all-targets {{.CLI_ARGS}}
+
+  lint:
+    desc: "lint cargo workspace"
+    cmds:
+      # prettier-ignore
+      - >-
+        cargo clippy
+        --tests --benches --examples --all-features
+        {{.CLI_ARGS}}
+        -- -Dclippy::all -Dclippy::pedantic
+
+  lint:fc:
+    desc: "lint cargo workspace for feature combinations"
+    cmds:
+      # prettier-ignore
+      - >-
+        cargo fc clippy
+        --tests --benches --examples --all-features
+        {{.CLI_ARGS}}
+        -- -Dclippy::all -Dclippy::pedantic
+
+  lint:fix:
+    desc: "lint and fix cargo workspace"
+    alias: [fix]
+    cmds:
+      # prettier-ignore
+      - >-
+        cargo clippy
+        --fix --allow-dirty --allow-staged
+        --tests --benches --examples --all-features
+        {{.CLI_ARGS}}
+        -- -Dclippy::all -Dclippy::pedantic

@@ -1,0 +1,3 @@
+[files]
+ignore-files = true
+extend-exclude = ["dist/**/*"]

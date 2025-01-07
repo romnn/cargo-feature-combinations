@@ -3,9 +3,15 @@ on:
   push:
     tags-ignore:
       - "**"
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  schedule:
+    # 8AM first day of the month in JAN and JUNE to keep workflow badges up-to-date
+    - cron: "0 8 1 1,6 *"
+
 jobs:
   feature-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.feature-matrix.outputs.matrix }}
     steps:
@@ -19,9 +25,10 @@ jobs:
       - name: Print feature matrix
         run: |
           echo "${{ steps.feature-matrix.outputs.matrix }}"
+
   test-features:
     name: test ${{ matrix.package.name }} (${{ matrix.package.features }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [feature-matrix]
     strategy:
       fail-fast: false
@@ -29,7 +36,14 @@ jobs:
         package: ${{ fromJson(needs.feature-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+      - uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Test
+        # prettier-ignore
         run: >-
-          cargo test --package "${{ matrix.package.name }}" --features "${{ matrix.package.features }}" --all-targets
+          task test --
+          --package "${{ matrix.package.name }}"
+          --features "${{ matrix.package.features }}"
+          --all-targets

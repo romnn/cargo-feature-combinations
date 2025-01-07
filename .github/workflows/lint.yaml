@@ -1,7 +1,6 @@
-name: test
+name: lint
 on:
   push: {}
-  workflow_call: {}
   pull_request:
     types: [opened, synchronize, reopened, edited]
   schedule:
@@ -9,7 +8,7 @@ on:
     - cron: "0 8 1 1,6 *"
 
 jobs:
-  test:
+  lint:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,17 +21,19 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test
-        run: task test --output group --output-group-error-only
+      - run: task dev:tools:install --output group --output-group-error-only
+      - name: Lint
+        run: task lint --output group --output-group-error-only
 
-  publish:
-    name: publish (dry-run)
+  spellcheck:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Publish crates (dry-run)
-        uses: romnn/publish-crates@main
+      - uses: arduino/setup-task@v2
         with:
-          dry-run: true
-          resolve-versions: true
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Homebrew/actions/setup-homebrew@master
+      - uses: dtolnay/rust-toolchain@stable
+      - run: task dev:tools:install --output group --output-group-error-only
+      - name: Lint
+        run: task spellcheck --output group --output-group-error-only

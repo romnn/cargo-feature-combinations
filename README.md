@@ -2,6 +2,7 @@
 
 [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/romnn/cargo-feature-combinations/build.yml?label=build">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/build.yml)
 [<img alt="test status" src="https://img.shields.io/github/actions/workflow/status/romnn/cargo-feature-combinations/test.yml?label=test">](https://github.com/romnn/cargo-feature-combinations/actions/workflows/test.yml)
+[![dependency status](https://deps.rs/repo/github/romnn/cargo-feature-combinations/status.svg)](https://deps.rs/repo/github/romnn/cargo-feature-combinations)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/cargo-feature-combinations">](https://crates.io/crates/cargo-feature-combinations)
 
 Plugin for `cargo` to run commands against selected combinations of features.
@@ -9,6 +10,9 @@ Plugin for `cargo` to run commands against selected combinations of features.
 ### Installation
 
 ```bash
+brew install ...
+
+# or install from source
 cargo install cargo-feature-combinations
 ```
 

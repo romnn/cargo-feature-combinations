@@ -3,9 +3,11 @@ on:
   push:
     tags:
       - "*"
+
 jobs:
   tests:
     uses: ./.github/workflows/test.yml
+
   publish-crate:
     needs: [tests]
     runs-on: ubuntu-latest
@@ -18,6 +20,7 @@ jobs:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           resolve-versions: true
           publish-delay: 30s
+
   release-binaries:
     needs: [tests]
     runs-on: ${{ matrix.target.os }}

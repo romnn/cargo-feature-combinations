@@ -58,4 +58,4 @@ strip-ansi-escapes = "0"
 serde_json_merge = "0"
 
 [dev-dependencies]
-pretty_assertions = "1"
+similar-asserts = "1"

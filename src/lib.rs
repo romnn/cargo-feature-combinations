@@ -646,30 +646,19 @@ pub fn run(bin_name: impl AsRef<str>) -> eyre::Result<()> {
 #[cfg(test)]
 mod test {
     use super::{error_counts, warning_counts};
-    use color_eyre::eyre;
-    use pretty_assertions::assert_eq;
-
-    macro_rules! open {
-        ( $path:expr ) => {{
-            let txt = include_bytes!($path);
-            let txt = std::str::from_utf8(txt)?;
-            Ok::<_, eyre::Report>(txt)
-        }};
-    }
+    use similar_asserts::assert_eq as sim_assert_eq;
 
     #[test]
-    fn error_regex_single_mod_multiple_errors() -> eyre::Result<()> {
-        let stderr = open!("../tests/single_mod_multiple_errors_stderr.txt")?;
+    fn error_regex_single_mod_multiple_errors() {
+        let stderr = include_str!("../tests/single_mod_multiple_errors_stderr.txt");
         let errors: Vec<_> = error_counts(stderr).collect();
-        assert_eq!(&errors, &vec![2]);
-        Ok(())
+        sim_assert_eq!(&errors, &vec![2]);
     }
 
     #[test]
-    fn warning_regex_two_mod_multiple_warnings() -> eyre::Result<()> {
-        let stderr = open!("../tests/two_mods_warnings_stderr.txt")?;
+    fn warning_regex_two_mod_multiple_warnings() {
+        let stderr = include_str!("../tests/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
-        assert_eq!(&warnings, &vec![6, 7]);
-        Ok(())
+        sim_assert_eq!(&warnings, &vec![6, 7]);
     }
 }
