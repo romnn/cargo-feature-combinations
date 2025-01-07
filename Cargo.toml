@@ -1,6 +1,6 @@
 [package]
 name = "cargo-feature-combinations"
-version = "0.0.19"
+version = "0.0.20"
 edition = "2021"
 authors = ["romnn <contact@romnn.com>"]
 description = "run cargo commands for all feature combinations"
@@ -56,6 +56,7 @@ regex = "1"
 lazy_static = "1"
 strip-ansi-escapes = "0"
 serde_json_merge = "0"
+# clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 similar-asserts = "1"

@@ -20,8 +20,12 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
       - run: task dev:tools:install --output group --output-group-error-only
+      - name: Audit
+        run: task audit --output group --output-group-error-only
+      - name: Check for unused dependencies
+        run: task unused-dependencies --output group --output-group-error-only
       - name: Lint
         run: task lint --output group --output-group-error-only
 
@@ -35,5 +39,5 @@ jobs:
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
       - run: task dev:tools:install --output group --output-group-error-only
-      - name: Lint
+      - name: Spellcheck
         run: task spellcheck --output group --output-group-error-only
