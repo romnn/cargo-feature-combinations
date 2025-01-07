@@ -4,7 +4,8 @@ commit = true
 tag = true
 pre_commit_hooks = [
   # update lockfile with new version
-  "cargo check"
+  "cargo check",
+  "cargo update --frozen"
 ]
 additional_files = [
   "Cargo.lock"
