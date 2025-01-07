@@ -26,6 +26,16 @@ tasks:
     cmds:
       - cargo build --all-targets --release {{.CLI_ARGS}}
 
+  build:goreleaser:
+    desc: "build cargo-feature-combinations in release mode using goreleaser"
+    cmds:
+      - goreleaser build --snapshot --clean
+
+  release:
+    desc: "release cargo-feature-combinations using goreleaser"
+    cmds:
+      - goreleaser release --clean
+
   typos:
     desc: "check repository for typos"
     aliases: [spellcheck]

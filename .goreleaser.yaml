@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+dist: goreleaser-dist
+
+before:
+  hooks:
+    - rustup default stable
+    - cargo install --locked cargo-zigbuild
+
+brews:
+  - name: cargo-feature-combinations
+    description: "Plugin for `cargo` to run commands against selected combinations of features."
+    commit_author:
+      name: romnn
+      email: contact@romnn.com
+    repository:
+      owner: romnn
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+      pull_request:
+        enabled: false
+  - name: cargo-fc
+    description: "Plugin for `cargo` to run commands against selected combinations of features."
+    commit_author:
+      name: romnn
+      email: contact@romnn.com
+    repository:
+      owner: romnn
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+      pull_request:
+        enabled: false
+
+builds:
+  # cargo-feature-combinations binary
+  - id: "cargo-feature-combinations"
+    builder: rust
+    binary: cargo-feature-combinations
+    targets:
+      - x86_64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - x86_64-pc-windows-gnu
+      - aarch64-unknown-linux-gnu
+      - aarch64-apple-darwin
+    dir: ./
+    tool: cargo
+    command: zigbuild
+    flags:
+      - "--release"
+      - "--package=cargo-feature-combinations"
+      - "--bin=cargo-feature-combinations"
+      - "--target-dir=./target" # TODO: can we remove this once rust support is better?
+
+  # cargo-fc binary
+  - id: "cargo-fc"
+    builder: rust
+    binary: cargo-fc
+    targets:
+      - x86_64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - x86_64-pc-windows-gnu
+      - aarch64-unknown-linux-gnu
+      - aarch64-apple-darwin
+    dir: ./
+    tool: cargo
+    command: zigbuild
+    flags:
+      - "--release"
+      - "--package=cargo-feature-combinations"
+      - "--bin=cargo-fc"
+      - "--target-dir=./target" # TODO: can we remove this once rust support is better?
+
+archives:
+  - format: tar.gz
+    files:
+      - LICENSE
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^ci:"
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: false

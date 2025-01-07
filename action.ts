@@ -9,7 +9,7 @@ import * as path from "path";
 async function getVersion(): Promise<string> {
   let version = "latest";
   const manifest = await parseCargoPackageManifestAsync(
-    path.join(__dirname, "../Cargo.toml")
+    path.join(__dirname, "../Cargo.toml"),
   );
   const manifestVersion = manifest.package?.version;
   if (manifestVersion && manifestVersion !== "") {
@@ -35,13 +35,13 @@ async function run(): Promise<void> {
         : await repo.getReleaseByTag(version);
   } catch (err: unknown) {
     throw new Error(
-      `failed to fetch ${version} release for ${repo.fullName()}: ${err}`
+      `failed to fetch ${version} release for ${repo.fullName()}: ${err}`,
     );
   }
   core.debug(
     `found ${
       release.assets().length
-    } assets for ${version} release of ${repo.fullName()}`
+    } assets for ${version} release of ${repo.fullName()}`,
   );
 
   const { platform, arch } = new RustTarget();

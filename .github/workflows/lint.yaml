@@ -21,6 +21,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
       - run: task dev:tools:install --output group --output-group-error-only
       - name: Audit
         run: task audit --output group --output-group-error-only
