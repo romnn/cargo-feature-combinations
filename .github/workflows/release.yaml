@@ -12,8 +12,8 @@ jobs:
     uses: ./.github/workflows/test.yaml
 
   publish-crate:
-    needs: [tests]
     runs-on: ubuntu-24.04
+    needs: [tests]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,10 +36,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - run: task dev:tools:install --output group --output-group-error-only
+      - run: brew install zig
       - run: brew install goreleaser
       - name: Release
-        run: task release --output group --output-group-error-only
+        run: task release --output group
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           TAP_GITHUB_TOKEN: "${{ secrets.TAP_GITHUB_TOKEN }}"
