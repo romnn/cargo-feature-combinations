@@ -25,7 +25,7 @@ jobs:
           publish-delay: 30s
 
   release:
-    runs-on: ubuntu-24.04
+    runs-on: macos-latest
     needs: [tests]
     steps:
       - uses: actions/checkout@v4
