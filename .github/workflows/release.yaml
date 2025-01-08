@@ -37,8 +37,7 @@ jobs:
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
       - run: task dev:tools:install --output group --output-group-error-only
-      - name: Build
-        run: task build --output group --output-group-error-only
+      - run: brew install goreleaser
       - name: Release
         run: task release --output group --output-group-error-only
         env:
