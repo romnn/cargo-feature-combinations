@@ -1,6 +1,6 @@
 [package]
 name = "cargo-feature-combinations"
-version = "0.0.34"
+version = "0.0.35"
 edition = "2021"
 authors = ["romnn <contact@romnn.com>"]
 description = "run cargo commands for all feature combinations"
