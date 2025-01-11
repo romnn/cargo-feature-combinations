@@ -74,9 +74,18 @@ builds:
       - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
 archives:
-  - format: tar.gz
+  - id: cargo-feature-combinations
+    format: tar.gz
     builds:
       - cargo-feature-combinations
+    files:
+      - LICENSE
+    format_overrides:
+      - goos: windows
+        format: zip
+  - id: cargo-fc
+    format: tar.gz
+    builds:
       - cargo-fc
     files:
       - LICENSE
