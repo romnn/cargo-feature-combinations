@@ -76,22 +76,24 @@ builds:
 archives:
   - id: cargo-feature-combinations
     format: tar.gz
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     builds:
+      - cargo-fc
       - cargo-feature-combinations
     files:
       - LICENSE
     format_overrides:
       - goos: windows
         format: zip
-  - id: cargo-fc
-    format: tar.gz
-    builds:
-      - cargo-fc
-    files:
-      - LICENSE
-    format_overrides:
-      - goos: windows
-        format: zip
+        # - id: cargo-fc
+        #   format: tar.gz
+        #   builds:
+        #     - cargo-fc
+        #   files:
+        #     - LICENSE
+        #   format_overrides:
+        #     - goos: windows
+        #       format: zip
 
 checksum:
   name_template: "checksums.txt"
