@@ -1,8 +1,8 @@
 import * as core from "@actions/core";
 import {
   parseCargoPackageManifestAsync,
+  Release,
   Repo,
-  RustTarget,
 } from "action-get-release";
 import * as path from "path";
 
@@ -22,12 +22,34 @@ async function getVersion(): Promise<string> {
   return version;
 }
 
+async function download(release: Release, asset: string) {
+  let downloaded: string;
+  try {
+    downloaded = await release.downloadAsset(asset, { cache: false });
+  } catch (err: unknown) {
+    throw new Error(`failed to download asset ${asset}: ${err}`);
+  }
+
+  core.addPath(downloaded);
+}
+
+function trimPrefix(toTrim: string, trim: string): string {
+  if (!toTrim || !trim) {
+    return toTrim;
+  }
+  const index = toTrim.indexOf(trim);
+  if (index !== 0) {
+    return toTrim;
+  }
+  return toTrim.substring(trim.length);
+}
+
 async function run(): Promise<void> {
   const repo = new Repo();
   const version = await getVersion();
   core.debug(`version=${version}`);
 
-  let release;
+  let release: Release;
   try {
     release =
       version === "" || version === "latest"
@@ -39,28 +61,44 @@ async function run(): Promise<void> {
     );
   }
   core.debug(
-    `found ${
-      release.assets().length
+    `found ${release.assets().length
     } assets for ${version} release of ${repo.fullName()}`,
   );
 
-  const { platform, arch } = new RustTarget();
-  core.debug(`host system: platform=${platform} arch=${arch}`);
-
-  // cargo-fc-x86_64-unknown-linux-gnu.tar.gz
-  const bin = "cargo-fc";
-  const asset = `${bin}-${arch}-unknown-${platform}-gnu.tar.gz`;
-
-  let downloaded;
-  try {
-    downloaded = await release.downloadAsset(asset, { cache: false });
-  } catch (err: unknown) {
-    throw new Error(`failed to download asset ${asset}: ${err}`);
+  let platform: "windows" | "darwin" | "linux";
+  if (process.platform === "linux") {
+    platform = "linux";
+  } else if (process.platform === "darwin") {
+    platform = "darwin";
+  } else if (process.platform === "win32") {
+    platform = "windows";
+  } else {
+    throw new Error(`platform ${process.platform} is not supported`);
   }
 
-  core.addPath(downloaded);
-  // const executable = path.join(downloaded, bin);
-  // await exec.exec(executable);
+  let arch: "arm64" | "amd64";
+  if (process.arch === "arm64") {
+    arch = "arm64";
+  } else if (process.arch === "x64") {
+    arch = "amd64";
+  } else {
+    throw new Error(`arch ${process.arch} is not supported`);
+  }
+
+  const extension = platform === "windows" ? "zip" : "tar.gz";
+
+  await Promise.all([
+    // cargo-fc_0.0.30_linux_amd64.tar.gz
+    download(
+      release,
+      `cargo-feature-combinations_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}`,
+    ),
+    // cargo-feature-combinations_0.0.30_linux_amd64.tar.gz
+    download(
+      release,
+      `cargo-feature-combinations_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}`,
+    ),
+  ]);
 }
 
 run().catch((error) => core.setFailed(error.message));
