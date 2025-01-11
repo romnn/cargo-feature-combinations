@@ -10,6 +10,8 @@ before:
 
 brews:
   - name: cargo-feature-combinations
+    ids:
+      - cargo-feature-combinations
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     commit_author:
       name: romnn
@@ -22,6 +24,8 @@ brews:
       pull_request:
         enabled: false
   - name: cargo-fc
+    ids:
+      - cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     commit_author:
       name: romnn
