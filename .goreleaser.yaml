@@ -13,6 +13,7 @@ brews:
     ids:
       - cargo-feature-combinations
     description: "Plugin for `cargo` to run commands against selected combinations of features."
+    directory: Formula
     commit_author:
       name: romnn
       email: contact@romnn.com
@@ -27,6 +28,7 @@ brews:
     ids:
       - cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
+    directory: Formula
     commit_author:
       name: romnn
       email: contact@romnn.com

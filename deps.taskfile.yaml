@@ -28,5 +28,4 @@ tasks:
     cmds:
       - task: cargo:audit:brew
       - task: cargo:udeps:brew
-      - task: cargo:outdated:brew
       - task: typos:brew

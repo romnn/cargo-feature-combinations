@@ -18,21 +18,26 @@ cargo install cargo-feature-combinations
 
 ### Usage
 
-In most cases, just use the command as if it was `cargo`.
-However, there are a few optional flags and the `matrix` subcommand.
+In most cases, just use the command as if it was `cargo`:
 
 ```bash
-cargo feature-combinations check
+cargo fc check
+cargo fc test
+cargo fc build
 ```
 
-To save time, you can also use the shortened name `cargo fc`:
+In addition, there are a few optional flags and the `matrix` subcommand.
+To get an idea, consider these examples:
 
 ```bash
-cargo fc test
+# run tests and fail on the first failing combination of features
 cargo fc --fail-fast test
-cargo fc build
+
+# silence output and only show final summary
 cargo fc --silent build
-cargo fc matrix
+
+# print all combinations of features in JSON (useful for usage in github actions)
+cargo fc matrix --pretty
 ```
 
 For details, please refer to `--help`:
@@ -88,12 +93,6 @@ the `--manifest-path` flag.
 ```bash
 cargo run -- cargo check --manifest-path ../path/to/Cargo.toml
 cargo run -- cargo matrix --manifest-path ../path/to/Cargo.toml --pretty
-```
-
-#### Linting
-
-```bash
-cargo clippy --tests --benches --examples -- -Dclippy::all -Dclippy::pedantic
 ```
 
 #### Acknowledgements
