@@ -81,7 +81,7 @@ builds:
 
 archives:
   - id: cargo-feature-combinations
-    format: tar.gz
+    formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     builds:
       - cargo-feature-combinations
@@ -89,9 +89,9 @@ archives:
       - LICENSE
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
   - id: cargo-fc
-    format: tar.gz
+    formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     builds:
       - cargo-fc
@@ -99,7 +99,7 @@ archives:
       - LICENSE
     format_overrides:
       - goos: windows
-        format: zip
+        formats: ["zip"]
 
 checksum:
   name_template: "checksums.txt"

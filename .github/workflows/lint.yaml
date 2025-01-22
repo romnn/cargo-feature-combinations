@@ -31,6 +31,18 @@ jobs:
       - name: Lint
         run: task lint --output group --output-group-error-only
 
+  goreleaser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Homebrew/actions/setup-homebrew@master
+      - run: brew install goreleaser
+      - name: Check goreleaser config
+        run: goreleaser check
+
   spellcheck:
     runs-on: ubuntu-24.04
     steps:
