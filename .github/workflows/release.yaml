@@ -36,7 +36,11 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - run: brew install zig
+      - run: |
+          # brew install zig
+          URL=https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz
+          curl -L "${URL}" | tar -xJ
+          sudo mv zig-macos-aarch64-0.13.0/zig /usr/local/bin/zig
       - run: brew install goreleaser
       - name: Release
         run: task release --output group

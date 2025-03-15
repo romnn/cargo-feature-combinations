@@ -24,3 +24,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: task build --output group --output-group-error-only
+
+  cross-compile:
+    runs-on: macos-latest
+    needs: [tests]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Homebrew/actions/setup-homebrew@master
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          # brew install zig
+          URL=https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz
+          curl -L "${URL}" | tar -xJ
+          sudo mv zig-macos-aarch64-0.13.0/zig /usr/local/bin/zig
+      - run: brew install goreleaser
+      - name: Release
+        run: task build:goreleaser --output group
