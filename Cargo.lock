@@ -83,7 +83,6 @@ dependencies = [
  "cargo_metadata",
  "color-eyre",
  "itertools",
- "lazy_static",
  "regex",
  "serde",
  "serde_json",

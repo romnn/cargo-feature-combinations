@@ -11,15 +11,14 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
-lazy_static::lazy_static! {
-    static ref CYAN: ColorSpec = color_spec(Color::Cyan, true);
-    static ref RED: ColorSpec = color_spec(Color::Red, true);
-    static ref YELLOW: ColorSpec = color_spec(Color::Yellow, true);
-    static ref GREEN: ColorSpec = color_spec(Color::Green, true);
-}
+static CYAN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Cyan, true));
+static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true));
+static YELLOW: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Yellow, true));
+static GREEN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Green, true));
 
 #[derive(Debug)]
 pub struct Summary {
@@ -58,7 +57,6 @@ pub trait ArgumentParser {
 }
 
 impl ArgumentParser for Vec<String> {
-    #[must_use]
     fn contains(&self, arg: &str) -> bool {
         self.iter()
             .any(|a| a == arg || a.starts_with(&format!("{arg}=")))
@@ -198,10 +196,8 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
 }
 
 pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static::lazy_static! {
-        static ref WARNING_REGEX: Regex =
-            Regex::new(r"warning: .* generated (\d+) warnings?").unwrap();
-    }
+    static WARNING_REGEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"warning: .* generated (\d+) warnings?").unwrap());
     WARNING_REGEX
         .captures_iter(output)
         .filter_map(|cap| cap.get(1))
@@ -209,10 +205,9 @@ pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 }
 
 pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    lazy_static::lazy_static! {
-        static ref ERROR_REGEX: Regex =
-            Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap();
-    }
+    static ERROR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap()
+    });
     ERROR_REGEX
         .captures_iter(output)
         .filter_map(|cap| cap.get(1))
