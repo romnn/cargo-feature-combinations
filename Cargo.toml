@@ -1,7 +1,7 @@
 [package]
 name = "cargo-feature-combinations"
 version = "0.0.36"
-edition = "2021"
+edition = "2024"
 authors = ["romnn <contact@romnn.com>"]
 description = "run cargo commands for all feature combinations"
 license-file = "LICENSE"
@@ -53,14 +53,22 @@ num_key = 2
 [dependencies]
 color-eyre = "0"
 cargo_metadata = "0"
-serde = "1"
-serde_json = "1"
 itertools = "0"
-termcolor = "1"
 regex = "^1.11"
 lazy_static = "1"
-strip-ansi-escapes = "0"
+
+# serde
+serde = "1"
+serde_json = "1"
 serde_json_merge = "0"
+
+# cli and terminal colors
+clap = { version = "4" }
+# shlex = "1"
+lexopt = "0"
+# pico-args = "0"
+termcolor = "1"
+strip-ansi-escapes = "0"
 
 [dev-dependencies]
 similar-asserts = "1"

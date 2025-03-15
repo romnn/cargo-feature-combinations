@@ -61,7 +61,8 @@ async function run(): Promise<void> {
     );
   }
   core.debug(
-    `found ${release.assets().length
+    `found ${
+      release.assets().length
     } assets for ${version} release of ${repo.fullName()}`,
   );
 
@@ -91,7 +92,7 @@ async function run(): Promise<void> {
     // cargo-fc_0.0.30_linux_amd64.tar.gz
     download(
       release,
-      `cargo-feature-combinations_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}`,
+      `cargo-fc_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}`,
     ),
     // cargo-feature-combinations_0.0.30_linux_amd64.tar.gz
     download(

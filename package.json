@@ -7,7 +7,7 @@
     "build": "rimraf ./dist && ncc build action.ts --minify --out ./dist",
     "run": "ts-node action.ts",
     "check": "tsc --noEmit",
-    "format": "prettier *.json *.ts *.cjs --write",
+    "format": "prettier *.json *.ts --write",
     "lint": "eslint"
   },
   "dependencies": {
