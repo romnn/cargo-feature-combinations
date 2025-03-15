@@ -83,7 +83,7 @@ archives:
   - id: cargo-feature-combinations
     formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    builds:
+    ids:
       - cargo-feature-combinations
     files:
       - LICENSE
@@ -93,7 +93,7 @@ archives:
   - id: cargo-fc
     formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    builds:
+    ids:
       - cargo-fc
     files:
       - LICENSE
