@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
 version: "3"
 includes:
   dev:tools:install:
@@ -119,7 +120,7 @@ tasks:
 
   lint:fix:
     desc: "lint and fix cargo workspace"
-    alias: [fix]
+    aliases: [fix]
     cmds:
       # prettier-ignore
       - >-
