@@ -40,10 +40,10 @@ jobs:
           # brew install zig
           URL=https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz
           curl -L "${URL}" | tar -xJ
-          sudo mv zig-macos-aarch64-0.13.0/zig /usr/local/bin/zig
+          sudo mv zig-macos-aarch64-0.13.0/zig /usr/bin/zig
       - run: brew install goreleaser
       - name: Release
-        run: task release --output group
+        run: task release
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           TAP_GITHUB_TOKEN: "${{ secrets.TAP_GITHUB_TOKEN }}"
