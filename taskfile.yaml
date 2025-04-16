@@ -129,3 +129,8 @@ tasks:
         --tests --benches --examples --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
+
+  lint:actions:
+    desc: "lint github actions"
+    cmds:
+      - actionlint
