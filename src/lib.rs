@@ -291,14 +291,25 @@ fn print_package_cmd(
         println!();
     }
     stdout.set_color(&CYAN).ok();
-    if cargo_args.contains(&"build") {
-        print!("    Building ");
-    } else if cargo_args.contains(&"check") || cargo_args.contains(&"clippy") {
-        print!("    Checking ");
-    } else if cargo_args.contains(&"test") {
-        print!("     Testing ");
-    } else {
-        print!("     Running ");
+    match cargo_subcommand(cargo_args) {
+        CargoSubcommand::Test => {
+            print!("     Testing ");
+        }
+        CargoSubcommand::Doc => {
+            print!("     Documenting ");
+        }
+        CargoSubcommand::Check => {
+            print!("     Checking ");
+        }
+        CargoSubcommand::Run => {
+            print!("     Running ");
+        }
+        CargoSubcommand::Build => {
+            print!("     Building ");
+        }
+        CargoSubcommand::Other => {
+            print!("     ");
+        }
     }
     stdout.reset().ok();
     print!(
@@ -480,6 +491,33 @@ See 'cargo help <command>' for more information on a specific command.
 
 static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum CargoSubcommand {
+    Build,
+    Check,
+    Test,
+    Doc,
+    Run,
+    Other,
+}
+
+fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
+    let args: HashSet<&str> = args.iter().map(AsRef::as_ref).collect();
+    if args.contains("build") || args.contains("b") {
+        CargoSubcommand::Build
+    } else if args.contains("check") || args.contains("c") || args.contains("clippy") {
+        CargoSubcommand::Check
+    } else if args.contains("test") || args.contains("t") {
+        CargoSubcommand::Test
+    } else if args.contains("doc") || args.contains("d") {
+        CargoSubcommand::Doc
+    } else if args.contains("run") || args.contains("r") {
+        CargoSubcommand::Run
+    } else {
+        CargoSubcommand::Other
+    }
+}
+
 pub fn run(bin_name: &str) -> eyre::Result<()> {
     color_eyre::install()?;
 
@@ -526,7 +564,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     }
 
     // check for help command
-    for (span, _) in args.get_all("--pretty", false) {
+    for (span, _) in args.get_all("--help", false) {
         options.command = Some(Command::Help);
         args.drain(span);
     }
@@ -589,7 +627,14 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         Some(Command::FeatureMatrix { pretty }) => {
             print_feature_matrix(&packages, pretty, options.packages_only)
         }
-        None => run_cargo_command(&packages, cargo_args, &options),
+        None => {
+            if cargo_subcommand(args.as_slice()) == CargoSubcommand::Other {
+                eyre::bail!(
+                    "`cargo {bin_name}` only works for cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
+                )
+            }
+            run_cargo_command(&packages, cargo_args, &options)
+        }
     }
 }
 

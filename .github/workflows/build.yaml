@@ -25,8 +25,8 @@ jobs:
       - name: Build
         run: task build --output group --output-group-error-only
 
-  cross-compile:
-    runs-on: macos-latest
+  goreleaser:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,12 +36,9 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - run: |
-          # brew install zig
-          URL=https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz
-          curl -L "${URL}" | tar -xJ
-          sudo mv zig-macos-aarch64-0.13.0/zig /usr/local/bin/zig
-          zig version
+      - name: Install zig
+        run: |
+          brew install zig
       - run: brew install goreleaser
       - name: Release
         run: task build:goreleaser
