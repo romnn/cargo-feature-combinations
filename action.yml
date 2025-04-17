@@ -16,11 +16,32 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Install cargo-hack from crates.io
-      uses: baptiste0928/cargo-install@v3
+    - name: Install cargo-feature-combinations
+      uses: romnn/action-release-download@main
       with:
-        crate: cargo-hack
         version: "latest"
+        # prettier-ignore
+        assets: |
+          - >-
+            cargo-*
+            {{~#switch platform ~}}
+              {{~#case "win32"~}}windows{{~/case~}}
+              {{~#default~}}{{~platform~}}{{~/default~}}
+            {{~/switch~}}
+            _
+            {{~#switch arch ~}}
+            {{~#case "x64"~}}amd64{{~/case~}}
+            {{~#default~}}{{~arch~}}{{~/default~}}
+            {{~/switch~}}
+
+      # repo: romnn/cargo-feature-combinations
+      # cargo-fc_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}
+    # uses: baptiste0928/cargo-install@v3
+    # - name: Install cargo-hack from crates.io
+    #   uses: baptiste0928/cargo-install@v3
+    #   with:
+    #     crate: cargo-hack
+    #     version: "latest"
     # - name: Set Greeting
     #   run: echo "Hello $INPUT_WHO_TO_GREET."
     #   shell: bash

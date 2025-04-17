@@ -47,3 +47,10 @@ jobs:
           --package "${{ matrix.package.name }}"
           --features "${{ matrix.package.features }}"
           --all-targets
+
+  test-action:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Donwnload and install cargo-feature-combinations via local action
+        uses: ./

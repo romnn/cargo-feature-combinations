@@ -23,7 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: clippy
-      - run: task dev:tools:install --output group --output-group-error-only
+      - run: |
+          brew install cargo-audit
+          brew install cargo-udeps
       - name: Audit
         run: task audit --output group --output-group-error-only
       - name: Check for unused dependencies
@@ -52,6 +54,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - run: task dev:tools:install --output group --output-group-error-only
+      - run: |
+          brew install typos-cli
       - name: Spellcheck
         run: task spellcheck --output group --output-group-error-only
