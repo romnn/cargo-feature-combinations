@@ -17,6 +17,7 @@ runs:
       uses: romnn/action-release-download@main
       with:
         version: "latest"
+        repo: romnn/cargo-feature-combinations
         # prettier-ignore
         assets: |
           - >-
