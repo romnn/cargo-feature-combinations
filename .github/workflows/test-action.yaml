@@ -16,7 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # - uses: romnn/cargo-feature-combinations@main
       - run: cargo install --locked cargo-feature-combinations
       - name: Compute feature matrix
         id: feature-matrix
@@ -43,7 +42,7 @@ jobs:
       - name: Test
         # prettier-ignore
         run: >-
-          cargo test --
+          cargo test
           --package "${{ matrix.package.name }}"
           --features "${{ matrix.package.features }}"
           --all-targets

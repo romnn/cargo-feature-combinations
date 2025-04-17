@@ -1,5 +1,4 @@
 .DS_Store
-/node_modules
 /target
 /goreleaser-dist
 
@@ -8,12 +7,6 @@
 .env.*.local
 
 .intentionally-empty-file.o
-
-# Log files
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
 # Editor directories and files
 .idea
