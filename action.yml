@@ -23,7 +23,7 @@ runs:
         # prettier-ignore
         assets: |
           - >-
-            cargo-*
+            *cargo-*
             {{~#switch platform ~}}
               {{~#case "win32"~}}windows{{~/case~}}
               {{~#default~}}{{~platform~}}{{~/default~}}
@@ -33,6 +33,7 @@ runs:
             {{~#case "x64"~}}amd64{{~/case~}}
             {{~#default~}}{{~arch~}}{{~/default~}}
             {{~/switch~}}
+            *
 
       # repo: romnn/cargo-feature-combinations
       # cargo-fc_${trimPrefix(version, "v")}_${platform}_${arch}.${extension}
