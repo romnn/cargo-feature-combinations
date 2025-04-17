@@ -1,8 +1,7 @@
 name: test-action
 on:
-  push:
-    tags-ignore:
-      - "**"
+  push: {}
+  workflow_call: {}
   pull_request:
     types: [opened, synchronize, reopened, edited]
   schedule:
