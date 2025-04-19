@@ -480,6 +480,28 @@ skip_feature_sets = [ ["foo", "bar"], ]
 
 # Exclude features from the feature combination matrix
 denylist = ["default", "full"]
+
+# Instead of treating all project features as a unified set, split all features
+# into these isolated sets. Build a sub-matrix for each isolated set, then merge
+# sub-matrices into the overall feature matrix. If any two isolated sets produce
+# an identical feature combination, such combination will be included in the
+# overall matrix only once.
+#
+# This is intended for projects with large number of features, sub-sets of which
+# are completely independent, and thus don’t need cross-combination.
+#
+# The other configuration options are still honored.
+isolated_feature_sets = [
+    ["foo-a", "foo-b", "foo-c"],
+    ["bar-a", "bar-b"],
+    ["other-a", "other-b", "other-c"],
+]
+
+# Always add these exact combinations to the overall feature matrix, unless one
+# is already present there.
+exact_combinations = [
+    ["foo-a", "bar-a", "other-a"],
+]
 ```
 
 For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
