@@ -132,7 +132,7 @@ impl Package for cargo_metadata::Package {
         let mut filtered_powerset = base_powerset
             .into_iter()
             .filter(|feature_set| {
-                config.skip_feature_sets.iter().any(|skip_set| { // remove feature sets containing any of the skip sets
+                !config.skip_feature_sets.iter().any(|skip_set| { // remove feature sets containing any of the skip sets
                     skip_set
                         .iter()
                         .all(|skip_feature| feature_set.contains(skip_feature)) // skip set is contained when all its features are contained
