@@ -7,7 +7,7 @@ use crate::config::Config;
 use color_eyre::eyre;
 use itertools::Itertools;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
@@ -117,23 +117,49 @@ impl Package for cargo_metadata::Package {
     }
 
     fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
-        self.features
-            .keys()
-            .collect::<HashSet<_>>()
+        // Generate the base powerset (either from all features or from isolated sets, minus denylist)
+        let base_powerset = if config.isolated_feature_sets.is_empty() {
+            generate_global_base_powerset(&self.features, &config.denylist)
+        } else {
+            generate_isolated_base_powerset(
+                &self.features,
+                &config.isolated_feature_sets,
+                &config.denylist,
+            )
+        };
+
+        // Filter out feature sets that contain skip sets
+        let mut filtered_powerset = base_powerset
             .into_iter()
-            .filter(|ft| !config.denylist.contains(*ft))
-            .powerset()
-            .filter_map(|mut set: Vec<&String>| {
-                set.sort();
-                let hset: HashSet<_> = set.iter().copied().cloned().collect();
-                let skip = config
-                    .skip_feature_sets
-                    .iter()
-                    .any(|skip_set| skip_set.is_subset(&hset));
-                if skip { None } else { Some(set) }
+            .filter(|feature_set| {
+                !config.skip_feature_sets.iter().any(|skip_set| {
+                    // remove feature sets containing any of the skip sets
+                    skip_set
+                        .iter()
+                        .all(|skip_feature| feature_set.contains(skip_feature)) // skip set is contained when all its features are contained
+                })
             })
-            .sorted_by(Ord::cmp)
-            .collect()
+            .collect::<BTreeSet<_>>();
+
+        // Add back exact combinations
+        for proposed_exact_combination in config.exact_combinations.iter() {
+            // Remove non-existent features and switch reference to that pointing to `self`
+            let exact_combination = proposed_exact_combination
+                .iter()
+                .filter_map(|maybe_feature| {
+                    self.features.get_key_value(maybe_feature).map(|(k, _v)| k)
+                })
+                .collect::<BTreeSet<_>>();
+
+            // This exact combination may now be empty, but empty combination is always added anyway
+            filtered_powerset.insert(exact_combination);
+        }
+
+        // Re-collect everything into a vector of vectors
+        filtered_powerset
+            .into_iter()
+            .map(|set| set.into_iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>()
     }
 
     fn feature_matrix(&self, config: &Config) -> Vec<String> {
@@ -142,6 +168,63 @@ impl Package for cargo_metadata::Package {
             .map(|features| features.iter().join(","))
             .collect()
     }
+}
+
+/// Generates the **global** base [powerset](Itertools::powerset) of features.
+/// Global features are all features that are defined in the package, except the
+/// features from the provided denylist.
+///
+/// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
+/// pack to the `package_features`.
+fn generate_global_base_powerset<'a>(
+    package_features: &'a BTreeMap<String, Vec<String>>,
+    denylist: &HashSet<String>,
+) -> BTreeSet<BTreeSet<&'a String>> {
+    package_features
+        .keys()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|ft| !denylist.contains(*ft))
+        .powerset()
+        .map(|combination| combination.into_iter().collect::<BTreeSet<_>>())
+        .collect()
+}
+
+/// Generates the **isolated** base [powerset](Itertools::powerset) of features.
+/// Isolated features are features from the provided isolated feature sets,
+/// except non-existent features and except the features from the provided
+/// denylist.
+///
+/// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
+/// pack to the `package_features`.
+fn generate_isolated_base_powerset<'a>(
+    package_features: &'a BTreeMap<String, Vec<String>>,
+    isolated_feature_sets: &Vec<HashSet<String>>,
+    denylist: &HashSet<String>,
+) -> BTreeSet<BTreeSet<&'a String>> {
+    // Collect known package features for easy querying
+    let known_features = package_features.keys().collect::<HashSet<_>>();
+
+    let isolated_base_powerset = isolated_feature_sets
+        .iter()
+        .map(
+            |isolated_feature_set|  // work on each isolated feature set individually
+            isolated_feature_set
+                .iter()
+                .filter(|ft| known_features.contains(*ft)) // remove non-existent features
+                .filter(|ft| !denylist.contains(*ft)) // remove features from denylist
+                .powerset()
+                .map(|combination| {
+                    combination
+                        .into_iter()
+                        .filter_map(|feature| known_features.get(feature).map(|s| *s)) // switch references (for lifetime correctness)
+                        .collect::<BTreeSet<_>>()
+                }),
+        )
+        .flatten()
+        .collect::<BTreeSet<_>>();
+
+    isolated_base_powerset
 }
 
 pub fn print_feature_matrix(
@@ -467,7 +550,7 @@ OPTIONS:
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
-    --pedantic              Treat warnings like errors in summary and 
+    --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 
 Feature sets can be configured in your Cargo.toml configuration.
@@ -475,11 +558,34 @@ For example:
 
 ```toml
 [package.metadata.cargo-feature-combinations]
+# When at least one isolated feature set is configured, stop taking all project
+# features as a whole, and instead take them in these isolated sets. Build a
+# sub-matrix for each isolated set, then merge sub-matrices into the overall
+# feature matrix. If any two isolated sets produce an identical feature
+# combination, such combination will be included in the overall matrix only once.
+#
+# This feature is intended for projects with large number of features, sub-sets
+# of which are completely independent, and thus don’t need cross-play.
+#
+# Other configuration options are still respected.
+isolated_feature_sets = [
+    ["foo-a", "foo-b", "foo-c"],
+    ["bar-a", "bar-b"],
+    ["other-a", "other-b", "other-c"],
+]
+
 # Exclude groupings of features that are incompatible or do not make sense
 skip_feature_sets = [ ["foo", "bar"], ]
 
 # Exclude features from the feature combination matrix
 denylist = ["default", "full"]
+
+# In the end, always add these exact combinations to the overall feature matrix,
+# unless one is already present there. These exact combinations are added without
+# respecting any other configuration options.
+exact_combinations = [
+    ["foo-a", "bar-a", "other-a"],
+]
 ```
 
 For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
@@ -640,8 +746,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{error_counts, warning_counts};
+    use super::{error_counts, warning_counts, Package};
+    use serde_json::json;
     use similar_asserts::assert_eq as sim_assert_eq;
+    use std::collections::{BTreeMap, HashSet};
+    use crate::config::Config;
 
     #[test]
     fn error_regex_single_mod_multiple_errors() {
@@ -655,5 +764,183 @@ mod test {
         let stderr = include_str!("../tests/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
+    }
+
+    #[test]
+    fn combinations() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "foo-c"]);
+        let config = Config::default();
+        let expected_combinations = vec![
+            vec![],
+            vec!["foo-a"],
+            vec!["foo-a", "foo-b"],
+            vec!["foo-a", "foo-b", "foo-c"],
+            vec!["foo-a", "foo-c"],
+            vec!["foo-b"],
+            vec!["foo-b", "foo-c"],
+            vec!["foo-c"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    #[test]
+    fn combinations_isolated() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+        let config = Config {
+            isolated_feature_sets: vec![
+                HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
+                HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
+            ],
+            ..Default::default()
+        };
+        let expected_combinations = vec![
+            vec![],
+            vec!["bar-a"],
+            vec!["bar-a", "bar-b"],
+            vec!["bar-b"],
+            vec!["foo-a"],
+            vec!["foo-a", "foo-b"],
+            vec!["foo-b"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    #[test]
+    fn combinations_isolated_non_existent() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+        let config = Config {
+            isolated_feature_sets: vec![
+                HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
+                HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
+            ],
+            ..Default::default()
+        };
+        let expected_combinations = vec![
+            vec![],
+            vec!["bar-a"],
+            vec!["bar-a", "bar-b"],
+            vec!["bar-b"],
+            vec!["foo-a"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    #[test]
+    fn combinations_isolated_denylist() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+        let config = Config {
+            isolated_feature_sets: vec![
+                HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
+                HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
+            ],
+            denylist: HashSet::from(["bar-a".to_string()]),
+            ..Default::default()
+        };
+        let expected_combinations = vec![
+            vec![],
+            vec!["bar-b"],
+            vec!["foo-a"],
+            vec!["foo-a", "foo-b"],
+            vec!["foo-b"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    #[test]
+    fn combinations_isolated_non_existent_denylist() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+        let config = Config {
+            isolated_feature_sets: vec![
+                HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
+                HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
+            ],
+            denylist: HashSet::from(["bar-a".to_string()]),
+            ..Default::default()
+        };
+        let expected_combinations = vec![
+            vec![],
+            vec!["bar-b"],
+            vec!["foo-a"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    #[test]
+    fn combinations_isolated_non_existent_denylist_exact() {
+        // Given
+        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+        let config = Config {
+            isolated_feature_sets: vec![
+                HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
+                HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
+            ],
+            denylist: HashSet::from(["bar-a".to_string()]),
+            exact_combinations: vec![
+                HashSet::from(["car-a".to_string(), "bar-a".to_string(), "non-existent".to_string() ])
+            ],
+            ..Default::default()
+        };
+        let expected_combinations = vec![
+            vec![],
+            vec!["bar-a", "car-a"],
+            vec!["bar-b"],
+            vec!["foo-a"],
+        ];
+
+        // When
+        let actual_combinations = package.feature_combinations(&config);
+
+        // Then
+        sim_assert_eq!(expected_combinations, actual_combinations);
+    }
+
+    fn make_package(given_features: Vec<&str>) -> cargo_metadata::Package {
+        let base_json = json!({
+            "name": "test",
+            "version": "0.1.0",
+            "id": "test",
+            "dependencies": [],
+            "targets": [],
+            "features": {},
+            "manifest_path": "",
+        });
+        let mut package = serde_json::from_value::<cargo_metadata::Package>(base_json).unwrap();
+        let mut features = BTreeMap::new();
+        for feature in given_features {
+            features.insert(feature.to_string(), vec![]);
+        }
+        package.features = features;
+
+        package
     }
 }

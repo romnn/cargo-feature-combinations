@@ -68,11 +68,36 @@ In your `Cargo.toml`, you can configure the feature combination matrix:
 
 ```toml
 [package.metadata.cargo-feature-combinations]
+# When at least one isolated feature set is configured, stop taking all project 
+# features as a whole, and instead take them in these isolated sets. Build a 
+# sub-matrix for each isolated set, then merge sub-matrices into the overall 
+# feature matrix. If any two isolated sets produce an identical feature 
+# combination, such combination will be included in the overall matrix only once.
+#
+# This feature is intended for projects with large number of features, sub-sets 
+# of which are completely independent, and thus don’t need cross-play.
+#
+# Non-existent features are ignored. Other configuration options are still 
+# respected.
+isolated_feature_sets = [
+    ["foo-a", "foo-b", "foo-c"],
+    ["bar-a", "bar-b"],
+    ["other-a", "other-b", "other-c"],
+]
+
 # Exclude groupings of features that are incompatible or do not make sense
 skip_feature_sets = [ ["foo", "bar"], ]
 
 # Exclude features from the feature combination matrix
 denylist = ["default", "full"]
+
+# In the end, always add these exact combinations to the overall feature matrix, 
+# unless one is already present there.
+#
+# Non-existent features are ignored. Other configuration options are ignored.
+exact_combinations = [
+    ["foo-a", "bar-a", "other-a"],
+]
 ```
 
 ### Usage with github-actions
