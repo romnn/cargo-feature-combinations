@@ -68,30 +68,31 @@ In your `Cargo.toml`, you can configure the feature combination matrix:
 
 ```toml
 [package.metadata.cargo-feature-combinations]
-# Exclude groupings of features that are incompatible or do not make sense
-skip_feature_sets = [ ["foo", "bar"], ]
-
-# Exclude features from the feature combination matrix
-denylist = ["default", "full"]
-
-# Instead of treating all project features as a unified set, split all features 
-# into these isolated sets. Build a sub-matrix for each isolated set, then merge 
-# sub-matrices into the overall feature matrix. If any two isolated sets produce 
-# an identical feature combination, such combination will be included in the 
-# overall matrix only once.
+# When at least one isolated feature set is configured, stop taking all project 
+# features as a whole, and instead take them in these isolated sets. Build a 
+# sub-matrix for each isolated set, then merge sub-matrices into the overall 
+# feature matrix. If any two isolated sets produce an identical feature 
+# combination, such combination will be included in the overall matrix only once.
 #
-# This is intended for projects with large number of features, sub-sets of which 
-# are completely independent, and thus don’t need cross-combination.
+# This feature is intended for projects with large number of features, sub-sets 
+# of which are completely independent, and thus don’t need cross-play.
 #
-# The other configuration options are still honored.
+# Other configuration options are still respected.
 isolated_feature_sets = [
     ["foo-a", "foo-b", "foo-c"],
     ["bar-a", "bar-b"],
     ["other-a", "other-b", "other-c"],
 ]
 
-# Always add these exact combinations to the overall feature matrix, unless one 
-# is already present there.
+# Exclude groupings of features that are incompatible or do not make sense
+skip_feature_sets = [ ["foo", "bar"], ]
+
+# Exclude features from the feature combination matrix
+denylist = ["default", "full"]
+
+# In the end, always add these exact combinations to the overall feature matrix, 
+# unless one is already present there. These exact combinations are added without 
+# respecting any other configuration options.
 exact_combinations = [
     ["foo-a", "bar-a", "other-a"],
 ]
