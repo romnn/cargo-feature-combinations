@@ -6,29 +6,29 @@ tasks:
       - task: run
 
   run:
-    desc: "run cargo-feature-combinations"
+    desc: "run"
     ignore_error: true
     interactive: true
     cmds:
       - cargo run --bin cargo-fc -- {{.CLI_ARGS}}
 
   build:
-    desc: "build cargo-feature-combinations"
+    desc: "build in debug mode"
     cmds:
       - cargo build --all-targets {{.CLI_ARGS}}
 
   build:release:
-    desc: "build cargo-feature-combinations in release mode"
+    desc: "build in release mode"
     cmds:
       - cargo build --all-targets --release {{.CLI_ARGS}}
 
   build:goreleaser:
-    desc: "build cargo-feature-combinations in release mode using goreleaser"
+    desc: "build in release mode using goreleaser"
     cmds:
       - goreleaser build --snapshot --clean
 
   release:
-    desc: "release cargo-feature-combinations using goreleaser"
+    desc: "release using goreleaser"
     cmds:
       - goreleaser release --clean
 
@@ -104,7 +104,7 @@ tasks:
         -- -Dclippy::all -Dclippy::pedantic
 
   lint:fc:
-    desc: "lint cargo workspace for feature combinations"
+    desc: "lint cargo workspace for all combinations of features"
     cmds:
       # prettier-ignore
       - >-

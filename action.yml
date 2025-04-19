@@ -18,6 +18,7 @@ runs:
       with:
         version: "latest"
         repo: romnn/cargo-feature-combinations
+        expected-matching-asset-count: 2
         # prettier-ignore
         assets: |
           - >-

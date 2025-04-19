@@ -36,10 +36,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install zig
+      - name: Setup goreleaser
         run: |
           brew install zig
-      - run: brew install goreleaser
+          brew install goreleaser
       - name: Release
         run: task release
         env:
