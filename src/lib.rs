@@ -7,7 +7,7 @@ use crate::config::Config;
 use color_eyre::eyre;
 use itertools::Itertools;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
@@ -117,23 +117,45 @@ impl Package for cargo_metadata::Package {
     }
 
     fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
-        self.features
-            .keys()
-            .collect::<HashSet<_>>()
+        // Generate the base powerset (either from all features or from isolated sets, minus denylist)
+        let base_powerset = if config.isolated_feature_sets.is_empty() {
+            generate_global_base_powerset(&self.features, &config.denylist)
+        } else {
+            generate_isolated_base_powerset(
+                &self.features,
+                &config.isolated_feature_sets,
+                &config.denylist,
+            )
+        };
+
+        // Filter out feature sets that contain skip sets
+        let mut filtered_powerset = base_powerset
             .into_iter()
-            .filter(|ft| !config.denylist.contains(*ft))
-            .powerset()
-            .filter_map(|mut set: Vec<&String>| {
-                set.sort();
-                let hset: HashSet<_> = set.iter().copied().cloned().collect();
-                let skip = config
-                    .skip_feature_sets
-                    .iter()
-                    .any(|skip_set| skip_set.is_subset(&hset));
-                if skip { None } else { Some(set) }
+            .filter(|feature_set| {
+                config.skip_feature_sets.iter().any(|skip_set| { // remove feature sets containing any of the skip sets
+                    skip_set
+                        .iter()
+                        .all(|skip_feature| feature_set.contains(skip_feature)) // skip set is contained when all its features are contained
+                })
             })
-            .sorted_by(Ord::cmp)
-            .collect()
+            .collect::<BTreeSet<_>>();
+
+        // Add back exact combinations
+        for proposed_exact_combination in config.exact_combinations.iter() {
+            // Remove non-existent features and switch reference to that pointing to `self`
+            let exact_combination = proposed_exact_combination.iter()
+                .filter_map(|maybe_feature| self.features.get_key_value(maybe_feature).map(|(k, _v)| k))
+                .collect::<BTreeSet<_>>();
+
+            // This exact combination may now be empty, but empty combination is always added anyway
+            filtered_powerset.insert(exact_combination);
+        }
+
+        // Re-collect everything into a vector of vectors
+        filtered_powerset
+            .into_iter()
+            .map(|set| set.into_iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>()
     }
 
     fn feature_matrix(&self, config: &Config) -> Vec<String> {
@@ -142,6 +164,62 @@ impl Package for cargo_metadata::Package {
             .map(|features| features.iter().join(","))
             .collect()
     }
+}
+
+/// Generates the **global** base [powerset](Itertools::powerset) of features.
+/// Global features are all features that are defined in the package, except the
+/// features from the provided denylist.
+///
+/// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
+/// pack to the `package_features`.
+fn generate_global_base_powerset<'a>(
+    package_features: &'a BTreeMap<String, Vec<String>>,
+    denylist: &HashSet<String>,
+) -> BTreeSet<BTreeSet<&'a String>> {
+    package_features
+        .keys()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|ft| !denylist.contains(*ft))
+        .powerset()
+        .map(|combination| combination.into_iter().collect::<BTreeSet<_>>())
+        .collect()
+}
+
+/// Generates the **isolated** base [powerset](Itertools::powerset) of features.
+/// Isolated features are features from the provided isolated feature sets,
+/// except non-existent features and except the features from the provided
+/// denylist.
+///
+/// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
+/// pack to the `package_features`.
+fn generate_isolated_base_powerset<'a>(
+    package_features: &'a BTreeMap<String, Vec<String>>,
+    isolated_feature_sets: &Vec<HashSet<String>>,
+    denylist: &HashSet<String>,
+) -> BTreeSet<BTreeSet<&'a String>> {
+    // Collect known package features for easy querying
+    let known_features = package_features.keys().collect::<HashSet<_>>();
+
+    let isolated_base_powerset = isolated_feature_sets
+        .iter()
+        .map(|isolated_feature_set|  // work on each isolated feature set individually
+            isolated_feature_set
+                .iter()
+                .filter(|ft| known_features.contains(*ft)) // remove non-existent features
+                .filter(|ft| !denylist.contains(*ft)) // remove features from denylist
+                .powerset()
+                .map(|combination| {
+                    combination
+                        .into_iter()
+                        .filter_map(|feature| known_features.get(feature).map(|s| *s)) // switch references (for lifetime correctness)
+                        .collect::<BTreeSet<_>>()
+                })
+        )
+        .flatten()
+        .collect::<BTreeSet<_>>();
+
+    isolated_base_powerset
 }
 
 pub fn print_feature_matrix(
@@ -467,7 +545,7 @@ OPTIONS:
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
-    --pedantic              Treat warnings like errors in summary and 
+    --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 
 Feature sets can be configured in your Cargo.toml configuration.

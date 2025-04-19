@@ -77,7 +77,8 @@ In your `Cargo.toml`, you can configure the feature combination matrix:
 # This feature is intended for projects with large number of features, sub-sets 
 # of which are completely independent, and thus don’t need cross-play.
 #
-# Other configuration options are still respected.
+# Non-existent features are ignored. Other configuration options are still 
+# respected.
 isolated_feature_sets = [
     ["foo-a", "foo-b", "foo-c"],
     ["bar-a", "bar-b"],
@@ -91,8 +92,9 @@ skip_feature_sets = [ ["foo", "bar"], ]
 denylist = ["default", "full"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
-# unless one is already present there. These exact combinations are added without 
-# respecting any other configuration options.
+# unless one is already present there.
+#
+# Non-existent features are ignored. Other configuration options are ignored.
 exact_combinations = [
     ["foo-a", "bar-a", "other-a"],
 ]
