@@ -22,7 +22,15 @@ keywords = [
   "subcommand"
 ]
 exclude = [
-  "tests/"
+  "test-data/",
+  "taskfile.yaml",
+  "action.yml",
+  "TODO.md",
+  ".github",
+  ".bumpversion.toml",
+  ".goreleaser.yaml",
+  ".typos.toml",
+  ".ignore",
 ]
 default-run = "cargo-fc"
 
@@ -38,6 +46,7 @@ path = "src/feature-combinations.rs"
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = "symbols"
 
 [features]
 default = []
@@ -67,3 +76,5 @@ strip-ansi-escapes = "0"
 
 [dev-dependencies]
 similar-asserts = "1"
+semver = "1"
+cargo_metadata = { version = "0", features = ["builder"] }

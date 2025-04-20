@@ -57,6 +57,7 @@ OPTIONS:
     --help                  Print help information
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
+    --exclude-package       Exclude a package from feature combinations 
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
@@ -86,18 +87,21 @@ isolated_feature_sets = [
 ]
 
 # Exclude groupings of features that are incompatible or do not make sense
-skip_feature_sets = [ ["foo", "bar"], ]
+exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # Exclude features from the feature combination matrix
-denylist = ["default", "full"]
+exlude_features = ["default", "full"] # formerly "denylist"
+
+# When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
+exlude_packages = ["package-a", "package-b"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.
 #
 # Non-existent features are ignored. Other configuration options are ignored.
-exact_combinations = [
+include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
-]
+] # formerly "exact_combinations"
 ```
 
 ### Usage with github-actions

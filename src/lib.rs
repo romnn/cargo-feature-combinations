@@ -4,7 +4,7 @@ mod config;
 mod tee;
 
 use crate::config::Config;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -41,6 +41,7 @@ pub enum Command {
 pub struct Options {
     pub manifest_path: Option<PathBuf>,
     pub packages: HashSet<String>,
+    pub exclude_packages: HashSet<String>,
     pub command: Option<Command>,
     pub silent: bool,
     pub verbose: bool,
@@ -107,24 +108,39 @@ pub trait Package {
 
 impl Package for cargo_metadata::Package {
     fn config(&self) -> eyre::Result<Config> {
-        match self.metadata.get("cargo-feature-combinations") {
+        let mut config = match self.metadata.get("cargo-feature-combinations") {
             Some(config) => {
                 let config: Config = serde_json::from_value(config.clone())?;
-                Ok(config)
+                config
             }
-            None => Ok(Config::default()),
-        }
+            None => Config::default(),
+        };
+
+        // handle deprecated config values
+        config
+            .exclude_feature_sets
+            .append(&mut config.deprecated.skip_feature_sets);
+        config
+            .exclude_features
+            .extend(config.deprecated.denylist.drain());
+        config
+            .include_feature_sets
+            .append(&mut config.deprecated.exact_combinations);
+
+        Ok(config)
     }
 
     fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
-        // Generate the base powerset (either from all features or from isolated sets, minus denylist)
+        // Generate the base powerset from
+        // - all features
+        // - or from isolated sets, minus excluded features
         let base_powerset = if config.isolated_feature_sets.is_empty() {
-            generate_global_base_powerset(&self.features, &config.denylist)
+            generate_global_base_powerset(&self.features, &config.exclude_features)
         } else {
             generate_isolated_base_powerset(
                 &self.features,
                 &config.isolated_feature_sets,
-                &config.denylist,
+                &config.exclude_features,
             )
         };
 
@@ -132,17 +148,18 @@ impl Package for cargo_metadata::Package {
         let mut filtered_powerset = base_powerset
             .into_iter()
             .filter(|feature_set| {
-                !config.skip_feature_sets.iter().any(|skip_set| {
+                !config.exclude_feature_sets.iter().any(|skip_set| {
                     // remove feature sets containing any of the skip sets
                     skip_set
                         .iter()
-                        .all(|skip_feature| feature_set.contains(skip_feature)) // skip set is contained when all its features are contained
+                        // skip set is contained when all its features are contained
+                        .all(|skip_feature| feature_set.contains(skip_feature))
                 })
             })
             .collect::<BTreeSet<_>>();
 
         // Add back exact combinations
-        for proposed_exact_combination in config.exact_combinations.iter() {
+        for proposed_exact_combination in &config.include_feature_sets {
             // Remove non-existent features and switch reference to that pointing to `self`
             let exact_combination = proposed_exact_combination
                 .iter()
@@ -158,7 +175,8 @@ impl Package for cargo_metadata::Package {
         // Re-collect everything into a vector of vectors
         filtered_powerset
             .into_iter()
-            .map(|set| set.into_iter().collect::<Vec<_>>())
+            .map(|set| set.into_iter().sorted().collect::<Vec<_>>())
+            .sorted()
             .collect::<Vec<_>>()
     }
 
@@ -199,7 +217,7 @@ fn generate_global_base_powerset<'a>(
 /// pack to the `package_features`.
 fn generate_isolated_base_powerset<'a>(
     package_features: &'a BTreeMap<String, Vec<String>>,
-    isolated_feature_sets: &Vec<HashSet<String>>,
+    isolated_feature_sets: &[HashSet<String>],
     denylist: &HashSet<String>,
 ) -> BTreeSet<BTreeSet<&'a String>> {
     // Collect known package features for easy querying
@@ -207,8 +225,7 @@ fn generate_isolated_base_powerset<'a>(
 
     let isolated_base_powerset = isolated_feature_sets
         .iter()
-        .map(
-            |isolated_feature_set|  // work on each isolated feature set individually
+        .flat_map(|isolated_feature_set| {
             isolated_feature_set
                 .iter()
                 .filter(|ft| known_features.contains(*ft)) // remove non-existent features
@@ -217,11 +234,10 @@ fn generate_isolated_base_powerset<'a>(
                 .map(|combination| {
                     combination
                         .into_iter()
-                        .filter_map(|feature| known_features.get(feature).map(|s| *s)) // switch references (for lifetime correctness)
+                        .filter_map(|feature| known_features.get(feature).copied())
                         .collect::<BTreeSet<_>>()
-                }),
-        )
-        .flatten()
+                })
+        })
         .collect::<BTreeSet<_>>();
 
     isolated_base_powerset
@@ -550,6 +566,7 @@ OPTIONS:
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
+    --exclude-package       Exclude a package from feature combinations 
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 
@@ -575,17 +592,21 @@ isolated_feature_sets = [
 ]
 
 # Exclude groupings of features that are incompatible or do not make sense
-skip_feature_sets = [ ["foo", "bar"], ]
+exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # Exclude features from the feature combination matrix
-denylist = ["default", "full"]
+exlude_features = ["default", "full"] # formerly "denylist"
 
-# In the end, always add these exact combinations to the overall feature matrix,
-# unless one is already present there. These exact combinations are added without
-# respecting any other configuration options.
-exact_combinations = [
+# When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
+exlude_packages = ["package-a", "package-b"]
+
+# In the end, always add these exact combinations to the overall feature matrix, 
+# unless one is already present there.
+#
+# Non-existent features are ignored. Other configuration options are ignored.
+include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
-]
+] # formerly "exact_combinations"
 ```
 
 For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
@@ -624,9 +645,7 @@ fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
     }
 }
 
-pub fn run(bin_name: &str) -> eyre::Result<()> {
-    color_eyre::install()?;
-
+pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     let mut args: Vec<String> = std::env::args_os()
         // skip executable name
         .skip(1)
@@ -648,12 +667,27 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         ..Options::default()
     };
 
+    // extract path to manifest to operate on
+    for (span, manifest_path) in args.get_all("--manifest-path", true) {
+        let manifest_path = PathBuf::from(manifest_path);
+        let manifest_path = manifest_path
+            .canonicalize()
+            .wrap_err_with(|| format!("manifest {} does not exist", manifest_path.display()))?;
+        options.manifest_path = Some(manifest_path);
+        args.drain(span);
+    }
+
     // extract packages to operate on
     for flag in ["--package", "-p"] {
         for (span, package) in args.get_all(flag, true) {
             options.packages.insert(package);
             args.drain(span);
         }
+    }
+
+    for (span, package) in args.get_all("--exclude-package", true) {
+        options.exclude_packages.insert(package.trim().to_string());
+        args.drain(span);
     }
 
     // check for matrix command
@@ -705,6 +739,14 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         args.drain(span);
     }
 
+    Ok((options, args))
+}
+
+pub fn run(bin_name: &str) -> eyre::Result<()> {
+    color_eyre::install()?;
+
+    let (options, cargo_args) = parse_arguments(bin_name)?;
+
     // get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
@@ -712,6 +754,9 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     }
     let metadata = cmd.exec()?;
     let mut packages = metadata.workspace_packages();
+
+    // filter excluded packages via CLI arguments
+    packages.retain(|p| !options.exclude_packages.contains(&p.name));
 
     if let Some(root_package) = metadata.root_package() {
         let config = root_package.config()?;
@@ -724,7 +769,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         packages.retain(|p| options.packages.contains(&p.name));
     }
 
-    let cargo_args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
     match options.command {
         Some(Command::Help) => {
             print_help();
@@ -734,7 +779,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             print_feature_matrix(&packages, pretty, options.packages_only)
         }
         None => {
-            if cargo_subcommand(args.as_slice()) == CargoSubcommand::Other {
+            if cargo_subcommand(cargo_args.as_slice()) == CargoSubcommand::Other {
                 eyre::bail!(
                     "`cargo {bin_name}` only works for cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
                 )
@@ -746,30 +791,41 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{error_counts, warning_counts, Package};
-    use serde_json::json;
-    use similar_asserts::assert_eq as sim_assert_eq;
-    use std::collections::{BTreeMap, HashSet};
+    use super::{Package, error_counts, warning_counts};
     use crate::config::Config;
+    use color_eyre::eyre;
+    use similar_asserts::assert_eq as sim_assert_eq;
+    use std::collections::HashSet;
+
+    static INIT: std::sync::Once = std::sync::Once::new();
+
+    /// Initialize test
+    ///
+    /// This ensures `color_eyre` is setup once.
+    pub(crate) fn init() {
+        INIT.call_once(|| {
+            color_eyre::install().ok();
+        });
+    }
 
     #[test]
     fn error_regex_single_mod_multiple_errors() {
-        let stderr = include_str!("../tests/single_mod_multiple_errors_stderr.txt");
+        let stderr = include_str!("../test-data/single_mod_multiple_errors_stderr.txt");
         let errors: Vec<_> = error_counts(stderr).collect();
         sim_assert_eq!(&errors, &vec![2]);
     }
 
     #[test]
     fn warning_regex_two_mod_multiple_warnings() {
-        let stderr = include_str!("../tests/two_mods_warnings_stderr.txt");
+        let stderr = include_str!("../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
     }
 
     #[test]
-    fn combinations() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "foo-c"]);
+    fn combinations() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo-c", "foo-a", "foo-b"])?;
         let config = Config::default();
         let expected_combinations = vec![
             vec![],
@@ -782,17 +838,17 @@ mod test {
             vec!["foo-c"],
         ];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
     #[test]
-    fn combinations_isolated() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+    fn combinations_isolated() -> eyre::Result<()> {
+        init();
+        let package =
+            package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-b", "car-a"])?;
         let config = Config {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
@@ -810,17 +866,17 @@ mod test {
             vec!["foo-b"],
         ];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
     #[test]
-    fn combinations_isolated_non_existent() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+    fn combinations_isolated_non_existent() -> eyre::Result<()> {
+        init();
+        let package =
+            package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = Config {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
@@ -836,23 +892,23 @@ mod test {
             vec!["foo-a"],
         ];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
     #[test]
-    fn combinations_isolated_denylist() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+    fn combinations_isolated_denylist() -> eyre::Result<()> {
+        init();
+        let package =
+            package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-a", "car-b"])?;
         let config = Config {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
             ],
-            denylist: HashSet::from(["bar-a".to_string()]),
+            exclude_features: HashSet::from(["bar-a".to_string()]),
             ..Default::default()
         };
         let expected_combinations = vec![
@@ -863,84 +919,77 @@ mod test {
             vec!["foo-b"],
         ];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
     #[test]
-    fn combinations_isolated_non_existent_denylist() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+    fn combinations_isolated_non_existent_denylist() -> eyre::Result<()> {
+        init();
+        let package =
+            package_with_features(&["foo-b", "foo-a", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = Config {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
             ],
-            denylist: HashSet::from(["bar-a".to_string()]),
+            exclude_features: HashSet::from(["bar-a".to_string()]),
             ..Default::default()
         };
-        let expected_combinations = vec![
-            vec![],
-            vec!["bar-b"],
-            vec!["foo-a"],
-        ];
+        let expected_combinations = vec![vec![], vec!["bar-b"], vec!["foo-a"]];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
     #[test]
-    fn combinations_isolated_non_existent_denylist_exact() {
-        // Given
-        let package = make_package(vec!["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"]);
+    fn combinations_isolated_non_existent_denylist_exact() -> eyre::Result<()> {
+        init();
+        let package =
+            package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = Config {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
             ],
-            denylist: HashSet::from(["bar-a".to_string()]),
-            exact_combinations: vec![
-                HashSet::from(["car-a".to_string(), "bar-a".to_string(), "non-existent".to_string() ])
-            ],
+            exclude_features: HashSet::from(["bar-a".to_string()]),
+            include_feature_sets: vec![HashSet::from([
+                "car-a".to_string(),
+                "bar-a".to_string(),
+                "non-existent".to_string(),
+            ])],
             ..Default::default()
         };
-        let expected_combinations = vec![
-            vec![],
-            vec!["bar-a", "car-a"],
-            vec!["bar-b"],
-            vec!["foo-a"],
-        ];
+        let expected_combinations =
+            vec![vec![], vec!["bar-a", "car-a"], vec!["bar-b"], vec!["foo-a"]];
 
-        // When
         let actual_combinations = package.feature_combinations(&config);
 
-        // Then
         sim_assert_eq!(expected_combinations, actual_combinations);
+        Ok(())
     }
 
-    fn make_package(given_features: Vec<&str>) -> cargo_metadata::Package {
-        let base_json = json!({
-            "name": "test",
-            "version": "0.1.0",
-            "id": "test",
-            "dependencies": [],
-            "targets": [],
-            "features": {},
-            "manifest_path": "",
-        });
-        let mut package = serde_json::from_value::<cargo_metadata::Package>(base_json).unwrap();
-        let mut features = BTreeMap::new();
-        for feature in given_features {
-            features.insert(feature.to_string(), vec![]);
-        }
-        package.features = features;
+    fn package_with_features(features: &[&str]) -> eyre::Result<cargo_metadata::Package> {
+        use cargo_metadata::{PackageBuilder, PackageId};
+        use semver::Version;
 
-        package
+        let mut package = PackageBuilder::new(
+            "test",
+            Version::parse("0.1.0")?,
+            PackageId {
+                repr: "test".to_string(),
+            },
+            "",
+        )
+        .build()?;
+        package.features = features
+            .iter()
+            .map(|feature| ((*feature).to_string(), vec![]))
+            .collect();
+        Ok(package)
     }
 }
