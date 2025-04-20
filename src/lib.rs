@@ -43,6 +43,7 @@ pub struct Options {
     pub packages: HashSet<String>,
     pub exclude_packages: HashSet<String>,
     pub command: Option<Command>,
+    pub only_packages_with_lib_target: bool,
     pub silent: bool,
     pub verbose: bool,
     pub pedantic: bool,
@@ -565,6 +566,8 @@ OPTIONS:
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --exclude-package       Exclude a package from feature combinations 
+    --only-packages-with-lib-target
+                            Only consider packages with a library target
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
 
@@ -688,6 +691,11 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
+    for (span, _) in args.get_all("--only-packages-with-lib-target", false) {
+        options.only_packages_with_lib_target = true;
+        args.drain(span);
+    }
+
     // check for matrix command
     for (span, _) in args.get_all("matrix", false) {
         options.command = Some(Command::FeatureMatrix { pretty: false });
@@ -755,6 +763,15 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     // filter excluded packages via CLI arguments
     packages.retain(|p| !options.exclude_packages.contains(&p.name));
+
+    if options.only_packages_with_lib_target {
+        // filter only packages with a library target
+        packages.retain(|p| {
+            p.targets
+                .iter()
+                .any(|t| t.kind.contains(&cargo_metadata::TargetKind::Lib))
+        });
+    }
 
     if let Some(root_package) = metadata.root_package() {
         let config = root_package.config()?;

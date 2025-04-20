@@ -58,6 +58,8 @@ OPTIONS:
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
     --exclude-package       Exclude a package from feature combinations 
+    --only-packages-with-lib-target
+                            Only consider packages with a library target
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
