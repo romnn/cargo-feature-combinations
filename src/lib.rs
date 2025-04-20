@@ -223,7 +223,7 @@ fn generate_isolated_base_powerset<'a>(
     // Collect known package features for easy querying
     let known_features = package_features.keys().collect::<HashSet<_>>();
 
-    let isolated_base_powerset = isolated_feature_sets
+    isolated_feature_sets
         .iter()
         .flat_map(|isolated_feature_set| {
             isolated_feature_set
@@ -238,9 +238,7 @@ fn generate_isolated_base_powerset<'a>(
                         .collect::<BTreeSet<_>>()
                 })
         })
-        .collect::<BTreeSet<_>>();
-
-    isolated_base_powerset
+        .collect()
 }
 
 pub fn print_feature_matrix(
@@ -595,10 +593,10 @@ isolated_feature_sets = [
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # Exclude features from the feature combination matrix
-exlude_features = ["default", "full"] # formerly "denylist"
+exclude_features = ["default", "full"] # formerly "denylist"
 
 # When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
-exlude_packages = ["package-a", "package-b"]
+exclude_packages = ["package-a", "package-b"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.

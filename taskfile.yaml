@@ -99,7 +99,7 @@ tasks:
       # prettier-ignore
       - >-
         cargo clippy
-        --tests --benches --examples --all-features
+        --workspace --all-targets --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
 
@@ -109,7 +109,7 @@ tasks:
       # prettier-ignore
       - >-
         cargo fc clippy
-        --tests --benches --examples --all-features
+        --workspace --all-targets
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
 
@@ -121,7 +121,7 @@ tasks:
       - >-
         cargo clippy
         --fix --allow-dirty --allow-staged
-        --tests --benches --examples --all-features
+        --workspace --all-targets --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
 

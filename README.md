@@ -90,10 +90,10 @@ isolated_feature_sets = [
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # Exclude features from the feature combination matrix
-exlude_features = ["default", "full"] # formerly "denylist"
+exclude_features = ["default", "full"] # formerly "denylist"
 
 # When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
-exlude_packages = ["package-a", "package-b"]
+exclude_packages = ["package-a", "package-b"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.
