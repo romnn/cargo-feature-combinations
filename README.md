@@ -109,9 +109,7 @@ include_feature_sets = [
 
 ### Usage with github-actions
 
-The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature allows more efficient testing of all feature set combinations in CI.
-
-The following workflow file uses `cargo-feature-combinations` to automatically generate a feature matrix and runs up to 256 feature combinations in a matrix job.
+The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI.
 
 First, add a workflow `feature-matrix.yaml` that computes the feature matrix for your project.
 We will re-use this workflow in our `build.yaml` workflow.
@@ -142,7 +140,7 @@ jobs:
           echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
 ```
 
-Now, we can use the `feature-matrix.yaml` workflow to dynamically create jobs that build each combination of features with considerable speedup.
+Now, we can use the `feature-matrix.yaml` workflow result to dynamically create jobs that build each combination of features in parallel.
 
 ```yaml
 # .github/workflows/build.yaml
@@ -177,6 +175,7 @@ jobs:
 ```
 
 Of course you can also apply the same approach for your `test.yaml` or `lint.yaml` workflows!
+Per job, up to 256 feature sets can be processed in parallel.
 
 #### Local development
 
