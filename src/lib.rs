@@ -753,6 +753,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     let (options, cargo_args) = parse_arguments(bin_name)?;
 
+    if let Some(Command::Help) = options.command {
+        print_help();
+        return Ok(());
+    }
+
     // get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
@@ -786,10 +791,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
     match options.command {
-        Some(Command::Help) => {
-            print_help();
-            Ok(())
-        }
+        Some(Command::Help) => unreachable!(),
         Some(Command::FeatureMatrix { pretty }) => {
             print_feature_matrix(&packages, pretty, options.packages_only)
         }
