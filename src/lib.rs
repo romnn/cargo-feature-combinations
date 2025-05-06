@@ -150,8 +150,6 @@ impl Package for cargo_metadata::Package {
                 &config.include_features,
             )
         };
-        dbg!(&config);
-        dbg!(&base_powerset);
 
         // Filter out feature sets that contain skip sets
         let mut filtered_powerset = base_powerset
@@ -166,7 +164,6 @@ impl Package for cargo_metadata::Package {
                 })
             })
             .collect::<BTreeSet<_>>();
-        dbg!(&filtered_powerset);
 
         // Add back exact combinations
         for proposed_exact_combination in &config.include_feature_sets {
@@ -181,7 +178,6 @@ impl Package for cargo_metadata::Package {
             // This exact combination may now be empty, but empty combination is always added anyway
             filtered_powerset.insert(exact_combination);
         }
-        dbg!(&filtered_powerset);
 
         // Re-collect everything into a vector of vectors
         filtered_powerset
