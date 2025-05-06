@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   tests:
@@ -27,21 +28,25 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     needs: [tests]
+    outputs:
+      precompiled-binaries: ${{ steps.upload.outputs.artifact-path }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
       - uses: arduino/setup-task@v2
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Setup goreleaser
-        run: |
-          brew install zig
-          brew install goreleaser
+          version: "3.42.1"
       - name: Release
         run: task release
         env:
           GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
           TAP_GITHUB_TOKEN: "${{ secrets.TAP_GITHUB_TOKEN }}"
+      - name: Upload precompiled binaries
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: goreleaser-dist

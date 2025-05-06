@@ -9,6 +9,8 @@ pub struct Config {
     #[serde(default)]
     pub exclude_features: HashSet<String>,
     #[serde(default)]
+    pub include_features: HashSet<String>,
+    #[serde(default)]
     pub exclude_packages: HashSet<String>,
     /// Formerly named `skip_feature_sets`
     #[serde(default)]

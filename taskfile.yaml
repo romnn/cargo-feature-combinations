@@ -25,12 +25,26 @@ tasks:
   build:goreleaser:
     desc: "build in release mode using goreleaser"
     cmds:
-      - goreleaser build --snapshot --clean
+      # pretter-ignore
+      - >-
+        docker run --rm
+        -v "${PWD}:/workspace"
+        -w /workspace
+        ghcr.io/rust-cross/cargo-zigbuild
+        bash -c './release.sh && goreleaser build --snapshot --clean'
 
   release:
     desc: "release using goreleaser"
     cmds:
-      - goreleaser release --clean
+      # pretter-ignore
+      - >-
+        docker run --rm
+        -e "GITHUB_TOKEN=${GITHUB_TOKEN}"
+        -e "TAP_GITHUB_TOKEN=${TAP_GITHUB_TOKEN}"
+        -v "${PWD}:/workspace"
+        -w /workspace
+        ghcr.io/rust-cross/cargo-zigbuild
+        bash -c './release.sh && goreleaser release --clean'
 
   typos:
     desc: "check repository for typos"

@@ -33,6 +33,7 @@ pub struct Summary {
 #[derive(Debug)]
 pub enum Command {
     FeatureMatrix { pretty: bool },
+    Version,
     Help,
 }
 
@@ -103,7 +104,7 @@ pub trait Package {
     /// an Error is returned.
     ///
     fn config(&self) -> eyre::Result<Config>;
-    fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>>;
+    fn feature_combinations<'a>(&'a self, config: &'a Config) -> Vec<Vec<&'a String>>;
     fn feature_matrix(&self, config: &Config) -> Vec<String>;
 }
 
@@ -131,19 +132,26 @@ impl Package for cargo_metadata::Package {
         Ok(config)
     }
 
-    fn feature_combinations(&self, config: &Config) -> Vec<Vec<&String>> {
+    fn feature_combinations<'a>(&'a self, config: &'a Config) -> Vec<Vec<&'a String>> {
         // Generate the base powerset from
         // - all features
         // - or from isolated sets, minus excluded features
         let base_powerset = if config.isolated_feature_sets.is_empty() {
-            generate_global_base_powerset(&self.features, &config.exclude_features)
+            generate_global_base_powerset(
+                &self.features,
+                &config.exclude_features,
+                &config.include_features,
+            )
         } else {
             generate_isolated_base_powerset(
                 &self.features,
                 &config.isolated_feature_sets,
                 &config.exclude_features,
+                &config.include_features,
             )
         };
+        dbg!(&config);
+        dbg!(&base_powerset);
 
         // Filter out feature sets that contain skip sets
         let mut filtered_powerset = base_powerset
@@ -158,6 +166,7 @@ impl Package for cargo_metadata::Package {
                 })
             })
             .collect::<BTreeSet<_>>();
+        dbg!(&filtered_powerset);
 
         // Add back exact combinations
         for proposed_exact_combination in &config.include_feature_sets {
@@ -172,6 +181,7 @@ impl Package for cargo_metadata::Package {
             // This exact combination may now be empty, but empty combination is always added anyway
             filtered_powerset.insert(exact_combination);
         }
+        dbg!(&filtered_powerset);
 
         // Re-collect everything into a vector of vectors
         filtered_powerset
@@ -197,15 +207,21 @@ impl Package for cargo_metadata::Package {
 /// pack to the `package_features`.
 fn generate_global_base_powerset<'a>(
     package_features: &'a BTreeMap<String, Vec<String>>,
-    denylist: &HashSet<String>,
+    exclude_features: &'a HashSet<String>,
+    include_features: &'a HashSet<String>,
 ) -> BTreeSet<BTreeSet<&'a String>> {
     package_features
         .keys()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .filter(|ft| !denylist.contains(*ft))
+        .filter(|ft| !exclude_features.contains(*ft))
         .powerset()
-        .map(|combination| combination.into_iter().collect::<BTreeSet<_>>())
+        .map(|combination| {
+            combination
+                .into_iter()
+                .chain(include_features)
+                .collect::<BTreeSet<&'a String>>()
+        })
         .collect()
 }
 
@@ -219,7 +235,8 @@ fn generate_global_base_powerset<'a>(
 fn generate_isolated_base_powerset<'a>(
     package_features: &'a BTreeMap<String, Vec<String>>,
     isolated_feature_sets: &[HashSet<String>],
-    denylist: &HashSet<String>,
+    exclude_features: &'a HashSet<String>,
+    include_features: &'a HashSet<String>,
 ) -> BTreeSet<BTreeSet<&'a String>> {
     // Collect known package features for easy querying
     let known_features = package_features.keys().collect::<HashSet<_>>();
@@ -230,12 +247,13 @@ fn generate_isolated_base_powerset<'a>(
             isolated_feature_set
                 .iter()
                 .filter(|ft| known_features.contains(*ft)) // remove non-existent features
-                .filter(|ft| !denylist.contains(*ft)) // remove features from denylist
+                .filter(|ft| !exclude_features.contains(*ft)) // remove features from denylist
                 .powerset()
                 .map(|combination| {
                     combination
                         .into_iter()
                         .filter_map(|feature| known_features.get(feature).copied())
+                        .chain(include_features)
                         .collect::<BTreeSet<_>>()
                 })
         })
@@ -715,6 +733,18 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
+    // check for version flag
+    for (span, _) in args.get_all("--version", false) {
+        options.command = Some(Command::Version);
+        args.drain(span);
+    }
+
+    // check for version command
+    for (span, _) in args.get_all("version", false) {
+        options.command = Some(Command::Version);
+        args.drain(span);
+    }
+
     // check for pedantic flag
     for (span, _) in args.get_all("--pedantic", false) {
         options.pedantic = true;
@@ -758,6 +788,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         return Ok(());
     }
 
+    if let Some(Command::Version) = options.command {
+        println!("cargo-{bin_name} v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
@@ -791,7 +826,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
     match options.command {
-        Some(Command::Help) => unreachable!(),
+        Some(Command::Version | Command::Help) => unreachable!(),
         Some(Command::FeatureMatrix { pretty }) => {
             print_feature_matrix(&packages, pretty, options.packages_only)
         }
