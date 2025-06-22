@@ -61,7 +61,7 @@ num_key = 2
 
 [dependencies]
 color-eyre = "0"
-cargo_metadata = "0"
+cargo_metadata = "0.19"
 itertools = "0"
 regex = "^1.11"
 
