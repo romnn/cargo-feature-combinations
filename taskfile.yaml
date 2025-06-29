@@ -17,6 +17,11 @@ tasks:
     cmds:
       - cargo build --all-targets {{.CLI_ARGS}}
 
+  build:fc:
+    desc: "build in debug mode for all combinations of features"
+    cmds:
+      - cargo fc build --all-targets {{.CLI_ARGS}}
+
   build:release:
     desc: "build in release mode"
     cmds:
@@ -59,7 +64,7 @@ tasks:
       - cargo check --workspace --all-targets {{.CLI_ARGS}}
 
   check:fc:
-    desc: "check cargo workspace"
+    desc: "check cargo workspace for all combinations of features"
     dir: "{{.ROOT_DIR}}"
     cmds:
       - cargo fc check --workspace --all-targets {{.CLI_ARGS}}
