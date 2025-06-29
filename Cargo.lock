@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-feature-combinations"
-version = "0.0.39"
+version = "0.0.40"
 dependencies = [
  "cargo_metadata",
  "color-eyre",

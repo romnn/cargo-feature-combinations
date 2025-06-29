@@ -8,12 +8,14 @@ before:
     - rustup default stable
     - cargo install --force --locked cargo-zigbuild
 
-brews:
-  - name: cargo-feature-combinations
+homebrew_casks:
+  - name: &cargo-feature-combinations cargo-feature-combinations
     ids:
-      - cargo-feature-combinations
+      - *cargo-feature-combinations
     description: "Plugin for `cargo` to run commands against selected combinations of features."
-    directory: Formula
+    directory: Casks
+    conflicts:
+      - formula: *cargo-feature-combinations
     commit_author:
       name: romnn
       email: contact@romnn.com
@@ -24,11 +26,19 @@ brews:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
       pull_request:
         enabled: false
-  - name: cargo-fc
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-feature-combinations"]
+          end
+  - name: &cargo-fc cargo-fc
     ids:
-      - cargo-fc
+      - *cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
-    directory: Formula
+    directory: Casks
+    conflicts:
+      - formula: *cargo-fc
     commit_author:
       name: romnn
       email: contact@romnn.com
@@ -39,12 +49,18 @@ brews:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
       pull_request:
         enabled: false
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-fc"]
+          end
 
 builds:
   # cargo-feature-combinations binary
-  - id: "cargo-feature-combinations"
+  - id: *cargo-feature-combinations
     builder: rust
-    binary: cargo-feature-combinations
+    binary: *cargo-feature-combinations
     targets:
       # linux
       - x86_64-unknown-linux-musl
@@ -65,9 +81,9 @@ builds:
       - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
   # cargo-fc binary
-  - id: "cargo-fc"
+  - id: *cargo-fc
     builder: rust
-    binary: cargo-fc
+    binary: *cargo-fc
     targets:
       # linux
       - x86_64-unknown-linux-musl
@@ -88,21 +104,21 @@ builds:
       - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
 archives:
-  - id: cargo-feature-combinations
+  - id: *cargo-feature-combinations
     formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     ids:
-      - cargo-feature-combinations
+      - *cargo-feature-combinations
     files:
       - LICENSE
     format_overrides:
       - goos: windows
         formats: ["zip"]
-  - id: cargo-fc
+  - id: *cargo-fc
     formats: ["tar.gz"]
     name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     ids:
-      - cargo-fc
+      - *cargo-fc
     files:
       - LICENSE
     format_overrides:
