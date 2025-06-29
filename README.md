@@ -11,10 +11,10 @@ Plugin for `cargo` to run commands against selected combinations of features.
 ### Installation
 
 ```bash
-brew install romnn/tap/cargo-fc
+brew install --cask romnn/tap/cargo-fc
 
 # or install from source
-cargo install cargo-feature-combinations
+cargo install --locked cargo-feature-combinations
 ```
 
 ### Usage
