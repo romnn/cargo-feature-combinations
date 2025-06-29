@@ -60,10 +60,10 @@ str_key = "str_value"
 num_key = 2
 
 [dependencies]
-color-eyre = "0"
+color-eyre = "0.6"
 cargo_metadata = "0.20"
-itertools = "0"
-regex = "^1.11"
+itertools = "0.14"
+regex = "1.11"
 
 # serde
 serde = "1"
@@ -71,11 +71,11 @@ serde_json = "1"
 serde_json_merge = "0"
 
 # terminal colors
-termcolor = "1"
-strip-ansi-escapes = "0"
+termcolor = "1.4"
+strip-ansi-escapes = "0.2"
 
 [target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = "0"
+mimalloc = "0.1"
 
 [dev-dependencies]
 similar-asserts = "1"

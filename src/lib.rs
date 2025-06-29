@@ -1022,11 +1022,10 @@ mod test {
     }
 
     fn package_with_features(features: &[&str]) -> eyre::Result<cargo_metadata::Package> {
-        use std::str::FromStr;
-
         use cargo_metadata::{PackageBuilder, PackageId};
         use cargo_util_schemas::manifest::PackageName;
         use semver::Version;
+        use std::str::FromStr as _;
 
         let mut package = PackageBuilder::new(
             PackageName::from_str("test")?,
