@@ -540,7 +540,7 @@ pub fn run_cargo_command(
                 features: features.into_iter().cloned().collect(),
                 num_errors,
                 num_warnings,
-                package_name: package.name.clone(),
+                package_name: package.name.to_string(),
                 exit_code: exit_status.code(),
                 pedantic_success,
             });
@@ -798,7 +798,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let mut packages = metadata.workspace_packages();
 
     // filter excluded packages via CLI arguments
-    packages.retain(|p| !options.exclude_packages.contains(&p.name));
+    packages.retain(|p| !options.exclude_packages.contains(p.name.as_str()));
 
     if options.only_packages_with_lib_target {
         // filter only packages with a library target
@@ -812,12 +812,12 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     if let Some(root_package) = metadata.root_package() {
         let config = root_package.config()?;
         // filter packages based on root package Cargo.toml configuration
-        packages.retain(|p| !config.exclude_packages.contains(&p.name));
+        packages.retain(|p| !config.exclude_packages.contains(p.name.as_str()));
     }
 
     // filter packages based on CLI options
     if !options.packages.is_empty() {
-        packages.retain(|p| options.packages.contains(&p.name));
+        packages.retain(|p| options.packages.contains(p.name.as_str()));
     }
 
     let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
@@ -1022,11 +1022,14 @@ mod test {
     }
 
     fn package_with_features(features: &[&str]) -> eyre::Result<cargo_metadata::Package> {
+        use std::str::FromStr;
+
         use cargo_metadata::{PackageBuilder, PackageId};
+        use cargo_util_schemas::manifest::PackageName;
         use semver::Version;
 
         let mut package = PackageBuilder::new(
-            "test",
+            PackageName::from_str("test")?,
             Version::parse("0.1.0")?,
             PackageId {
                 repr: "test".to_string(),
