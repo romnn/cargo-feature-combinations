@@ -25,6 +25,13 @@ pub struct Config {
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
+pub struct WorkspaceConfig {
+    /// List of package names to exclude from the workspace analysis.
+    #[serde(default)]
+    pub exclude_packages: HashSet<String>,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
 pub struct DeprecatedConfig {
     #[serde(default)]
     pub skip_feature_sets: Vec<HashSet<String>>,

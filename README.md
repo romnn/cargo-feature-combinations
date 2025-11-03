@@ -98,7 +98,8 @@ exclude_features = ["default", "full"] # formerly "denylist"
 # Include features in the feature combination matrix
 include_features = ["feature-that-must-always-be-set"]
 
-# When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
+# When using workspaces, you can exclude packages in the workspace metadata,
+# or the metadata of the *root* package.
 exclude_packages = ["package-a", "package-b"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
