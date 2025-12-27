@@ -3,7 +3,7 @@
 mod config;
 mod tee;
 
-use crate::config::Config;
+use crate::config::{Config, WorkspaceConfig};
 use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use regex::Regex;
@@ -14,6 +14,8 @@ use std::process;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+const METADATA_KEY: &str = "cargo-feature-combinations";
 
 static CYAN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Cyan, true));
 static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true));
@@ -91,6 +93,40 @@ impl ArgumentParser for Vec<String> {
     }
 }
 
+pub trait Workspace {
+    /// Returns the workspace configuration section for feature combinations.
+    fn workspace_config(&self) -> eyre::Result<WorkspaceConfig>;
+
+    /// Returns the packages relevant for feature combinations.
+    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>>;
+}
+
+impl Workspace for cargo_metadata::Metadata {
+    fn workspace_config(&self) -> eyre::Result<WorkspaceConfig> {
+        let config: WorkspaceConfig = match self.workspace_metadata.get(METADATA_KEY) {
+            Some(config) => serde_json::from_value(config.clone())?,
+            None => Default::default(),
+        };
+        Ok(config)
+    }
+
+    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>> {
+        let mut packages = self.workspace_packages();
+
+        let workspace_config = self.workspace_config()?;
+        // filter packages based on workspace metadata configuration
+        packages.retain(|p| !workspace_config.exclude_packages.contains(p.name.as_str()));
+
+        if let Some(root_package) = self.root_package() {
+            let config = root_package.config()?;
+            // filter packages based on root package Cargo.toml configuration
+            packages.retain(|p| !config.exclude_packages.contains(p.name.as_str()));
+        }
+
+        Ok(packages)
+    }
+}
+
 pub trait Package {
     /// Parses the config for this package if present.
     ///
@@ -110,12 +146,9 @@ pub trait Package {
 
 impl Package for cargo_metadata::Package {
     fn config(&self) -> eyre::Result<Config> {
-        let mut config = match self.metadata.get("cargo-feature-combinations") {
-            Some(config) => {
-                let config: Config = serde_json::from_value(config.clone())?;
-                config
-            }
-            None => Config::default(),
+        let mut config: Config = match self.metadata.get(METADATA_KEY) {
+            Some(config) => serde_json::from_value(config.clone())?,
+            None => Default::default(),
         };
 
         // handle deprecated config values
@@ -795,7 +828,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
-    let mut packages = metadata.workspace_packages();
+    let mut packages = metadata.packages_for_fc()?;
 
     // filter excluded packages via CLI arguments
     packages.retain(|p| !options.exclude_packages.contains(p.name.as_str()));
@@ -807,12 +840,6 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 .iter()
                 .any(|t| t.kind.contains(&cargo_metadata::TargetKind::Lib))
         });
-    }
-
-    if let Some(root_package) = metadata.root_package() {
-        let config = root_package.config()?;
-        // filter packages based on root package Cargo.toml configuration
-        packages.retain(|p| !config.exclude_packages.contains(p.name.as_str()));
     }
 
     // filter packages based on CLI options
@@ -839,9 +866,9 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{Package, error_counts, warning_counts};
-    use crate::config::Config;
+    use super::{Config, Package, Workspace, error_counts, warning_counts};
     use color_eyre::eyre;
+    use serde_json::json;
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::HashSet;
 
@@ -1021,6 +1048,41 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn workspace_with_package() -> eyre::Result<()> {
+        init();
+
+        let package = package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .build()?;
+
+        let packages = metadata.packages_for_fc()?;
+        sim_assert_eq!(packages, vec![&package]);
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_with_excluded_package() -> eyre::Result<()> {
+        init();
+
+        let package = package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "cargo-feature-combinations": {
+                    "exclude_packages": [package.name]
+                }
+            }))
+            .build()?;
+
+        let packages = metadata.packages_for_fc()?;
+        assert!(packages.is_empty(), "expected no packages after exclusion");
+        Ok(())
+    }
+
     fn package_with_features(features: &[&str]) -> eyre::Result<cargo_metadata::Package> {
         use cargo_metadata::{PackageBuilder, PackageId};
         use cargo_util_schemas::manifest::PackageName;
@@ -1041,5 +1103,17 @@ mod test {
             .map(|feature| ((*feature).to_string(), vec![]))
             .collect();
         Ok(package)
+    }
+
+    fn workspace_builder() -> cargo_metadata::MetadataBuilder {
+        use cargo_metadata::{MetadataBuilder, WorkspaceDefaultMembers};
+
+        MetadataBuilder::default()
+            .version(1u8)
+            .workspace_default_members(WorkspaceDefaultMembers::default())
+            .resolve(None)
+            .workspace_root("")
+            .workspace_metadata(json!({}))
+            .target_directory("")
     }
 }
