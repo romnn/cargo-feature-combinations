@@ -830,11 +830,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let metadata = cmd.exec()?;
     let mut packages = metadata.packages_for_fc()?;
 
-    // filter excluded packages via CLI arguments
+    // Filter excluded packages via CLI arguments
     packages.retain(|p| !options.exclude_packages.contains(p.name.as_str()));
 
     if options.only_packages_with_lib_target {
-        // filter only packages with a library target
+        // Filter only packages with a library target
         packages.retain(|p| {
             p.targets
                 .iter()
@@ -842,7 +842,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         });
     }
 
-    // filter packages based on CLI options
+    // Filter packages based on CLI options
     if !options.packages.is_empty() {
         packages.retain(|p| options.packages.contains(p.name.as_str()));
     }
@@ -1084,8 +1084,7 @@ mod test {
     }
 
     fn package_with_features(features: &[&str]) -> eyre::Result<cargo_metadata::Package> {
-        use cargo_metadata::{PackageBuilder, PackageId};
-        use cargo_util_schemas::manifest::PackageName;
+        use cargo_metadata::{PackageBuilder, PackageId, PackageName};
         use semver::Version;
         use std::str::FromStr as _;
 
@@ -1114,6 +1113,7 @@ mod test {
             .resolve(None)
             .workspace_root("")
             .workspace_metadata(json!({}))
+            .build_directory(None)
             .target_directory("")
     }
 }
