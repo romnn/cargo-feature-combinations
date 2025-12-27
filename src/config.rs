@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// Per-package configuration for `cargo-feature-combinations`.
+///
+/// This is read from `[package.metadata.cargo-feature-combinations]` in a
+/// package's `Cargo.toml`. For workspace-wide options such as
+/// `exclude_packages`, prefer using [`WorkspaceConfig`] via
+/// `[workspace.metadata.cargo-feature-combinations]` instead.
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct Config {
     #[serde(default)]
@@ -10,6 +16,9 @@ pub struct Config {
     pub exclude_features: HashSet<String>,
     #[serde(default)]
     pub include_features: HashSet<String>,
+    /// Deprecated: kept for backwards compatibility. Prefer
+    /// [`WorkspaceConfig::exclude_packages`] via
+    /// `[workspace.metadata.cargo-feature-combinations].exclude_packages`.
     #[serde(default)]
     pub exclude_packages: HashSet<String>,
     /// Formerly named `skip_feature_sets`

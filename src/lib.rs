@@ -1,4 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
+#![warn(missing_docs)]
 
 mod config;
 mod tee;
@@ -105,7 +106,7 @@ impl Workspace for cargo_metadata::Metadata {
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig> {
         let config: WorkspaceConfig = match self.workspace_metadata.get(METADATA_KEY) {
             Some(config) => serde_json::from_value(config.clone())?,
-            None => Default::default(),
+            None => WorkspaceConfig::default(),
         };
         Ok(config)
     }
@@ -114,12 +115,72 @@ impl Workspace for cargo_metadata::Metadata {
         let mut packages = self.workspace_packages();
 
         let workspace_config = self.workspace_config()?;
-        // filter packages based on workspace metadata configuration
-        packages.retain(|p| !workspace_config.exclude_packages.contains(p.name.as_str()));
+
+        // Determine the workspace root package (if any) and load its config so we can both
+        // apply filtering and emit deprecation warnings for legacy configuration.
+        let mut root_config: Option<Config> = None;
+        let mut root_id: Option<cargo_metadata::PackageId> = None;
 
         if let Some(root_package) = self.root_package() {
             let config = root_package.config()?;
-            // filter packages based on root package Cargo.toml configuration
+
+            if !config.exclude_packages.is_empty() {
+                eprintln!(
+                    "warning: [package.metadata.cargo-feature-combinations].exclude_packages in the workspace root package is deprecated; use [workspace.metadata.cargo-feature-combinations].exclude_packages instead",
+                );
+            }
+
+            root_id = Some(root_package.id.clone());
+            root_config = Some(config);
+        }
+
+        // For non-root workspace members, using exclude_packages is a no-op. Emit warnings for
+        // such configurations so users are aware that these fields are ignored.
+        if root_id.is_some() {
+            for package in &self.packages {
+                if Some(&package.id) == root_id.as_ref() {
+                    continue;
+                }
+
+                // [package.metadata.cargo-feature-combinations].exclude_packages
+                if let Some(raw) = package.metadata.get(METADATA_KEY)
+                    && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
+                    && !config.exclude_packages.is_empty()
+                {
+                    eprintln!(
+                        "warning: [package.metadata.cargo-feature-combinations].exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                        package.name,
+                    );
+                }
+
+                // [workspace.metadata.cargo-feature-combinations].exclude_packages specified in
+                // non-root manifests is also a no-op. Detect the likely JSON shape produced by
+                // cargo metadata and warn if present.
+                if let Some(workspace) = package.metadata.get("workspace")
+                    && let Some(tool) = workspace.get(METADATA_KEY)
+                    && let Some(exclude_packages) = tool.get("exclude_packages")
+                {
+                    let has_values = match exclude_packages {
+                        serde_json::Value::Array(values) => !values.is_empty(),
+                        serde_json::Value::Null => false,
+                        _ => true,
+                    };
+
+                    if has_values {
+                        eprintln!(
+                            "warning: [workspace.metadata.cargo-feature-combinations].exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                            package.name,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Filter packages based on workspace metadata configuration
+        packages.retain(|p| !workspace_config.exclude_packages.contains(p.name.as_str()));
+
+        if let Some(config) = root_config {
+            // Filter packages based on root package Cargo.toml configuration
             packages.retain(|p| !config.exclude_packages.contains(p.name.as_str()));
         }
 
@@ -148,10 +209,31 @@ impl Package for cargo_metadata::Package {
     fn config(&self) -> eyre::Result<Config> {
         let mut config: Config = match self.metadata.get(METADATA_KEY) {
             Some(config) => serde_json::from_value(config.clone())?,
-            None => Default::default(),
+            None => Config::default(),
         };
 
-        // handle deprecated config values
+        if !config.deprecated.skip_feature_sets.is_empty() {
+            eprintln!(
+                "warning: [package.metadata.cargo-feature-combinations].skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
+                self.name,
+            );
+        }
+
+        if !config.deprecated.denylist.is_empty() {
+            eprintln!(
+                "warning: [package.metadata.cargo-feature-combinations].denylist in package `{}` is deprecated; use exclude_features instead",
+                self.name,
+            );
+        }
+
+        if !config.deprecated.exact_combinations.is_empty() {
+            eprintln!(
+                "warning: [package.metadata.cargo-feature-combinations].exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
+                self.name,
+            );
+        }
+
+        // Handle deprecated config values
         config
             .exclude_feature_sets
             .append(&mut config.deprecated.skip_feature_sets);
@@ -189,10 +271,10 @@ impl Package for cargo_metadata::Package {
             .into_iter()
             .filter(|feature_set| {
                 !config.exclude_feature_sets.iter().any(|skip_set| {
-                    // remove feature sets containing any of the skip sets
+                    // Remove feature sets containing any of the skip sets
                     skip_set
                         .iter()
-                        // skip set is contained when all its features are contained
+                        // Skip set is contained when all its features are contained
                         .all(|skip_feature| feature_set.contains(skip_feature))
                 })
             })
@@ -645,9 +727,6 @@ exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
 
-# When using a cargo workspace, you can exclude packages in the *root* `Cargo.toml`
-exclude_packages = ["package-a", "package-b"]
-
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.
 #
@@ -655,6 +734,14 @@ exclude_packages = ["package-a", "package-b"]
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
+```
+
+When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-feature-combinations]
+# Exclude packages in the workspace metadata, or the metadata of the *root* package.
+exclude_packages = ["package-a", "package-b"]
 ```
 
 For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
@@ -695,9 +782,9 @@ fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
 
 pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     let mut args: Vec<String> = std::env::args_os()
-        // skip executable name
+        // Skip executable name
         .skip(1)
-        // skip our own cargo-* command name
+        // Skip our own cargo-* command name
         .skip_while(|arg| {
             let arg = arg.as_os_str();
             arg == bin_name || arg == "cargo"
@@ -715,7 +802,7 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         ..Options::default()
     };
 
-    // extract path to manifest to operate on
+    // Extract path to manifest to operate on
     for (span, manifest_path) in args.get_all("--manifest-path", true) {
         let manifest_path = PathBuf::from(manifest_path);
         let manifest_path = manifest_path
@@ -725,7 +812,7 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
-    // extract packages to operate on
+    // Extract packages to operate on
     for flag in ["--package", "-p"] {
         for (span, package) in args.get_all(flag, true) {
             options.packages.insert(package);
@@ -743,12 +830,12 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
-    // check for matrix command
+    // Check for matrix command
     for (span, _) in args.get_all("matrix", false) {
         options.command = Some(Command::FeatureMatrix { pretty: false });
         args.drain(span);
     }
-    // check for pretty matrix option
+    // Check for pretty matrix option
     for (span, _) in args.get_all("--pretty", false) {
         if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
             *pretty = true;
@@ -756,49 +843,49 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
-    // check for help command
+    // Check for help command
     for (span, _) in args.get_all("--help", false) {
         options.command = Some(Command::Help);
         args.drain(span);
     }
 
-    // check for version flag
+    // Check for version flag
     for (span, _) in args.get_all("--version", false) {
         options.command = Some(Command::Version);
         args.drain(span);
     }
 
-    // check for version command
+    // Check for version command
     for (span, _) in args.get_all("version", false) {
         options.command = Some(Command::Version);
         args.drain(span);
     }
 
-    // check for pedantic flag
+    // Check for pedantic flag
     for (span, _) in args.get_all("--pedantic", false) {
         options.pedantic = true;
         args.drain(span);
     }
 
-    // check for errors only
+    // Check for errors only
     for (span, _) in args.get_all("--errors-only", false) {
         options.errors_only = true;
         args.drain(span);
     }
 
-    // packages only
+    // Packages only
     for (span, _) in args.get_all("--packages-only", false) {
         options.packages_only = true;
         args.drain(span);
     }
 
-    // check for silent flag
+    // Check for silent flag
     for (span, _) in args.get_all("--silent", false) {
         options.silent = true;
         args.drain(span);
     }
 
-    // check for fail fast flag
+    // Check for fail fast flag
     for (span, _) in args.get_all("--fail-fast", false) {
         options.fail_fast = true;
         args.drain(span);
@@ -822,7 +909,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         return Ok(());
     }
 
-    // get metadata for cargo package
+    // Get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
         cmd.manifest_path(manifest_path);

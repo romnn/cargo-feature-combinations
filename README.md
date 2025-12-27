@@ -98,10 +98,6 @@ exclude_features = ["default", "full"] # formerly "denylist"
 # Include features in the feature combination matrix
 include_features = ["feature-that-must-always-be-set"]
 
-# When using workspaces, you can exclude packages in the workspace metadata,
-# or the metadata of the *root* package.
-exclude_packages = ["package-a", "package-b"]
-
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.
 #
@@ -110,6 +106,15 @@ include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
 ```
+
+When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-feature-combinations]
+# Exclude packages in the workspace metadata, or the metadata of the *root* package.
+exclude_packages = ["package-a", "package-b"]
+```
+
 
 ### Usage with github-actions
 
