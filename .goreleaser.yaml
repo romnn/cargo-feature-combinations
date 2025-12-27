@@ -14,8 +14,6 @@ homebrew_casks:
       - *cargo-feature-combinations
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     directory: Casks
-    conflicts:
-      - formula: *cargo-feature-combinations
     commit_author:
       name: romnn
       email: contact@romnn.com
@@ -29,7 +27,7 @@ homebrew_casks:
     hooks:
       post:
         install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+          if OS.mac? && File.exist?("/usr/bin/xattr")
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-feature-combinations"]
           end
   - name: &cargo-fc cargo-fc
@@ -37,8 +35,6 @@ homebrew_casks:
       - *cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     directory: Casks
-    conflicts:
-      - formula: *cargo-fc
     commit_author:
       name: romnn
       email: contact@romnn.com
@@ -52,12 +48,11 @@ homebrew_casks:
     hooks:
       post:
         install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+          if OS.mac? && File.exist?("/usr/bin/xattr")
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-fc"]
           end
 
 builds:
-  # cargo-feature-combinations binary
   - id: *cargo-feature-combinations
     builder: rust
     binary: *cargo-feature-combinations
@@ -80,7 +75,6 @@ builds:
       - "--bin=cargo-feature-combinations"
       - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
-  # cargo-fc binary
   - id: *cargo-fc
     builder: rust
     binary: *cargo-fc
