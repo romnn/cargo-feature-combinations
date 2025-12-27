@@ -1,6 +1,12 @@
 #![allow(clippy::missing_errors_doc)]
 #![warn(missing_docs)]
 
+//! Run cargo commands for all feature combinations across a workspace.
+//!
+//! This crate powers the `cargo-fc` and `cargo-feature-combinations` binaries.
+//! The main entry point for consumers is [`run`], which parses CLI arguments
+//! and dispatches the requested command.
+
 mod config;
 mod tee;
 
@@ -23,6 +29,7 @@ static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true))
 static YELLOW: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Yellow, true));
 static GREEN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Green, true));
 
+/// Summary of the outcome for running a cargo command on a single feature set.
 #[derive(Debug)]
 pub struct Summary {
     package_name: String,
@@ -33,31 +40,64 @@ pub struct Summary {
     num_errors: usize,
 }
 
+/// High-level command requested by the user.
 #[derive(Debug)]
 pub enum Command {
-    FeatureMatrix { pretty: bool },
+    /// Print a JSON feature matrix to stdout.
+    ///
+    /// The matrix is produced by combining [`Package::feature_matrix`] for all
+    /// selected packages into a single JSON array.
+    FeatureMatrix {
+        /// Whether to pretty-print the JSON feature matrix.
+        pretty: bool,
+    },
+    /// Print the tool version and exit.
     Version,
+    /// Print help text and exit.
     Help,
 }
 
+/// Command-line options recognized by this crate.
+///
+/// Instances of this type are produced by [`parse_arguments`] and consumed by
+/// [`run`] to drive command selection and filtering.
 #[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Options {
+    /// Optional path to the Cargo manifest that should be inspected.
     pub manifest_path: Option<PathBuf>,
+    /// Explicit list of package names to include.
     pub packages: HashSet<String>,
+    /// List of package names to exclude.
     pub exclude_packages: HashSet<String>,
+    /// High-level command to execute.
     pub command: Option<Command>,
+    /// Whether to restrict processing to packages with a library target.
     pub only_packages_with_lib_target: bool,
+    /// Whether to hide cargo output and only show the final summary.
     pub silent: bool,
+    /// Whether to print more verbose information such as the full cargo command.
     pub verbose: bool,
+    /// Whether to treat warnings like errors for the summary and `--fail-fast`.
     pub pedantic: bool,
+    /// Whether to silence warnings from rustc and only show errors.
     pub errors_only: bool,
+    /// Whether to only list packages instead of all feature combinations.
     pub packages_only: bool,
+    /// Whether to stop processing after the first failing feature combination.
     pub fail_fast: bool,
 }
 
+/// Helper trait to provide simple argument parsing over `Vec<String>`.
 pub trait ArgumentParser {
+    /// Check whether an argument flag exists, either as a standalone flag or
+    /// in `--flag=value` form.
     fn contains(&self, arg: &str) -> bool;
+    /// Extract all occurrences of an argument and their values.
+    ///
+    /// When `has_value` is `true`, this matches `--flag value` and
+    /// `--flag=value` forms and returns the value part. When `has_value` is
+    /// `false`, it matches bare flags like `--flag`.
     fn get_all(&self, arg: &str, has_value: bool)
     -> Vec<(std::ops::RangeInclusive<usize>, String)>;
 }
@@ -94,11 +134,12 @@ impl ArgumentParser for Vec<String> {
     }
 }
 
+/// Abstraction over a Cargo workspace used by this crate.
 pub trait Workspace {
-    /// Returns the workspace configuration section for feature combinations.
+    /// Return the workspace configuration section for feature combinations.
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig>;
 
-    /// Returns the packages relevant for feature combinations.
+    /// Return the packages that should be considered for feature combinations.
     fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>>;
 }
 
@@ -188,8 +229,9 @@ impl Workspace for cargo_metadata::Metadata {
     }
 }
 
+/// Extension trait for [`cargo_metadata::Package`] used by this crate.
 pub trait Package {
-    /// Parses the config for this package if present.
+    /// Parse the configuration for this package if present.
     ///
     /// If the Cargo.toml manifest contains a configuration section,
     /// the latter is parsed.
@@ -198,10 +240,14 @@ pub trait Package {
     /// # Errors
     ///
     /// If the configuration in the manifest can not be parsed,
-    /// an Error is returned.
+    /// an error is returned.
     ///
     fn config(&self) -> eyre::Result<Config>;
+    /// Compute all feature combinations for this package based on the
+    /// provided [`Config`].
     fn feature_combinations<'a>(&'a self, config: &'a Config) -> Vec<Vec<&'a String>>;
+    /// Convert [`Package::feature_combinations`] into a list of comma-separated
+    /// feature strings suitable for passing to `cargo --features`.
     fn feature_matrix(&self, config: &Config) -> Vec<String>;
 }
 
@@ -371,6 +417,16 @@ fn generate_isolated_base_powerset<'a>(
         .collect()
 }
 
+/// Print a JSON feature matrix for the given packages to stdout.
+///
+/// The matrix is a JSON array of objects produced from each package's
+/// configuration and the feature combinations returned by
+/// [`Package::feature_matrix`].
+///
+/// # Errors
+///
+/// Returns an error if any configuration can not be parsed or serialization
+/// of the JSON matrix fails.
 pub fn print_feature_matrix(
     packages: &[&cargo_metadata::Package],
     pretty: bool,
@@ -414,6 +470,7 @@ pub fn print_feature_matrix(
     Ok(())
 }
 
+/// Build a [`ColorSpec`] with the given foreground color and bold setting.
 #[must_use]
 pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     let mut spec = ColorSpec::new();
@@ -422,6 +479,10 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     spec
 }
 
+/// Extract per-crate warning counts from cargo output.
+///
+/// The iterator yields the number of warnings for each compiled crate that
+/// matches the summary line produced by cargo.
 pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static WARNING_REGEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"warning: .* generated (\d+) warnings?").unwrap());
@@ -431,6 +492,10 @@ pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
         .map(|m| m.as_str().parse::<usize>().unwrap_or(0))
 }
 
+/// Extract per-crate error counts from cargo output.
+///
+/// The iterator yields the number of errors for each compiled crate that
+/// matches the summary line produced by cargo.
 pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static ERROR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap()
@@ -441,6 +506,10 @@ pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
         .map(|m| m.as_str().parse::<usize>().unwrap_or(1))
 }
 
+/// Print an aggregated summary for all executed feature combinations.
+///
+/// This function is used by [`run_cargo_command`] after all packages and
+/// feature sets have been processed.
 pub fn print_summary(
     summary: Vec<Summary>,
     mut stdout: termcolor::StandardStream,
@@ -553,6 +622,15 @@ fn print_package_cmd(
     }
 }
 
+/// Run a cargo command for all requested packages and feature combinations.
+///
+/// This function drives the main execution loop by spawning cargo for each
+/// feature set and collecting a [`Summary`] for every run.
+///
+/// # Errors
+///
+/// Returns an error if a cargo process can not be spawned or if IO operations
+/// fail while reading cargo's output.
 pub fn run_cargo_command(
     packages: &[&cargo_metadata::Package],
     mut cargo_args: Vec<&str>,
@@ -763,6 +841,7 @@ enum CargoSubcommand {
     Other,
 }
 
+/// Determine the cargo subcommand implied by the argument list.
 fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
     let args: HashSet<&str> = args.iter().map(AsRef::as_ref).collect();
     if args.contains("build") || args.contains("b") {
@@ -780,6 +859,15 @@ fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
     }
 }
 
+/// Parse command-line arguments for the `cargo-*` binary.
+///
+/// The returned [`Options`] drives workspace discovery and filtering, while
+/// the remaining `Vec<String>` contains the raw cargo arguments.
+///
+/// # Errors
+///
+/// Returns an error if the manifest path passed via `--manifest-path` does
+/// not exist or can not be canonicalized.
 pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     let mut args: Vec<String> = std::env::args_os()
         // Skip executable name
@@ -894,6 +982,14 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     Ok((options, args))
 }
 
+/// Run the cargo subcommand for all relevant feature combinations.
+///
+/// This is the main entry point used by the binaries in this crate.
+///
+/// # Errors
+///
+/// Returns an error if argument parsing fails or `cargo metadata` can not be
+/// executed successfully.
 pub fn run(bin_name: &str) -> eyre::Result<()> {
     color_eyre::install()?;
 
@@ -989,7 +1085,7 @@ mod test {
         init();
         let package = package_with_features(&["foo-c", "foo-a", "foo-b"])?;
         let config = Config::default();
-        let expected_combinations = vec![
+        let want = vec![
             vec![],
             vec!["foo-a"],
             vec!["foo-a", "foo-b"],
@@ -999,10 +1095,9 @@ mod test {
             vec!["foo-b", "foo-c"],
             vec!["foo-c"],
         ];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1018,7 +1113,7 @@ mod test {
             ],
             ..Default::default()
         };
-        let expected_combinations = vec![
+        let want = vec![
             vec![],
             vec!["bar-a"],
             vec!["bar-a", "bar-b"],
@@ -1027,10 +1122,9 @@ mod test {
             vec!["foo-a", "foo-b"],
             vec!["foo-b"],
         ];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1046,17 +1140,16 @@ mod test {
             ],
             ..Default::default()
         };
-        let expected_combinations = vec![
+        let want = vec![
             vec![],
             vec!["bar-a"],
             vec!["bar-a", "bar-b"],
             vec!["bar-b"],
             vec!["foo-a"],
         ];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1073,17 +1166,16 @@ mod test {
             exclude_features: HashSet::from(["bar-a".to_string()]),
             ..Default::default()
         };
-        let expected_combinations = vec![
+        let want = vec![
             vec![],
             vec!["bar-b"],
             vec!["foo-a"],
             vec!["foo-a", "foo-b"],
             vec!["foo-b"],
         ];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1100,11 +1192,10 @@ mod test {
             exclude_features: HashSet::from(["bar-a".to_string()]),
             ..Default::default()
         };
-        let expected_combinations = vec![vec![], vec!["bar-b"], vec!["foo-a"]];
+        let want = vec![vec![], vec!["bar-b"], vec!["foo-a"]];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1126,12 +1217,10 @@ mod test {
             ])],
             ..Default::default()
         };
-        let expected_combinations =
-            vec![vec![], vec!["bar-a", "car-a"], vec!["bar-b"], vec!["foo-a"]];
+        let want = vec![vec![], vec!["bar-a", "car-a"], vec!["bar-b"], vec!["foo-a"]];
+        let have = package.feature_combinations(&config);
 
-        let actual_combinations = package.feature_combinations(&config);
-
-        sim_assert_eq!(expected_combinations, actual_combinations);
+        sim_assert_eq!(have: have, want: want);
         Ok(())
     }
 
@@ -1145,8 +1234,8 @@ mod test {
             .workspace_members(vec![package.id.clone()])
             .build()?;
 
-        let packages = metadata.packages_for_fc()?;
-        sim_assert_eq!(packages, vec![&package]);
+        let have = metadata.packages_for_fc()?;
+        sim_assert_eq!(have: have, want: vec![&package]);
         Ok(())
     }
 
@@ -1165,8 +1254,8 @@ mod test {
             }))
             .build()?;
 
-        let packages = metadata.packages_for_fc()?;
-        assert!(packages.is_empty(), "expected no packages after exclusion");
+        let have = metadata.packages_for_fc()?;
+        assert!(have.is_empty(), "expected no packages after exclusion");
         Ok(())
     }
 
