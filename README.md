@@ -95,6 +95,15 @@ exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
 
+# Skip implicit features that correspond to optional dependencies from the
+# matrix.
+#
+# When enabled, the implicit features that Cargo generates for optional
+# dependencies (of the form `foo = ["dep:foo"]` in the feature graph) are
+# removed from the combinatorial matrix. This mirrors the behaviour of the
+# `skip_optional_dependencies` flag in the `cargo-all-features` crate.
+skip_optional_dependencies = true
+
 # Include features in the feature combination matrix
 include_features = ["feature-that-must-always-be-set"]
 
@@ -106,6 +115,33 @@ include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
 ```
+
+<details>
+<summary>Example: skipping optional dependency features</summary>
+
+```toml
+[features]
+default = []
+core = []
+cli = ["core"]
+
+[dependencies]
+tokio = { version = "1", optional = true }
+serde = { version = "1", optional = true }
+
+[package.metadata.cargo-feature-combinations]
+exclude_features = ["default"]
+skip_optional_dependencies = true
+```
+
+With this configuration, the feature matrix will only vary the `core` and
+`cli` features. The implicit `tokio` and `serde` features that correspond to
+optional dependencies are excluded from the matrix, avoiding a combinatorial
+explosion over integration features. If you still want to test specific
+combinations that include `tokio` or `serde`, you can list them explicitly in
+`include_feature_sets`.
+
+</details>
 
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
 

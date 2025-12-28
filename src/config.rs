@@ -16,6 +16,18 @@ pub struct Config {
     pub exclude_features: HashSet<String>,
     #[serde(default)]
     pub include_features: HashSet<String>,
+    /// When enabled, exclude implicit features that correspond to optional
+    /// dependencies from the feature combination matrix.
+    ///
+    /// This mirrors `cargo-all-features`: only the implicit features that
+    /// Cargo generates for optional dependencies (of the form
+    /// `foo = ["dep:foo"]` in the feature graph) are skipped. Other
+    /// user-defined features that happen to enable optional dependencies via
+    /// `dep:NAME` remain part of the matrix.
+    ///
+    /// By default this is `false` to preserve backwards-compatible behavior.
+    #[serde(default)]
+    pub skip_optional_dependencies: bool,
     /// Deprecated: kept for backwards compatibility. Prefer
     /// [`WorkspaceConfig::exclude_packages`] via
     /// `[workspace.metadata.cargo-feature-combinations].exclude_packages`.
