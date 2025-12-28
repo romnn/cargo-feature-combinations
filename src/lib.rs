@@ -1040,6 +1040,16 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
+    // Ignore `--workspace`. This tool already discovers the relevant workspace
+    // packages via `cargo metadata` and then runs cargo separately in each
+    // package's directory. Forwarding `--workspace` to those per-package
+    // invocations would re-enable workspace-level feature application and can
+    // cause spurious errors when some workspace members do not define a
+    // particular feature.
+    for (span, _) in args.get_all("--workspace", false) {
+        args.drain(span);
+    }
+
     Ok((options, args))
 }
 
