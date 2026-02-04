@@ -1,6 +1,8 @@
+//! Integration test ensuring large feature graphs error gracefully.
+
 use assert_fs::prelude::*;
 use cargo_feature_combinations::Package as _;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, OptionExt};
 use std::fmt::Write as _;
 
 #[test]
@@ -35,12 +37,13 @@ fn too_many_feature_configurations_errors_gracefully() -> eyre::Result<()> {
         .packages
         .iter()
         .find(|p| p.name == "example-many-features")
-        .expect("test package should exist");
+        .ok_or_eyre("test package should exist")?;
 
     let config = pkg.config()?;
     let err = pkg
         .feature_matrix(&config)
-        .expect_err("expected feature matrix computation to error for too many configurations");
+        .err()
+        .ok_or_eyre("expected feature matrix computation to error for too many configurations")?;
 
     assert!(
         err.to_string().contains("too many configurations"),

@@ -1,3 +1,5 @@
+//! `cargo-fc` binary entry point.
+
 use color_eyre::eyre;
 
 #[cfg(target_env = "musl")]

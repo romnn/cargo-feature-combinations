@@ -240,9 +240,18 @@ impl ArgumentParser for Vec<String> {
 /// Abstraction over a Cargo workspace used by this crate.
 pub trait Workspace {
     /// Return the workspace configuration section for feature combinations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workspace metadata configuration can not be
+    /// deserialized.
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig>;
 
     /// Return the packages that should be considered for feature combinations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if per-package configuration can not be parsed.
     fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>>;
 }
 
@@ -348,10 +357,19 @@ pub trait Package {
     fn config(&self) -> eyre::Result<Config>;
     /// Compute all feature combinations for this package based on the
     /// provided [`Config`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if feature combinations can not be computed, e.g. when
+    /// the package declares too many features.
     fn feature_combinations<'a>(&'a self, config: &'a Config)
     -> eyre::Result<Vec<Vec<&'a String>>>;
     /// Convert [`Package::feature_combinations`] into a list of comma-separated
     /// feature strings suitable for passing to `cargo --features`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`Package::feature_combinations`] fails.
     fn feature_matrix(&self, config: &Config) -> eyre::Result<Vec<String>>;
 }
 
@@ -720,7 +738,14 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
 /// matches the summary line produced by cargo.
 pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static WARNING_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"warning: .* generated (\d+) warnings?").unwrap());
+        LazyLock::new(|| {
+            #[allow(
+                clippy::expect_used,
+                reason = "hard-coded regex pattern is expected to be valid"
+            )]
+            Regex::new(r"warning: .* generated (\d+) warnings?")
+                .expect("valid warning regex")
+        });
     WARNING_REGEX
         .captures_iter(output)
         .filter_map(|cap| cap.get(1))
@@ -733,7 +758,12 @@ pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 /// matches the summary line produced by cargo.
 pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static ERROR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?").unwrap()
+        #[allow(
+            clippy::expect_used,
+            reason = "hard-coded regex pattern is expected to be valid"
+        )]
+        Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?")
+            .expect("valid error regex")
     });
     ERROR_REGEX
         .captures_iter(output)
@@ -1311,7 +1341,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
     match options.command {
-        Some(Command::Version | Command::Help) => unreachable!(),
+        Some(Command::Help | Command::Version) => Ok(()),
         Some(Command::FeatureMatrix { pretty }) => {
             match print_feature_matrix(&packages, pretty, options.packages_only) {
                 Ok(()) => Ok(()),

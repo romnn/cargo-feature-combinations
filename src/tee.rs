@@ -19,7 +19,13 @@ impl<R, W> Reader<R, W> {
 impl<R: Read, W: Write> Read for Reader<R, W> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let n = self.read.read(buf)?;
-        self.output.write_all(&buf[..n])?;
+        let out = buf.get(..n).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "reader reported more bytes read than buffer length",
+            )
+        })?;
+        self.output.write_all(out)?;
         if self.force_flush {
             self.output.flush()?;
         }

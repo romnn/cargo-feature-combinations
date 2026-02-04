@@ -1,7 +1,9 @@
+//! Integration tests for skipping implicit optional dependency features.
+
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
 use cargo_feature_combinations::Package as _;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 
 fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
@@ -60,7 +62,7 @@ fn feature_sets_for_settings(settings: &str) -> eyre::Result<Vec<Vec<String>>> {
         .packages
         .iter()
         .find(|p| p.name == "testdummy")
-        .expect("test package should exist");
+        .ok_or_eyre("test package should exist")?;
 
     let config = pkg.config()?;
     let matrix = pkg.feature_matrix(&config)?;
