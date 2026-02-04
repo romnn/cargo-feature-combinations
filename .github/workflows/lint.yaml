@@ -20,7 +20,10 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - run: |
@@ -30,6 +33,8 @@ jobs:
         run: task audit --output group --output-group-error-only
       - name: Check for unused dependencies
         run: task unused-dependencies --output group --output-group-error-only
+        env:
+          RUSTUP_TOOLCHAIN: nightly
       - name: Lint
         run: task lint --output group --output-group-error-only
 
