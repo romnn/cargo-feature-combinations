@@ -1109,9 +1109,9 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         }
         None => {
             if cargo_subcommand(cargo_args.as_slice()) == CargoSubcommand::Other {
-                eyre::bail!(
-                    "`cargo {bin_name}` only works for cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
-                )
+                eprintln!(
+                    "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
+                );
             }
             run_cargo_command(&packages, cargo_args, &options)
         }
