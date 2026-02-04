@@ -14,8 +14,19 @@ pub struct Config {
     /// Formerly named `denylist`
     #[serde(default)]
     pub exclude_features: HashSet<String>,
+    /// Include these features in every generated feature combination.
+    ///
+    /// This does not restrict which features are varied for the combinatorial
+    /// matrix. To restrict the matrix to a specific allowlist of features, use
+    /// [`Config::only_features`].
     #[serde(default)]
     pub include_features: HashSet<String>,
+    /// Only consider these features when generating the combinatorial matrix.
+    ///
+    /// When empty, all package features are considered. Non-existent features
+    /// are ignored.
+    #[serde(default)]
+    pub only_features: HashSet<String>,
     /// When enabled, exclude implicit features that correspond to optional
     /// dependencies from the feature combination matrix.
     ///

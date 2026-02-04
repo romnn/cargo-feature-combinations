@@ -48,6 +48,20 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "deny"
+indexing_slicing = "deny"
+
 [features]
 default = []
 
@@ -82,3 +96,4 @@ similar-asserts = "1"
 semver = "1"
 cargo_metadata = { version = "0.23", features = ["builder"] }
 assert_fs = "1"
+indoc = "2"

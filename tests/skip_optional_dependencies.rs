@@ -11,7 +11,7 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
     for dep in ["fixDepA", "optDepB", "optDepC"] {
         let dep_dir = temp.child(dep);
         dep_dir.child("Cargo.toml").write_str(&format!(
-            "[package]\nname = \"{dep}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
+            "[package]\nname = \"{dep}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
         ))?;
         dep_dir
             .child("src/lib.rs")
@@ -20,25 +20,27 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
 
     // Root crate that uses optional dependencies and a small feature graph.
     let cargotoml = temp.child("Cargo.toml");
-    cargotoml.write_str(&format!(
-        r#"[package]
-name = "testdummy"
-version = "0.1.0"
-edition = "2021"
+    cargotoml.write_str(&indoc::formatdoc!(
+        r#"
+            [package]
+            name = "testdummy"
+            version = "0.1.0"
+            edition = "2024"
 
-[features]
-A = []
-B = ["A"]
-C = ["dep:optDepC"]
+            [features]
+            A = []
+            B = ["A"]
+            C = ["dep:optDepC"]
 
-[dependencies]
-fixDepA = {{ path = "fixDepA" }}
-oDepB = {{ path = "optDepB", package = "optDepB", optional = true }}
-optDepC = {{ path = "optDepC", optional = true }}
+            [dependencies]
+            fixDepA = {{ path = "fixDepA" }}
+            oDepB = {{ path = "optDepB", package = "optDepB", optional = true }}
+            optDepC = {{ path = "optDepC", optional = true }}
 
-[package.metadata.cargo-feature-combinations]
-{settings}
-"#
+            [package.metadata.cargo-feature-combinations]
+            {settings}
+        "#,
+        settings = settings,
     ))?;
 
     temp.child("src/lib.rs").write_str("pub fn main() {}\n")?;
@@ -61,7 +63,7 @@ fn feature_sets_for_settings(settings: &str) -> eyre::Result<Vec<Vec<String>>> {
         .expect("test package should exist");
 
     let config = pkg.config()?;
-    let matrix = pkg.feature_matrix(&config);
+    let matrix = pkg.feature_matrix(&config)?;
 
     // Normalize into sorted vectors of feature names per combination.
     let mut combos: Vec<Vec<String>> = matrix
@@ -104,9 +106,9 @@ fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
     // Mirror the `simple` test from cargo-all-features/tests/settings.rs, but
     // explicitly exclude the implicit `default` feature using
     // `exclude_features` so that the remaining behaviour matches.
-    let settings = r#"
+    let settings = indoc::indoc! {r#"
         exclude_features = ["default"]
-    "#;
+    "#};
 
     let combos = feature_sets_for_settings(settings)?;
 
@@ -137,10 +139,10 @@ fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
 #[test]
 fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<()> {
     // Mirror the `skip_opt_deps` test from cargo-all-features/tests/settings.rs.
-    let settings = r#"
+    let settings = indoc::indoc! {r#"
         exclude_features = ["default"]
         skip_optional_dependencies = true
-    "#;
+    "#};
 
     let combos = feature_sets_for_settings(settings)?;
 
@@ -162,11 +164,11 @@ fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<(
 
 #[test]
 fn optional_dependency_features_can_be_added_back_via_include_sets() -> eyre::Result<()> {
-    let settings = r#"
+    let settings = indoc::indoc! {r#"
         exclude_features = ["default"]
         skip_optional_dependencies = true
         include_feature_sets = [["oDepB"], ["C", "A"]]
-    "#;
+    "#};
 
     let combos = feature_sets_for_settings(settings)?;
 

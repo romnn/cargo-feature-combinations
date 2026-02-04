@@ -105,7 +105,18 @@ exclude_features = ["default", "full"] # formerly "denylist"
 skip_optional_dependencies = true
 
 # Include features in the feature combination matrix
+#
+# These features will be added to every generated feature combination.
+# This does not restrict which features are varied for the combinatorial
+# matrix. To restrict the matrix to a specific allowlist of features, use
+# `only_features`.
 include_features = ["feature-that-must-always-be-set"]
+
+# Only consider these features when generating the combinatorial matrix.
+#
+# When set, features not listed here are ignored for the combinatorial matrix.
+# When empty, all package features are considered.
+only_features = ["default", "full"]
 
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.

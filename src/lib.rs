@@ -1,6 +1,3 @@
-#![allow(clippy::missing_errors_doc)]
-#![warn(missing_docs)]
-
 //! Run cargo commands for all feature combinations across a workspace.
 //!
 //! This crate powers the `cargo-fc` and `cargo-feature-combinations` binaries.
@@ -15,6 +12,7 @@ use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
@@ -28,6 +26,111 @@ static CYAN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Cyan, true
 static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true));
 static YELLOW: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Yellow, true));
 static GREEN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Green, true));
+
+const MAX_FEATURE_COMBINATIONS: u128 = 100_000;
+
+/// Errors that can occur while generating feature combinations.
+#[derive(Debug)]
+pub enum FeatureCombinationError {
+    /// The package declares too many features, which would result in more
+    /// combinations than this tool is willing to generate.
+    TooManyConfigurations {
+        /// Package name from Cargo metadata.
+        package: String,
+        /// Number of features considered for combination generation.
+        num_features: usize,
+        /// Total number of configurations implied by `num_features`, if bounded.
+        num_configurations: Option<u128>,
+        /// Maximum number of configurations allowed before failing.
+        limit: u128,
+    },
+}
+
+impl fmt::Display for FeatureCombinationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooManyConfigurations {
+                package,
+                num_features,
+                num_configurations,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "too many configurations for package `{}`: {} feature(s) would produce {} combinations (limit: {})",
+                    package,
+                    num_features,
+                    num_configurations
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "an unbounded number of".to_string()),
+                    limit
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for FeatureCombinationError {}
+
+fn print_feature_combination_error(err: &FeatureCombinationError) {
+    let mut stderr = StandardStream::stderr(ColorChoice::Auto);
+
+    let _ = stderr.set_color(&RED);
+    let _ = write!(&mut stderr, "error");
+    let _ = stderr.reset();
+    let _ = writeln!(&mut stderr, ": feature matrix generation failed");
+
+    match err {
+        FeatureCombinationError::TooManyConfigurations {
+            package,
+            num_features,
+            num_configurations,
+            limit,
+        } => {
+            let _ = stderr.set_color(&YELLOW);
+            let _ = writeln!(&mut stderr, "  reason: too many configurations");
+            let _ = stderr.reset();
+
+            let _ = stderr.set_color(&CYAN);
+            let _ = write!(&mut stderr, "  package:");
+            let _ = stderr.reset();
+            let _ = writeln!(&mut stderr, " {package}");
+
+            let _ = stderr.set_color(&CYAN);
+            let _ = write!(&mut stderr, "  features considered:");
+            let _ = stderr.reset();
+            let _ = writeln!(&mut stderr, " {num_features}");
+
+            let _ = stderr.set_color(&CYAN);
+            let _ = write!(&mut stderr, "  combinations:");
+            let _ = stderr.reset();
+            let _ = writeln!(
+                &mut stderr,
+                " {}",
+                num_configurations
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unbounded".to_string())
+            );
+
+            let _ = stderr.set_color(&CYAN);
+            let _ = write!(&mut stderr, "  limit:");
+            let _ = stderr.reset();
+            let _ = writeln!(&mut stderr, " {limit}");
+
+            let _ = stderr.set_color(&GREEN);
+            let _ = writeln!(&mut stderr, "  hint:");
+            let _ = stderr.reset();
+            let _ = writeln!(
+                &mut stderr,
+                "    Consider restricting the matrix using [package.metadata.cargo-feature-combinations].only_features"
+            );
+            let _ = writeln!(
+                &mut stderr,
+                "    or splitting features into isolated_feature_sets, or excluding features via exclude_features."
+            );
+        }
+    }
+}
 
 /// Summary of the outcome for running a cargo command on a single feature set.
 #[derive(Debug)]
@@ -245,10 +348,11 @@ pub trait Package {
     fn config(&self) -> eyre::Result<Config>;
     /// Compute all feature combinations for this package based on the
     /// provided [`Config`].
-    fn feature_combinations<'a>(&'a self, config: &'a Config) -> Vec<Vec<&'a String>>;
+    fn feature_combinations<'a>(&'a self, config: &'a Config)
+    -> eyre::Result<Vec<Vec<&'a String>>>;
     /// Convert [`Package::feature_combinations`] into a list of comma-separated
     /// feature strings suitable for passing to `cargo --features`.
-    fn feature_matrix(&self, config: &Config) -> Vec<String>;
+    fn feature_matrix(&self, config: &Config) -> eyre::Result<Vec<String>>;
 }
 
 impl Package for cargo_metadata::Package {
@@ -293,7 +397,10 @@ impl Package for cargo_metadata::Package {
         Ok(config)
     }
 
-    fn feature_combinations<'a>(&'a self, config: &'a Config) -> Vec<Vec<&'a String>> {
+    fn feature_combinations<'a>(
+        &'a self,
+        config: &'a Config,
+    ) -> eyre::Result<Vec<Vec<&'a String>>> {
         // Derive the effective exclude set for this package.
         //
         // When `skip_optional_dependencies` is enabled, extend the configured
@@ -351,17 +458,21 @@ impl Package for cargo_metadata::Package {
         // - or from isolated sets, minus excluded features
         let base_powerset = if config.isolated_feature_sets.is_empty() {
             generate_global_base_powerset(
+                &self.name,
                 &self.features,
                 &effective_exclude_features,
                 &config.include_features,
-            )
+                &config.only_features,
+            )?
         } else {
             generate_isolated_base_powerset(
+                &self.name,
                 &self.features,
                 &config.isolated_feature_sets,
                 &effective_exclude_features,
                 &config.include_features,
-            )
+                &config.only_features,
+            )?
         };
 
         // Filter out feature sets that contain skip sets
@@ -393,19 +504,50 @@ impl Package for cargo_metadata::Package {
         }
 
         // Re-collect everything into a vector of vectors
-        filtered_powerset
+        Ok(filtered_powerset
             .into_iter()
             .map(|set| set.into_iter().sorted().collect::<Vec<_>>())
             .sorted()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>())
     }
 
-    fn feature_matrix(&self, config: &Config) -> Vec<String> {
-        self.feature_combinations(config)
+    fn feature_matrix(&self, config: &Config) -> eyre::Result<Vec<String>> {
+        Ok(self
+            .feature_combinations(config)?
             .into_iter()
             .map(|features| features.iter().join(","))
-            .collect()
+            .collect())
     }
+}
+
+fn checked_num_combinations(num_features: usize) -> Option<u128> {
+    if num_features >= u128::BITS as usize {
+        return None;
+    }
+    let shift: u32 = num_features.try_into().ok()?;
+    Some(1u128 << shift)
+}
+
+fn ensure_within_combination_limit(
+    package_name: &str,
+    num_features: usize,
+) -> Result<(), FeatureCombinationError> {
+    let num_configurations = checked_num_combinations(num_features);
+    let exceeds = match num_configurations {
+        Some(n) => n > MAX_FEATURE_COMBINATIONS,
+        None => true,
+    };
+
+    if exceeds {
+        return Err(FeatureCombinationError::TooManyConfigurations {
+            package: package_name.to_string(),
+            num_features,
+            num_configurations,
+            limit: MAX_FEATURE_COMBINATIONS,
+        });
+    }
+
+    Ok(())
 }
 
 /// Generates the **global** base [powerset](Itertools::powerset) of features.
@@ -415,15 +557,24 @@ impl Package for cargo_metadata::Package {
 /// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
 /// pack to the `package_features`.
 fn generate_global_base_powerset<'a>(
+    package_name: &str,
     package_features: &'a BTreeMap<String, Vec<String>>,
     exclude_features: &HashSet<String>,
     include_features: &'a HashSet<String>,
-) -> BTreeSet<BTreeSet<&'a String>> {
-    package_features
+    only_features: &HashSet<String>,
+) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
+    let features = package_features
         .keys()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .filter(|ft| !exclude_features.contains(*ft))
+        .filter(|ft| only_features.is_empty() || only_features.contains(*ft))
+        .collect::<BTreeSet<_>>();
+
+    ensure_within_combination_limit(package_name, features.len())?;
+
+    Ok(features
+        .into_iter()
         .powerset()
         .map(|combination| {
             combination
@@ -431,7 +582,7 @@ fn generate_global_base_powerset<'a>(
                 .chain(include_features)
                 .collect::<BTreeSet<&'a String>>()
         })
-        .collect()
+        .collect())
 }
 
 /// Generates the **isolated** base [powerset](Itertools::powerset) of features.
@@ -442,21 +593,53 @@ fn generate_global_base_powerset<'a>(
 /// The returned powerset is a two-level [`BTreeSet`], with the strings pointing
 /// pack to the `package_features`.
 fn generate_isolated_base_powerset<'a>(
+    package_name: &str,
     package_features: &'a BTreeMap<String, Vec<String>>,
     isolated_feature_sets: &[HashSet<String>],
     exclude_features: &HashSet<String>,
     include_features: &'a HashSet<String>,
-) -> BTreeSet<BTreeSet<&'a String>> {
+    only_features: &HashSet<String>,
+) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
     // Collect known package features for easy querying
     let known_features = package_features.keys().collect::<HashSet<_>>();
 
-    isolated_feature_sets
+    let mut worst_case_total: u128 = 0;
+    for isolated_feature_set in isolated_feature_sets {
+        let num_features = isolated_feature_set
+            .iter()
+            .filter(|ft| known_features.contains(*ft))
+            .filter(|ft| !exclude_features.contains(*ft))
+            .filter(|ft| only_features.is_empty() || only_features.contains(*ft))
+            .count();
+
+        let Some(n) = checked_num_combinations(num_features) else {
+            return Err(FeatureCombinationError::TooManyConfigurations {
+                package: package_name.to_string(),
+                num_features,
+                num_configurations: None,
+                limit: MAX_FEATURE_COMBINATIONS,
+            });
+        };
+
+        worst_case_total = worst_case_total.saturating_add(n);
+        if worst_case_total > MAX_FEATURE_COMBINATIONS {
+            return Err(FeatureCombinationError::TooManyConfigurations {
+                package: package_name.to_string(),
+                num_features,
+                num_configurations: Some(worst_case_total),
+                limit: MAX_FEATURE_COMBINATIONS,
+            });
+        }
+    }
+
+    Ok(isolated_feature_sets
         .iter()
         .flat_map(|isolated_feature_set| {
             isolated_feature_set
                 .iter()
                 .filter(|ft| known_features.contains(*ft)) // remove non-existent features
                 .filter(|ft| !exclude_features.contains(*ft)) // remove features from denylist
+                .filter(|ft| only_features.is_empty() || only_features.contains(*ft))
                 .powerset()
                 .map(|combination| {
                     combination
@@ -466,7 +649,7 @@ fn generate_isolated_base_powerset<'a>(
                         .collect::<BTreeSet<_>>()
                 })
         })
-        .collect()
+        .collect())
 }
 
 /// Print a JSON feature matrix for the given packages to stdout.
@@ -491,7 +674,7 @@ pub fn print_feature_matrix(
             let features = if packages_only {
                 vec!["default".to_string()]
             } else {
-                pkg.feature_matrix(&config)
+                pkg.feature_matrix(&config)?
             };
             Ok::<_, eyre::Report>((pkg.name.clone(), config, features))
         })
@@ -710,7 +893,7 @@ pub fn run_cargo_command(
     for package in packages {
         let config = package.config()?;
 
-        for features in package.feature_combinations(&config) {
+        for features in package.feature_combinations(&config)? {
             // We set the command working dir to the package manifest parent dir.
             // This works well for now, but one could also consider `--manifest-path` or `-p`
             let Some(working_dir) = package.manifest_path.parent() else {
@@ -856,6 +1039,20 @@ exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
+
+# Include features in the feature combination matrix
+#
+# These features will be added to every generated feature combination.
+# This does not restrict which features are varied for the combinatorial
+# matrix. To restrict the matrix to a specific allowlist of features, use
+# `only_features`.
+include_features = ["feature-that-must-always-be-set"]
+
+# Only consider these features when generating the combinatorial matrix.
+#
+# When set, features not listed here are ignored for the combinatorial matrix.
+# When empty, all package features are considered.
+only_features = ["default", "full"]
 
 # Skip implicit features that correspond to optional dependencies from the
 # matrix.
@@ -1084,6 +1281,17 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let metadata = cmd.exec()?;
     let mut packages = metadata.packages_for_fc()?;
 
+    // When `--manifest-path` points to a workspace member, `cargo metadata`
+    // still returns the entire workspace. Unless the user explicitly selected
+    // packages via `-p/--package`, default to only processing the root package
+    // resolved by Cargo for the given manifest.
+    if options.manifest_path.is_some()
+        && options.packages.is_empty()
+        && let Some(root) = metadata.root_package()
+    {
+        packages.retain(|p| p.id == root.id);
+    }
+
     // Filter excluded packages via CLI arguments
     packages.retain(|p| !options.exclude_packages.contains(p.name.as_str()));
 
@@ -1105,7 +1313,16 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     match options.command {
         Some(Command::Version | Command::Help) => unreachable!(),
         Some(Command::FeatureMatrix { pretty }) => {
-            print_feature_matrix(&packages, pretty, options.packages_only)
+            match print_feature_matrix(&packages, pretty, options.packages_only) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
+                        print_feature_combination_error(e);
+                        process::exit(2);
+                    }
+                    Err(err)
+                }
+            }
         }
         None => {
             if cargo_subcommand(cargo_args.as_slice()) == CargoSubcommand::Other {
@@ -1113,7 +1330,16 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                     "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
                 );
             }
-            run_cargo_command(&packages, cargo_args, &options)
+            match run_cargo_command(&packages, cargo_args, &options) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
+                        print_feature_combination_error(e);
+                        process::exit(2);
+                    }
+                    Err(err)
+                }
+            }
         }
     }
 }
@@ -1166,7 +1392,24 @@ mod test {
             vec!["foo-b", "foo-c"],
             vec!["foo-c"],
         ];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_only_features() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo", "bar", "baz"])?;
+        let config = Config {
+            exclude_features: HashSet::from(["default".to_string()]),
+            only_features: HashSet::from(["foo".to_string(), "bar".to_string()]),
+            ..Default::default()
+        };
+
+        let want = vec![vec![], vec!["bar"], vec!["bar", "foo"], vec!["foo"]];
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -1193,7 +1436,7 @@ mod test {
             vec!["foo-a", "foo-b"],
             vec!["foo-b"],
         ];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -1218,7 +1461,7 @@ mod test {
             vec!["bar-b"],
             vec!["foo-a"],
         ];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -1244,7 +1487,7 @@ mod test {
             vec!["foo-a", "foo-b"],
             vec!["foo-b"],
         ];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -1264,7 +1507,7 @@ mod test {
             ..Default::default()
         };
         let want = vec![vec![], vec!["bar-b"], vec!["foo-a"]];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -1289,7 +1532,7 @@ mod test {
             ..Default::default()
         };
         let want = vec![vec![], vec!["bar-a", "car-a"], vec!["bar-b"], vec!["foo-a"]];
-        let have = package.feature_combinations(&config);
+        let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())

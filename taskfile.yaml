@@ -33,10 +33,15 @@ tasks:
       # pretter-ignore
       - >-
         docker run --rm
+        -e "HOST_UID=$(id -u)"
+        -e "HOST_GID=$(id -g)"
         -v "${PWD}:/workspace"
         -w /workspace
         ghcr.io/rust-cross/cargo-zigbuild
-        bash -c './release.sh && goreleaser build --snapshot --clean'
+        bash -c 'set -euo pipefail;
+        fix_perms() { for d in target target-goreleaser goreleaser-dist; do [ -e "$d" ] && chown -R "${HOST_UID}:${HOST_GID}" "$d" || true; done; };
+        trap fix_perms EXIT;
+        ./release.sh && goreleaser build --snapshot --clean'
 
   release:
     desc: "release using goreleaser"
@@ -46,10 +51,15 @@ tasks:
         docker run --rm
         -e "GITHUB_TOKEN=${GITHUB_TOKEN}"
         -e "TAP_GITHUB_TOKEN=${TAP_GITHUB_TOKEN}"
+        -e "HOST_UID=$(id -u)"
+        -e "HOST_GID=$(id -g)"
         -v "${PWD}:/workspace"
         -w /workspace
         ghcr.io/rust-cross/cargo-zigbuild
-        bash -c './release.sh && goreleaser release --clean'
+        bash -c 'set -euo pipefail;
+        fix_perms() { for d in target target-goreleaser goreleaser-dist; do [ -e "$d" ] && chown -R "${HOST_UID}:${HOST_GID}" "$d" || true; done; };
+        trap fix_perms EXIT;
+        ./release.sh && goreleaser release --clean'
 
   typos:
     desc: "check repository for typos"
