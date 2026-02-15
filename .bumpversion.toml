@@ -1,5 +1,5 @@
 [tool.bumpversion]
-current_version = "0.0.45"
+current_version = "0.0.46"
 commit = true
 tag = true
 pre_commit_hooks = [
