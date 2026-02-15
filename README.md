@@ -92,6 +92,11 @@ isolated_feature_sets = [
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
+# To exclude only the empty feature set from the matrix, you can either enable
+# `no_empty_feature_set = true` or explicitly list an empty set here:
+#
+# exclude_feature_sets = [[]]
+
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
 
@@ -125,6 +130,20 @@ only_features = ["default", "full"]
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
+
+# Allow only the listed feature sets.
+#
+# When this list is non-empty, the feature matrix will consist exactly of the
+# configured sets (after dropping non-existent features). No powerset is
+# generated.
+allow_feature_sets = [
+    ["hydrate"],
+    ["ssr"],
+]
+
+# When enabled, never include the empty feature set (no `--features`), even if
+# it would otherwise be generated.
+no_empty_feature_set = true
 ```
 
 <details>

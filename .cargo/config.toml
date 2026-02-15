@@ -1,0 +1,3 @@
+[alias]
+lint = "clippy --all-targets --no-deps"
+fixit = "clippy --fix --allow-dirty --all-targets --no-deps"

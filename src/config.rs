@@ -51,6 +51,10 @@ pub struct Config {
     #[serde(default)]
     pub include_feature_sets: Vec<HashSet<String>>,
     #[serde(default)]
+    pub allow_feature_sets: Vec<HashSet<String>>,
+    #[serde(default)]
+    pub no_empty_feature_set: bool,
+    #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
     #[serde(flatten)]
     pub deprecated: DeprecatedConfig,

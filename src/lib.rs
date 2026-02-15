@@ -419,6 +419,42 @@ impl Package for cargo_metadata::Package {
         &'a self,
         config: &'a Config,
     ) -> eyre::Result<Vec<Vec<&'a String>>> {
+        // Short-circuit: if an explicit allowlist of feature sets is configured,
+        // interpret it as the complete matrix.
+        //
+        // This is intentionally *not* combined with the normal powerset-based
+        // generation and its filters: the user is declaring the exact sets they
+        // care about (e.g. SSR vs hydrate), and we should not implicitly add
+        // `[]` or any other combinations.
+        if !config.allow_feature_sets.is_empty() {
+            let mut allowed = config
+                .allow_feature_sets
+                .iter()
+                .map(|proposed_allowed_set| {
+                    // Normalize to this package by dropping unknown feature
+                    // names and switching to references into `self.features`.
+                    proposed_allowed_set
+                        .iter()
+                        .filter_map(|maybe_feature| {
+                            self.features.get_key_value(maybe_feature).map(|(k, _v)| k)
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+                .collect::<BTreeSet<_>>();
+
+            if config.no_empty_feature_set {
+                // In exact-matrix mode, `[]` is only included if explicitly
+                // listed. This option makes it easy to forbid `[]` entirely.
+                allowed.retain(|set| !set.is_empty());
+            }
+
+            return Ok(allowed
+                .into_iter()
+                .map(|set| set.into_iter().sorted().collect::<Vec<_>>())
+                .sorted()
+                .collect::<Vec<_>>());
+        }
+
         // Derive the effective exclude set for this package.
         //
         // When `skip_optional_dependencies` is enabled, extend the configured
@@ -498,11 +534,21 @@ impl Package for cargo_metadata::Package {
             .into_iter()
             .filter(|feature_set| {
                 !config.exclude_feature_sets.iter().any(|skip_set| {
-                    // Remove feature sets containing any of the skip sets
-                    skip_set
-                        .iter()
-                        // Skip set is contained when all its features are contained
-                        .all(|skip_feature| feature_set.contains(skip_feature))
+                    if skip_set.is_empty() {
+                        // Special-case: an empty skip set means "exclude only the empty
+                        // feature set".
+                        //
+                        // Without this, the usual "all()" subset test would treat an empty
+                        // set as contained in every feature set (vacuously true), and thus
+                        // exclude *everything*.
+                        feature_set.is_empty()
+                    } else {
+                        // Remove feature sets containing any of the skip sets
+                        skip_set
+                            .iter()
+                            // Skip set is contained when all its features are contained
+                            .all(|skip_feature| feature_set.contains(skip_feature))
+                    }
                 })
             })
             .collect::<BTreeSet<_>>();
@@ -519,6 +565,11 @@ impl Package for cargo_metadata::Package {
 
             // This exact combination may now be empty, but empty combination is always added anyway
             filtered_powerset.insert(exact_combination);
+        }
+
+        if config.no_empty_feature_set {
+            // When enabled, drop the empty feature set (`[]`) from the final matrix.
+            filtered_powerset.retain(|set| !set.is_empty());
         }
 
         // Re-collect everything into a vector of vectors
@@ -737,15 +788,13 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
 /// The iterator yields the number of warnings for each compiled crate that
 /// matches the summary line produced by cargo.
 pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
-    static WARNING_REGEX: LazyLock<Regex> =
-        LazyLock::new(|| {
-            #[allow(
-                clippy::expect_used,
-                reason = "hard-coded regex pattern is expected to be valid"
-            )]
-            Regex::new(r"warning: .* generated (\d+) warnings?")
-                .expect("valid warning regex")
-        });
+    static WARNING_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+        #[allow(
+            clippy::expect_used,
+            reason = "hard-coded regex pattern is expected to be valid"
+        )]
+        Regex::new(r"warning: .* generated (\d+) warnings?").expect("valid warning regex")
+    });
     WARNING_REGEX
         .captures_iter(output)
         .filter_map(|cap| cap.get(1))
@@ -1067,6 +1116,11 @@ isolated_feature_sets = [
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
+# To exclude only the empty feature set from the matrix, you can either enable
+# `no_empty_feature_set = true` or explicitly list an empty set here:
+#
+# exclude_feature_sets = [[]]
+
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
 
@@ -1100,6 +1154,20 @@ skip_optional_dependencies = true
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
+
+# Allow only the listed feature sets.
+#
+# When this list is non-empty, the feature matrix will consist exactly of the
+# configured sets (after dropping non-existent features). No powerset is
+# generated.
+allow_feature_sets = [
+    ["hydrate"],
+    ["ssr"],
+]
+
+# When enabled, never include the empty feature set (no `--features`), even if
+# it would otherwise be generated.
+no_empty_feature_set = true
 ```
 
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
@@ -1562,6 +1630,94 @@ mod test {
             ..Default::default()
         };
         let want = vec![vec![], vec!["bar-a", "car-a"], vec!["bar-b"], vec!["foo-a"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_allow_feature_sets_exact() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["hydrate", "ssr", "other"])?;
+        let config = Config {
+            allow_feature_sets: vec![
+                HashSet::from(["ssr".to_string()]),
+                HashSet::from(["hydrate".to_string()]),
+            ],
+            ..Default::default()
+        };
+
+        let want = vec![vec!["hydrate"], vec!["ssr"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_allow_feature_sets_ignores_other_options() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["hydrate", "ssr"])?;
+        let config = Config {
+            allow_feature_sets: vec![HashSet::from(["hydrate".to_string()])],
+            exclude_features: HashSet::from(["hydrate".to_string()]),
+            exclude_feature_sets: vec![HashSet::from(["hydrate".to_string()])],
+            include_feature_sets: vec![HashSet::from(["ssr".to_string()])],
+            only_features: HashSet::from(["ssr".to_string()]),
+            ..Default::default()
+        };
+
+        let want = vec![vec!["hydrate"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_no_empty_feature_set_filters_generated_empty() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo", "bar"])?;
+        let config = Config {
+            no_empty_feature_set: true,
+            ..Default::default()
+        };
+
+        let want = vec![vec!["bar"], vec!["bar", "foo"], vec!["foo"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_no_empty_feature_set_filters_included_empty() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo"])?;
+        let config = Config {
+            include_feature_sets: vec![HashSet::new()],
+            no_empty_feature_set: true,
+            ..Default::default()
+        };
+
+        let want = vec![vec!["foo"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_exclude_empty_feature_set_only() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo", "bar"])?;
+        let config = Config {
+            exclude_feature_sets: vec![HashSet::new()],
+            ..Default::default()
+        };
+
+        let want = vec![vec!["bar"], vec!["bar", "foo"], vec!["foo"]];
         let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
