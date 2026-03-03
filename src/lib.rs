@@ -4,10 +4,15 @@
 //! The main entry point for consumers is [`run`], which parses CLI arguments
 //! and dispatches the requested command.
 
-mod config;
-mod tee;
+pub mod cfg_eval;
+pub mod config;
+pub mod target;
+pub mod tee;
 
+use crate::cfg_eval::RustcCfgEvaluator;
 use crate::config::{Config, WorkspaceConfig};
+use crate::target::{RustcTargetDetector, TargetDetector, TargetTriple};
+
 use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use regex::Regex;
@@ -736,10 +741,24 @@ pub fn print_feature_matrix(
     pretty: bool,
     packages_only: bool,
 ) -> eyre::Result<()> {
+    let detector = RustcTargetDetector;
+    let target = detector.detect_target(&Vec::new())?;
+    let mut evaluator = RustcCfgEvaluator::default();
+    print_feature_matrix_for_target(packages, pretty, packages_only, &target, &mut evaluator)
+}
+
+fn print_feature_matrix_for_target(
+    packages: &[&cargo_metadata::Package],
+    pretty: bool,
+    packages_only: bool,
+    target: &TargetTriple,
+    evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
+) -> eyre::Result<()> {
     let per_package_features = packages
         .iter()
         .map(|pkg| {
-            let config = pkg.config()?;
+            let base_config = pkg.config()?;
+            let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
             let features = if packages_only {
                 vec!["default".to_string()]
             } else {
@@ -947,8 +966,23 @@ fn print_package_cmd(
 /// fail while reading cargo's output.
 pub fn run_cargo_command(
     packages: &[&cargo_metadata::Package],
+    cargo_args: Vec<&str>,
+    options: &Options,
+) -> eyre::Result<()> {
+    // Public API: if called directly, resolve config for the host target.
+    let detector = RustcTargetDetector;
+    let cargo_args_owned: Vec<String> = cargo_args.iter().map(|s| (*s).to_string()).collect();
+    let target = detector.detect_target(&cargo_args_owned)?;
+    let mut evaluator = RustcCfgEvaluator::default();
+    run_cargo_command_for_target(packages, cargo_args, options, &target, &mut evaluator)
+}
+
+fn run_cargo_command_for_target(
+    packages: &[&cargo_metadata::Package],
     mut cargo_args: Vec<&str>,
     options: &Options,
+    target: &TargetTriple,
+    evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
 ) -> eyre::Result<()> {
     let start = Instant::now();
 
@@ -956,7 +990,7 @@ pub fn run_cargo_command(
     let extra_args_idx = cargo_args
         .iter()
         .position(|arg| *arg == "--")
-        .unwrap_or(cargo_args.len());
+        .unwrap_or_else(|| cargo_args.len());
     let extra_args = cargo_args.split_off(extra_args_idx);
 
     let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();
@@ -970,7 +1004,8 @@ pub fn run_cargo_command(
     let mut summary: Vec<Summary> = Vec::new();
 
     for package in packages {
-        let config = package.config()?;
+        let base_config = package.config()?;
+        let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
 
         for features in package.feature_combinations(&config)? {
             // We set the command working dir to the package manifest parent dir.
@@ -1169,6 +1204,26 @@ allow_feature_sets = [
 # it would otherwise be generated.
 no_empty_feature_set = true
 ```
+
+Target-specific configuration can be expressed via Cargo-style `cfg(...)` selectors:
+
+```toml
+[package.metadata.cargo-feature-combinations]
+exclude_features = ["default"]
+
+[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+exclude_features = { add = ["metal"] }
+```
+
+Notes:
+
+- Arrays in target overrides are always treated as overrides.
+  Use `{ add = [...] }` / `{ remove = [...] }` for additive changes.
+- `replace = true` starts from a fresh default config for that target.
+  When `replace = true` is set, patchable fields must not use `add`/`remove`.
+- `cfg(feature = "...")` predicates are not supported in target override keys.
+- If `--target <triple>` is provided, it is used to select matching target overrides
+  (this also applies to `cargo fc matrix`).
 
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
 
@@ -1407,11 +1462,23 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         packages.retain(|p| options.packages.contains(p.name.as_str()));
     }
 
-    let cargo_args: Vec<&str> = cargo_args.iter().map(String::as_str).collect();
+    // Preserve the original String args for `--target` detection.
+    let cargo_args_owned = cargo_args;
+    let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
+
+    let detector = RustcTargetDetector;
+    let target = detector.detect_target(&cargo_args_owned)?;
+    let mut evaluator = RustcCfgEvaluator::default();
     match options.command {
         Some(Command::Help | Command::Version) => Ok(()),
         Some(Command::FeatureMatrix { pretty }) => {
-            match print_feature_matrix(&packages, pretty, options.packages_only) {
+            match print_feature_matrix_for_target(
+                &packages,
+                pretty,
+                options.packages_only,
+                &target,
+                &mut evaluator,
+            ) {
                 Ok(()) => Ok(()),
                 Err(err) => {
                     if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
@@ -1428,7 +1495,13 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                     "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
                 );
             }
-            match run_cargo_command(&packages, cargo_args, &options) {
+            match run_cargo_command_for_target(
+                &packages,
+                cargo_args,
+                &options,
+                &target,
+                &mut evaluator,
+            ) {
                 Ok(()) => Ok(()),
                 Err(err) => {
                     if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {

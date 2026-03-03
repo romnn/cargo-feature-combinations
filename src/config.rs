@@ -1,5 +1,9 @@
+pub mod patch;
+pub mod resolve;
+
+use self::patch::{FeatureSetVecPatch, StringSetPatch};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Per-package configuration for `cargo-feature-combinations`.
 ///
@@ -7,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 /// package's `Cargo.toml`. For workspace-wide options such as
 /// `exclude_packages`, prefer using [`WorkspaceConfig`] via
 /// `[workspace.metadata.cargo-feature-combinations]` instead.
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Config {
     #[serde(default)]
     pub isolated_feature_sets: Vec<HashSet<String>>,
@@ -56,18 +60,57 @@ pub struct Config {
     pub no_empty_feature_set: bool,
     #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
+
+    /// Target-specific configuration overrides.
+    ///
+    /// This is read from `[package.metadata.cargo-feature-combinations.target.'cfg(...)']`.
+    #[serde(default)]
+    pub target: BTreeMap<String, TargetOverride>,
     #[serde(flatten)]
     pub deprecated: DeprecatedConfig,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+/// Target-specific configuration override.
+///
+/// These sections are keyed by Cargo-style cfg expressions, e.g.
+/// `cfg(target_os = "linux")`.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct TargetOverride {
+    /// When enabled, start from a fresh default configuration instead of
+    /// inheriting values from the base config.
+    #[serde(default)]
+    pub replace: bool,
+
+    #[serde(default)]
+    pub isolated_feature_sets: Option<FeatureSetVecPatch>,
+    #[serde(default)]
+    pub exclude_features: Option<StringSetPatch>,
+    #[serde(default)]
+    pub include_features: Option<StringSetPatch>,
+    #[serde(default)]
+    pub only_features: Option<StringSetPatch>,
+    #[serde(default)]
+    pub skip_optional_dependencies: Option<bool>,
+    #[serde(default)]
+    pub exclude_feature_sets: Option<FeatureSetVecPatch>,
+    #[serde(default)]
+    pub include_feature_sets: Option<FeatureSetVecPatch>,
+    #[serde(default)]
+    pub allow_feature_sets: Option<FeatureSetVecPatch>,
+    #[serde(default)]
+    pub no_empty_feature_set: Option<bool>,
+    #[serde(default)]
+    pub matrix: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct WorkspaceConfig {
     /// List of package names to exclude from the workspace analysis.
     #[serde(default)]
     pub exclude_packages: HashSet<String>,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct DeprecatedConfig {
     #[serde(default)]
     pub skip_feature_sets: Vec<HashSet<String>>,
