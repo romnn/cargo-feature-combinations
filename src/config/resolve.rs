@@ -93,29 +93,53 @@ fn validate_replace_override(expr: &str, ov: &TargetOverride) -> eyre::Result<()
     let mut invalid_fields = Vec::new();
 
     let check_string_set = |name: &str, p: &Option<StringSetPatch>, invalid: &mut Vec<String>| {
-        if let Some(p) = p {
-            if p.has_add_or_remove() {
-                invalid.push(name.to_string());
-            }
+        if let Some(p) = p
+            && p.has_add_or_remove()
+        {
+            invalid.push(name.to_string());
         }
     };
 
     let check_feature_sets =
         |name: &str, p: &Option<FeatureSetVecPatch>, invalid: &mut Vec<String>| {
-            if let Some(p) = p {
-                if p.has_add_or_remove() {
-                    invalid.push(name.to_string());
-                }
+            if let Some(p) = p
+                && p.has_add_or_remove()
+            {
+                invalid.push(name.to_string());
             }
         };
 
-    check_feature_sets("isolated_feature_sets", &ov.isolated_feature_sets, &mut invalid_fields);
-    check_string_set("exclude_features", &ov.exclude_features, &mut invalid_fields);
-    check_string_set("include_features", &ov.include_features, &mut invalid_fields);
+    check_feature_sets(
+        "isolated_feature_sets",
+        &ov.isolated_feature_sets,
+        &mut invalid_fields,
+    );
+    check_string_set(
+        "exclude_features",
+        &ov.exclude_features,
+        &mut invalid_fields,
+    );
+    check_string_set(
+        "include_features",
+        &ov.include_features,
+        &mut invalid_fields,
+    );
     check_string_set("only_features", &ov.only_features, &mut invalid_fields);
-    check_feature_sets("exclude_feature_sets", &ov.exclude_feature_sets, &mut invalid_fields);
-    check_feature_sets("include_feature_sets", &ov.include_feature_sets, &mut invalid_fields);
-    check_feature_sets("allow_feature_sets", &ov.allow_feature_sets, &mut invalid_fields);
+    check_feature_sets(
+        "exclude_feature_sets",
+        &ov.exclude_feature_sets,
+        &mut invalid_fields,
+    );
+    check_feature_sets(
+        "include_feature_sets",
+        &ov.include_feature_sets,
+        &mut invalid_fields,
+    );
+    check_feature_sets(
+        "allow_feature_sets",
+        &ov.allow_feature_sets,
+        &mut invalid_fields,
+    );
 
     if !invalid_fields.is_empty() {
         eyre::bail!(
@@ -129,7 +153,9 @@ fn validate_replace_override(expr: &str, ov: &TargetOverride) -> eyre::Result<()
 
 fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyre::Result<()> {
     // Booleans
-    if let Some(v) = combine_bool("skip_optional_dependencies", matched, |o| o.skip_optional_dependencies)? {
+    if let Some(v) = combine_bool("skip_optional_dependencies", matched, |o| {
+        o.skip_optional_dependencies
+    })? {
         out.skip_optional_dependencies = v;
     }
     if let Some(v) = combine_bool("no_empty_feature_set", matched, |o| o.no_empty_feature_set)? {
@@ -137,38 +163,38 @@ fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyr
     }
 
     // Set-like fields
-    if let Some(ops) = combine_string_set_patch("exclude_features", matched, |o| o.exclude_features.as_ref())? {
+    if let Some(ops) =
+        combine_string_set_patch("exclude_features", matched, |o| o.exclude_features.as_ref())?
+    {
         apply_string_set_patch(&mut out.exclude_features, &ops);
     }
-    if let Some(ops) = combine_string_set_patch("include_features", matched, |o| o.include_features.as_ref())? {
+    if let Some(ops) =
+        combine_string_set_patch("include_features", matched, |o| o.include_features.as_ref())?
+    {
         apply_string_set_patch(&mut out.include_features, &ops);
     }
-    if let Some(ops) = combine_string_set_patch("only_features", matched, |o| o.only_features.as_ref())? {
+    if let Some(ops) =
+        combine_string_set_patch("only_features", matched, |o| o.only_features.as_ref())?
+    {
         apply_string_set_patch(&mut out.only_features, &ops);
     }
 
     // Feature-set list fields
-    if let Some(ops) = combine_feature_set_vec_patch(
-        "isolated_feature_sets",
-        matched,
-        |o| o.isolated_feature_sets.as_ref(),
-    )? {
+    if let Some(ops) = combine_feature_set_vec_patch("isolated_feature_sets", matched, |o| {
+        o.isolated_feature_sets.as_ref()
+    })? {
         out.isolated_feature_sets = apply_feature_set_vec_patch(&out.isolated_feature_sets, &ops);
     }
 
-    if let Some(ops) = combine_feature_set_vec_patch(
-        "exclude_feature_sets",
-        matched,
-        |o| o.exclude_feature_sets.as_ref(),
-    )? {
+    if let Some(ops) = combine_feature_set_vec_patch("exclude_feature_sets", matched, |o| {
+        o.exclude_feature_sets.as_ref()
+    })? {
         out.exclude_feature_sets = apply_feature_set_vec_patch(&out.exclude_feature_sets, &ops);
     }
 
-    if let Some(ops) = combine_feature_set_vec_patch(
-        "include_feature_sets",
-        matched,
-        |o| o.include_feature_sets.as_ref(),
-    )? {
+    if let Some(ops) = combine_feature_set_vec_patch("include_feature_sets", matched, |o| {
+        o.include_feature_sets.as_ref()
+    })? {
         out.include_feature_sets = apply_feature_set_vec_patch(&out.include_feature_sets, &ops);
     }
 
@@ -303,9 +329,7 @@ struct FeatureSetVecOps {
 }
 
 fn feature_set_vec_patch_to_ops(patch: &FeatureSetVecPatch) -> FeatureSetVecOps {
-    let override_value = patch
-        .override_value()
-        .map(|v| normalize_feature_sets(v));
+    let override_value = patch.override_value().map(|v| normalize_feature_sets(v));
     let mut add = BTreeSet::new();
     for s in patch.add_values() {
         add.insert(normalize_feature_set(s));
@@ -370,7 +394,10 @@ fn combine_feature_set_vec_patch<'a>(
     }))
 }
 
-fn apply_feature_set_vec_patch(base: &[HashSet<String>], ops: &FeatureSetVecOps) -> Vec<HashSet<String>> {
+fn apply_feature_set_vec_patch(
+    base: &[HashSet<String>],
+    ops: &FeatureSetVecOps,
+) -> Vec<HashSet<String>> {
     let mut out: BTreeSet<Vec<String>> = if let Some(v) = &ops.override_value {
         v.clone()
     } else {
@@ -430,8 +457,10 @@ mod test {
 
     #[test]
     fn additive_exclude_features() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -459,8 +488,10 @@ mod test {
 
     #[test]
     fn override_exclude_features_array_syntax() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -484,8 +515,10 @@ mod test {
 
     #[test]
     fn conflicting_override_errors() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -519,8 +552,10 @@ mod test {
 
     #[test]
     fn replace_disallows_add_remove() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -550,10 +585,13 @@ mod test {
 
     #[test]
     fn replace_starts_from_default() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
-        base.skip_optional_dependencies = true;
-        base.matrix.insert("k".to_string(), serde_json::json!({"a": 1}));
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            skip_optional_dependencies: true,
+            ..Config::default()
+        };
+        base.matrix
+            .insert("k".to_string(), serde_json::json!({"a": 1}));
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -584,7 +622,10 @@ mod test {
         assert!(out.exclude_features.contains("cuda"));
 
         // matrix is merged onto default (empty)
-        let v = out.matrix.get("k").ok_or_else(|| eyre::eyre!("missing matrix key"))?;
+        let v = out
+            .matrix
+            .get("k")
+            .ok_or_else(|| eyre::eyre!("missing matrix key"))?;
         assert!(v.get("b").is_some());
 
         Ok(())
@@ -592,8 +633,10 @@ mod test {
 
     #[test]
     fn allow_feature_sets_singleton_conflict() -> eyre::Result<()> {
-        let mut base = Config::default();
-        base.exclude_features = hs(&["default"]);
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
 
         let mut target = BTreeMap::new();
         target.insert(

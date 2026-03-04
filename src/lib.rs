@@ -4,9 +4,13 @@
 //! The main entry point for consumers is [`run`], which parses CLI arguments
 //! and dispatches the requested command.
 
+/// Evaluate Cargo-style `cfg(...)` expressions against a concrete target.
 pub mod cfg_eval;
+/// Configuration types and resolution logic for feature combination generation.
 pub mod config;
+/// Target triple handling and host/flag based detection.
 pub mod target;
+/// IO utilities.
 pub mod tee;
 
 use crate::cfg_eval::RustcCfgEvaluator;
@@ -990,7 +994,7 @@ fn run_cargo_command_for_target(
     let extra_args_idx = cargo_args
         .iter()
         .position(|arg| *arg == "--")
-        .unwrap_or_else(|| cargo_args.len());
+        .unwrap_or(cargo_args.len());
     let extra_args = cargo_args.split_off(extra_args_idx);
 
     let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();

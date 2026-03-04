@@ -96,13 +96,10 @@ impl RustcCfgEvaluator {
 
     fn validate_supported(expr: &Expression) -> eyre::Result<()> {
         for pred in expr.predicates() {
-            match pred {
-                Predicate::Feature(_) => {
-                    eyre::bail!(
-                        "cfg expressions using `feature = \"...\"` are not supported in cargo-feature-combinations target overrides"
-                    )
-                }
-                _ => {}
+            if let Predicate::Feature(_) = pred {
+                eyre::bail!(
+                    "cfg expressions using `feature = \"...\"` are not supported in cargo-feature-combinations target overrides"
+                )
             }
         }
         Ok(())
@@ -134,25 +131,21 @@ impl CfgEvaluator for RustcCfgEvaluator {
                 // on rustc output rather than builtin target tables.
                 match tp {
                     cfg_expr::expr::TargetPredicate::Arch(a) => {
-                        set.has_kv("target_arch", &a.to_string())
+                        set.has_kv("target_arch", a.as_ref())
                     }
-                    cfg_expr::expr::TargetPredicate::Os(o) => set.has_kv("target_os", &o.to_string()),
-                    cfg_expr::expr::TargetPredicate::Env(e) => {
-                        set.has_kv("target_env", &e.to_string())
-                    }
+                    cfg_expr::expr::TargetPredicate::Os(o) => set.has_kv("target_os", o.as_ref()),
+                    cfg_expr::expr::TargetPredicate::Env(e) => set.has_kv("target_env", e.as_ref()),
                     cfg_expr::expr::TargetPredicate::Family(f) => {
-                        set.has_kv("target_family", &f.to_string())
+                        set.has_kv("target_family", f.as_ref())
                     }
                     cfg_expr::expr::TargetPredicate::Vendor(v) => {
-                        set.has_kv("target_vendor", &v.to_string())
+                        set.has_kv("target_vendor", v.as_ref())
                     }
-                    cfg_expr::expr::TargetPredicate::Abi(a) => {
-                        set.has_kv("target_abi", &a.to_string())
-                    }
+                    cfg_expr::expr::TargetPredicate::Abi(a) => set.has_kv("target_abi", a.as_ref()),
                     cfg_expr::expr::TargetPredicate::Endian(e) => {
                         set.has_kv("target_endian", endian_str(e))
                     }
-                    cfg_expr::expr::TargetPredicate::Panic(p) => set.has_kv("panic", &p.to_string()),
+                    cfg_expr::expr::TargetPredicate::Panic(p) => set.has_kv("panic", p.as_ref()),
                     cfg_expr::expr::TargetPredicate::PointerWidth(w) => {
                         set.has_kv("target_pointer_width", &w.to_string())
                     }
@@ -184,13 +177,20 @@ mod test {
         let host = crate::target::RustcTargetDetector.detect_target(&Vec::new())?;
 
         // Host must match its own arch.
-        let cfg_set = std::process::Command::new("rustc").args(["--print", "cfg"]).output()?;
+        let cfg_set = std::process::Command::new("rustc")
+            .args(["--print", "cfg"])
+            .output()?;
         assert!(cfg_set.status.success());
         let stdout = String::from_utf8_lossy(&cfg_set.stdout);
         let arch = stdout
             .lines()
-            .find_map(|l| l.strip_prefix("target_arch=\"").and_then(|r| r.strip_suffix("\"")))
-            .ok_or_else(|| eyre::eyre!("expected rustc --print cfg output to contain target_arch"))?;
+            .find_map(|l| {
+                l.strip_prefix("target_arch=\"")
+                    .and_then(|r| r.strip_suffix("\""))
+            })
+            .ok_or_else(|| {
+                eyre::eyre!("expected rustc --print cfg output to contain target_arch")
+            })?;
 
         let expr = format!("cfg(target_arch = \"{arch}\")");
         assert!(eval.matches(&expr, &host)?);

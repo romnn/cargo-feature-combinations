@@ -7,6 +7,7 @@ pub struct TargetTriple(pub String);
 
 impl TargetTriple {
     #[must_use]
+    /// Borrow this target triple as a string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -33,10 +34,7 @@ impl RustcTargetDetector {
             .wrap_err("failed to invoke rustc to detect host target")?;
 
         if !output.status.success() {
-            eyre::bail!(
-                "rustc -vV failed with exit code {:?}",
-                output.status.code()
-            );
+            eyre::bail!("rustc -vV failed with exit code {:?}", output.status.code());
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -57,15 +55,15 @@ impl RustcTargetDetector {
         // Support both `--target x` and `--target=x`.
         let mut it = cargo_args.iter();
         while let Some(arg) = it.next() {
-            if arg == "--target" {
-                if let Some(v) = it.next() {
-                    return Some(v.clone());
-                }
+            if arg == "--target"
+                && let Some(v) = it.next()
+            {
+                return Some(v.clone());
             }
-            if let Some(v) = arg.strip_prefix("--target=") {
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
+            if let Some(v) = arg.strip_prefix("--target=")
+                && !v.is_empty()
+            {
+                return Some(v.to_string());
             }
         }
         None

@@ -1,3 +1,5 @@
+//! Integration tests for target-specific configuration overrides.
+
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
 use cargo_feature_combinations::Package as _;
@@ -41,7 +43,7 @@ fn as_sets(matrix: Vec<String>) -> Vec<HashSet<String>> {
             }
         })
         .collect();
-    out.sort_by(|a, b| a.len().cmp(&b.len()));
+    out.sort_by_key(|a| a.len());
     out
 }
 

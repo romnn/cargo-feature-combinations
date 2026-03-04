@@ -1,5 +1,9 @@
 use std::io::{Read, Result, Write};
 
+/// A reader that forwards all bytes read to an additional writer.
+///
+/// This is useful for capturing subprocess output while still streaming it to
+/// the terminal.
 pub struct Reader<R, W> {
     read: R,
     output: W,
@@ -7,6 +11,9 @@ pub struct Reader<R, W> {
 }
 
 impl<R, W> Reader<R, W> {
+    /// Create a new tee reader.
+    ///
+    /// If `force_flush` is set, the output writer is flushed after every read.
     pub fn new(read: R, output: W, force_flush: bool) -> Self {
         Self {
             read,
