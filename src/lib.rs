@@ -1109,8 +1109,7 @@ fn run_cargo_command_for_target(
     Ok(())
 }
 
-fn print_help() {
-    let help = r#"Run cargo commands for all feature combinations
+const HELP_TEXT: &str = r#"Run cargo commands for all feature combinations
 
 USAGE:
     cargo [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
@@ -1125,7 +1124,7 @@ OPTIONS:
     --silent                Hide cargo output and only show summary
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
-    --exclude-package       Exclude a package from feature combinations 
+    --exclude-package       Exclude a package from feature combinations
     --only-packages-with-lib-target
                             Only consider packages with a library target
     --pedantic              Treat warnings like errors in summary and
@@ -1186,7 +1185,7 @@ only_features = ["default", "full"]
 # `skip_optional_dependencies` flag in the `cargo-all-features` crate.
 skip_optional_dependencies = true
 
-# In the end, always add these exact combinations to the overall feature matrix, 
+# In the end, always add these exact combinations to the overall feature matrix,
 # unless one is already present there.
 #
 # Non-existent features are ignored. Other configuration options are ignored.
@@ -1215,7 +1214,7 @@ Target-specific configuration can be expressed via Cargo-style `cfg(...)` select
 [package.metadata.cargo-feature-combinations]
 exclude_features = ["default"]
 
-[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+[package.metadata.cargo-feature-combinations.target.’cfg(target_os = "linux")’]
 exclude_features = { add = ["metal"] }
 ```
 
@@ -1237,11 +1236,13 @@ When using a cargo workspace, you can also exclude packages in your workspace `C
 exclude_packages = ["package-a", "package-b"]
 ```
 
-For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
+For more information, see ‘https://github.com/romnn/cargo-feature-combinations’.
 
-See 'cargo help <command>' for more information on a specific command.
-    "#;
-    println!("{help}");
+See ‘cargo help <command>’ for more information on a specific command.
+"#;
+
+fn print_help() {
+    println!("{HELP_TEXT}");
 }
 
 static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];

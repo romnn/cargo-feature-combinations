@@ -10,6 +10,10 @@ use std::process::Command;
 /// obtain the active cfg set, and `cfg-expr` to parse and evaluate expressions.
 pub trait CfgEvaluator {
     /// Return whether the given cfg expression matches the provided target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cfg expression cannot be parsed or evaluated.
     fn matches(&mut self, cfg_expr: &str, target: &TargetTriple) -> eyre::Result<bool>;
 }
 
@@ -106,6 +110,13 @@ impl RustcCfgEvaluator {
     }
 }
 
+fn endian_str(e: cfg_expr::targets::Endian) -> &'static str {
+    match e {
+        cfg_expr::targets::Endian::big => "big",
+        cfg_expr::targets::Endian::little => "little",
+    }
+}
+
 impl CfgEvaluator for RustcCfgEvaluator {
     fn matches(&mut self, cfg_expr: &str, target: &TargetTriple) -> eyre::Result<bool> {
         let set = self.cfg_set_for(target)?;
@@ -113,13 +124,6 @@ impl CfgEvaluator for RustcCfgEvaluator {
         let expr = Expression::parse(cfg_expr)
             .wrap_err_with(|| format!("failed to parse cfg expression `{cfg_expr}`"))?;
         Self::validate_supported(&expr)?;
-
-        fn endian_str(e: &cfg_expr::targets::Endian) -> &'static str {
-            match e {
-                cfg_expr::targets::Endian::big => "big",
-                cfg_expr::targets::Endian::little => "little",
-            }
-        }
 
         Ok(expr.eval(|pred| match pred {
             Predicate::Target(tp) => {
@@ -143,7 +147,7 @@ impl CfgEvaluator for RustcCfgEvaluator {
                     }
                     cfg_expr::expr::TargetPredicate::Abi(a) => set.has_kv("target_abi", a.as_ref()),
                     cfg_expr::expr::TargetPredicate::Endian(e) => {
-                        set.has_kv("target_endian", endian_str(e))
+                        set.has_kv("target_endian", endian_str(*e))
                     }
                     cfg_expr::expr::TargetPredicate::Panic(p) => set.has_kv("panic", p.as_ref()),
                     cfg_expr::expr::TargetPredicate::PointerWidth(w) => {

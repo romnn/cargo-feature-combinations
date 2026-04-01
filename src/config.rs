@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// `[workspace.metadata.cargo-feature-combinations]` instead.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Config {
-    #[serde(default)]
     /// Feature sets that must be tested in isolation.
+    #[serde(default)]
     pub isolated_feature_sets: Vec<HashSet<String>>,
     /// Formerly named `denylist`
     #[serde(default)]
@@ -57,14 +57,14 @@ pub struct Config {
     /// Formerly named `exact_combinations`
     #[serde(default)]
     pub include_feature_sets: Vec<HashSet<String>>,
-    #[serde(default)]
     /// Explicitly allowed feature sets.
+    #[serde(default)]
     pub allow_feature_sets: Vec<HashSet<String>>,
-    #[serde(default)]
     /// When enabled, disallow generating the empty feature set.
-    pub no_empty_feature_set: bool,
     #[serde(default)]
+    pub no_empty_feature_set: bool,
     /// Arbitrary user-defined matrix values forwarded to the runner.
+    #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
 
     /// Target-specific configuration overrides.
@@ -72,8 +72,8 @@ pub struct Config {
     /// This is read from `[package.metadata.cargo-feature-combinations.target.'cfg(...)']`.
     #[serde(default)]
     pub target: BTreeMap<String, TargetOverride>,
-    #[serde(flatten)]
     /// Deprecated configuration keys (kept for backwards compatibility).
+    #[serde(flatten)]
     pub deprecated: DeprecatedConfig,
 }
 
@@ -88,56 +88,56 @@ pub struct TargetOverride {
     #[serde(default)]
     pub replace: bool,
 
-    #[serde(default)]
     /// Patch operations for [`Config::isolated_feature_sets`].
+    #[serde(default)]
     pub isolated_feature_sets: Option<FeatureSetVecPatch>,
-    #[serde(default)]
     /// Patch operations for [`Config::exclude_features`].
+    #[serde(default)]
     pub exclude_features: Option<StringSetPatch>,
-    #[serde(default)]
     /// Patch operations for [`Config::include_features`].
+    #[serde(default)]
     pub include_features: Option<StringSetPatch>,
-    #[serde(default)]
     /// Patch operations for [`Config::only_features`].
+    #[serde(default)]
     pub only_features: Option<StringSetPatch>,
-    #[serde(default)]
     /// Override for [`Config::skip_optional_dependencies`].
+    #[serde(default)]
     pub skip_optional_dependencies: Option<bool>,
-    #[serde(default)]
     /// Patch operations for [`Config::exclude_feature_sets`].
+    #[serde(default)]
     pub exclude_feature_sets: Option<FeatureSetVecPatch>,
-    #[serde(default)]
     /// Patch operations for [`Config::include_feature_sets`].
+    #[serde(default)]
     pub include_feature_sets: Option<FeatureSetVecPatch>,
-    #[serde(default)]
     /// Patch operations for [`Config::allow_feature_sets`].
+    #[serde(default)]
     pub allow_feature_sets: Option<FeatureSetVecPatch>,
-    #[serde(default)]
     /// Override for [`Config::no_empty_feature_set`].
-    pub no_empty_feature_set: Option<bool>,
     #[serde(default)]
+    pub no_empty_feature_set: Option<bool>,
     /// Merge override for [`Config::matrix`].
+    #[serde(default)]
     pub matrix: Option<HashMap<String, serde_json::Value>>,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 /// Workspace-wide configuration for `cargo-feature-combinations`.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct WorkspaceConfig {
     /// List of package names to exclude from the workspace analysis.
     #[serde(default)]
     pub exclude_packages: HashSet<String>,
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 /// Deprecated configuration keys kept for backwards compatibility.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct DeprecatedConfig {
-    #[serde(default)]
     /// Former name of [`Config::exclude_feature_sets`].
+    #[serde(default)]
     pub skip_feature_sets: Vec<HashSet<String>>,
-    #[serde(default)]
     /// Former name of [`Config::exclude_features`].
-    pub denylist: HashSet<String>,
     #[serde(default)]
+    pub denylist: HashSet<String>,
     /// Former name of [`Config::include_feature_sets`].
+    #[serde(default)]
     pub exact_combinations: Vec<HashSet<String>>,
 }

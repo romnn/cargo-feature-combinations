@@ -19,6 +19,10 @@ use super::{Config, DeprecatedConfig, TargetOverride};
 /// - validates and applies `replace = true`
 /// - merges override patches deterministically
 /// - returns an effective config with `target` metadata removed
+///
+/// # Errors
+///
+/// Returns an error if cfg evaluation fails or if overrides conflict.
 pub fn resolve_config<E: CfgEvaluator>(
     base: &Config,
     target: &TargetTriple,
@@ -542,9 +546,8 @@ mod test {
         eval.matches
             .insert("cfg(target_os = \"linux\")".to_string());
 
-        let err = match resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) {
-            Ok(_) => eyre::bail!("expected conflicting override resolution to fail"),
-            Err(err) => err,
+        let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
+            eyre::bail!("expected conflicting override resolution to fail");
         };
         assert!(err.to_string().contains("conflicting overrides"));
         Ok(())
@@ -575,9 +578,8 @@ mod test {
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
 
-        let err = match resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) {
-            Ok(_) => eyre::bail!("expected replace=true add/remove validation to fail"),
-            Err(err) => err,
+        let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
+            eyre::bail!("expected replace=true add/remove validation to fail");
         };
         assert!(err.to_string().contains("replace=true"));
         Ok(())
@@ -660,9 +662,8 @@ mod test {
         eval.matches
             .insert("cfg(target_os = \"linux\")".to_string());
 
-        let err = match resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) {
-            Ok(_) => eyre::bail!("expected allow_feature_sets singleton conflict"),
-            Err(err) => err,
+        let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
+            eyre::bail!("expected allow_feature_sets singleton conflict");
         };
         assert!(err.to_string().contains("allow_feature_sets"));
         Ok(())

@@ -16,21 +16,21 @@ pub enum StringSetPatch {
     Override(HashSet<String>),
     /// Explicit patch syntax: `key = { override = [...], add = [...], remove = [...] }`.
     Patch {
-        #[serde(default)]
         /// If present, replace the entire value instead of applying add/remove.
+        #[serde(default)]
         r#override: Option<HashSet<String>>,
-        #[serde(default)]
         /// Values to add to the base set.
-        add: HashSet<String>,
         #[serde(default)]
+        add: HashSet<String>,
         /// Values to remove from the base set.
+        #[serde(default)]
         remove: HashSet<String>,
     },
 }
 
 impl StringSetPatch {
-    #[must_use]
     /// Return the override value, if the patch is an override.
+    #[must_use]
     pub fn override_value(&self) -> Option<&HashSet<String>> {
         match self {
             Self::Override(v) => Some(v),
@@ -38,8 +38,8 @@ impl StringSetPatch {
         }
     }
 
-    #[must_use]
     /// Return the set of values to add.
+    #[must_use]
     pub fn add_values(&self) -> &HashSet<String> {
         static EMPTY: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
         match self {
@@ -48,8 +48,8 @@ impl StringSetPatch {
         }
     }
 
-    #[must_use]
     /// Return the set of values to remove.
+    #[must_use]
     pub fn remove_values(&self) -> &HashSet<String> {
         static EMPTY: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
         match self {
@@ -58,8 +58,8 @@ impl StringSetPatch {
         }
     }
 
-    #[must_use]
     /// Return `true` if the patch contains any add/remove operations.
+    #[must_use]
     pub fn has_add_or_remove(&self) -> bool {
         !self.add_values().is_empty() || !self.remove_values().is_empty()
     }
@@ -73,21 +73,21 @@ pub enum FeatureSetVecPatch {
     Override(Vec<HashSet<String>>),
     /// Explicit patch syntax.
     Patch {
-        #[serde(default)]
         /// If present, replace the entire list instead of applying add/remove.
+        #[serde(default)]
         r#override: Option<Vec<HashSet<String>>>,
-        #[serde(default)]
         /// Feature sets to append.
-        add: Vec<HashSet<String>>,
         #[serde(default)]
+        add: Vec<HashSet<String>>,
         /// Feature sets to remove.
+        #[serde(default)]
         remove: Vec<HashSet<String>>,
     },
 }
 
 impl FeatureSetVecPatch {
-    #[must_use]
     /// Return the override value, if the patch is an override.
+    #[must_use]
     pub fn override_value(&self) -> Option<&Vec<HashSet<String>>> {
         match self {
             Self::Override(v) => Some(v),
@@ -95,8 +95,8 @@ impl FeatureSetVecPatch {
         }
     }
 
-    #[must_use]
     /// Return the feature sets to add.
+    #[must_use]
     pub fn add_values(&self) -> &[HashSet<String>] {
         static EMPTY: std::sync::LazyLock<Vec<HashSet<String>>> =
             std::sync::LazyLock::new(Vec::new);
@@ -106,8 +106,8 @@ impl FeatureSetVecPatch {
         }
     }
 
-    #[must_use]
     /// Return the feature sets to remove.
+    #[must_use]
     pub fn remove_values(&self) -> &[HashSet<String>] {
         static EMPTY: std::sync::LazyLock<Vec<HashSet<String>>> =
             std::sync::LazyLock::new(Vec::new);
@@ -117,8 +117,8 @@ impl FeatureSetVecPatch {
         }
     }
 
-    #[must_use]
     /// Return `true` if the patch contains any add/remove operations.
+    #[must_use]
     pub fn has_add_or_remove(&self) -> bool {
         !self.add_values().is_empty() || !self.remove_values().is_empty()
     }

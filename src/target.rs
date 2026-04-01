@@ -6,8 +6,8 @@ use std::process::Command;
 pub struct TargetTriple(pub String);
 
 impl TargetTriple {
-    #[must_use]
     /// Borrow this target triple as a string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -19,6 +19,10 @@ impl TargetTriple {
 /// is passed, the host target is used.
 pub trait TargetDetector {
     /// Determine the effective target triple.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target triple cannot be determined.
     fn detect_target(&self, cargo_args: &[String]) -> eyre::Result<TargetTriple>;
 }
 
@@ -27,7 +31,7 @@ pub trait TargetDetector {
 pub struct RustcTargetDetector;
 
 impl RustcTargetDetector {
-    fn host_triple(&self) -> eyre::Result<TargetTriple> {
+    fn host_triple() -> eyre::Result<TargetTriple> {
         let output = Command::new("rustc")
             .arg("-vV")
             .output()
@@ -51,7 +55,7 @@ impl RustcTargetDetector {
         eyre::bail!("could not parse host target triple from `rustc -vV`")
     }
 
-    fn parse_target_flag(&self, cargo_args: &[String]) -> Option<String> {
+    fn parse_target_flag(cargo_args: &[String]) -> Option<String> {
         // Support both `--target x` and `--target=x`.
         let mut it = cargo_args.iter();
         while let Some(arg) = it.next() {
@@ -72,10 +76,10 @@ impl RustcTargetDetector {
 
 impl TargetDetector for RustcTargetDetector {
     fn detect_target(&self, cargo_args: &[String]) -> eyre::Result<TargetTriple> {
-        if let Some(triple) = self.parse_target_flag(cargo_args) {
+        if let Some(triple) = Self::parse_target_flag(cargo_args) {
             return Ok(TargetTriple(triple));
         }
-        self.host_triple()
+        Self::host_triple()
     }
 }
 

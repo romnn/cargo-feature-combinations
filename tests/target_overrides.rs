@@ -39,11 +39,13 @@ fn as_sets(matrix: Vec<String>) -> Vec<HashSet<String>> {
             if s.is_empty() {
                 HashSet::new()
             } else {
-                s.split(',').map(|v| v.to_string()).collect::<HashSet<_>>()
+                s.split(',')
+                    .map(ToString::to_string)
+                    .collect::<HashSet<_>>()
             }
         })
         .collect();
-    out.sort_by_key(|a| a.len());
+    out.sort_by_key(HashSet::len);
     out
 }
 
@@ -191,13 +193,12 @@ fn replace_true_rejects_add_remove() -> eyre::Result<()> {
     eval.matches
         .insert("cfg(target_os = \"linux\")".to_string());
 
-    let err = match cargo_feature_combinations::config::resolve::resolve_config(
+    let Err(err) = cargo_feature_combinations::config::resolve::resolve_config(
         &base,
         &cargo_feature_combinations::target::TargetTriple("x".to_string()),
         &mut eval,
-    ) {
-        Ok(_) => eyre::bail!("expected replace=true validation to fail"),
-        Err(err) => err,
+    ) else {
+        eyre::bail!("expected replace=true validation to fail");
     };
 
     assert!(err.to_string().contains("replace=true"));
