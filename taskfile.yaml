@@ -131,6 +131,12 @@ tasks:
         --workspace --all-targets --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
+      - task: lint:ast-grep
+
+  lint:ast-grep:
+    desc: "lint with ast-grep rules"
+    cmds:
+      - sg scan
 
   lint:fc:
     desc: "lint cargo workspace for all combinations of features"
