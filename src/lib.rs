@@ -103,7 +103,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let cargo_args_owned = cargo_args;
     let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
 
-    let detector = RustcTargetDetector;
+    let detector = RustcTargetDetector::default();
     let target = detector.detect_target(&cargo_args_owned)?;
     let mut evaluator = RustcCfgEvaluator::default();
     let result = match options.command {

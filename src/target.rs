@@ -13,12 +13,27 @@ impl TargetTriple {
     }
 }
 
-/// Detect the effective compilation target for this invocation.
+/// Read-only access to environment variables.
 ///
-/// Resolution order:
-/// 1. `--target <triple>` CLI flag (authoritative)
-/// 2. `CARGO_BUILD_TARGET` environment variable
-/// 3. Host target via `rustc -vV`
+/// This trait abstracts environment variable lookups so that production code
+/// uses the real process environment while tests can supply deterministic
+/// values without data races.
+pub trait Env {
+    /// Look up an environment variable by name.
+    fn var(&self, key: &str) -> Option<String>;
+}
+
+/// The real process environment (delegates to [`std::env::var`]).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProcessEnv;
+
+impl Env for ProcessEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+}
+
+/// Detect the effective compilation target for this invocation.
 pub trait TargetDetector {
     /// Determine the effective target triple.
     ///
@@ -28,11 +43,29 @@ pub trait TargetDetector {
     fn detect_target(&self, cargo_args: &[String]) -> eyre::Result<TargetTriple>;
 }
 
-/// Detect the host target by invoking `rustc -vV`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct RustcTargetDetector;
+/// Detect the compilation target using CLI flags, environment, and `rustc`.
+///
+/// Resolution order:
+/// 1. `--target <triple>` CLI flag (authoritative)
+/// 2. `CARGO_BUILD_TARGET` environment variable
+/// 3. Host target via `rustc -vV`
+#[derive(Debug, Clone)]
+pub struct RustcTargetDetector<E = ProcessEnv> {
+    env: E,
+}
 
-impl RustcTargetDetector {
+impl Default for RustcTargetDetector {
+    fn default() -> Self {
+        Self { env: ProcessEnv }
+    }
+}
+
+impl<E: Env> RustcTargetDetector<E> {
+    /// Create a detector with a custom environment.
+    pub fn with_env(env: E) -> Self {
+        Self { env }
+    }
+
     fn host_triple() -> eyre::Result<TargetTriple> {
         let output = Command::new("rustc")
             .arg("-vV")
@@ -76,12 +109,12 @@ impl RustcTargetDetector {
     }
 }
 
-impl TargetDetector for RustcTargetDetector {
+impl<E: Env> TargetDetector for RustcTargetDetector<E> {
     fn detect_target(&self, cargo_args: &[String]) -> eyre::Result<TargetTriple> {
         if let Some(triple) = Self::parse_target_flag(cargo_args) {
             return Ok(TargetTriple(triple));
         }
-        if let Ok(triple) = std::env::var("CARGO_BUILD_TARGET") {
+        if let Some(triple) = self.env.var("CARGO_BUILD_TARGET") {
             let triple = triple.trim();
             if !triple.is_empty() {
                 return Ok(TargetTriple(triple.to_string()));
@@ -93,12 +126,24 @@ impl TargetDetector for RustcTargetDetector {
 
 #[cfg(test)]
 mod test {
-    use super::{RustcTargetDetector, TargetDetector};
+    use super::{Env, RustcTargetDetector, TargetDetector};
     use color_eyre::eyre;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct TestEnv {
+        vars: HashMap<String, String>,
+    }
+
+    impl Env for TestEnv {
+        fn var(&self, key: &str) -> Option<String> {
+            self.vars.get(key).cloned()
+        }
+    }
 
     #[test]
     fn parses_target_flag_separate_value() -> eyre::Result<()> {
-        let d = RustcTargetDetector;
+        let d = RustcTargetDetector::default();
         let args = vec!["--target".to_string(), "wasm32-unknown-unknown".to_string()];
         let triple = d.detect_target(&args)?;
         assert_eq!(triple.as_str(), "wasm32-unknown-unknown");
@@ -107,7 +152,7 @@ mod test {
 
     #[test]
     fn parses_target_flag_equals_form() -> eyre::Result<()> {
-        let d = RustcTargetDetector;
+        let d = RustcTargetDetector::default();
         let args = vec!["--target=wasm32-unknown-unknown".to_string()];
         let triple = d.detect_target(&args)?;
         assert_eq!(triple.as_str(), "wasm32-unknown-unknown");
@@ -115,27 +160,52 @@ mod test {
     }
 
     #[test]
-    #[allow(unsafe_code)]
     fn respects_cargo_build_target_env_var() -> eyre::Result<()> {
-        let d = RustcTargetDetector;
-        // SAFETY: test is single-threaded for this env var; cleaned up immediately.
-        unsafe { std::env::set_var("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu") };
-        let result = d.detect_target(&Vec::new());
-        unsafe { std::env::remove_var("CARGO_BUILD_TARGET") };
-        assert_eq!(result?.as_str(), "aarch64-unknown-linux-gnu");
+        let env = TestEnv {
+            vars: HashMap::from([(
+                "CARGO_BUILD_TARGET".to_string(),
+                "aarch64-unknown-linux-gnu".to_string(),
+            )]),
+        };
+        let d = RustcTargetDetector::with_env(env);
+        let triple = d.detect_target(&Vec::new())?;
+        assert_eq!(triple.as_str(), "aarch64-unknown-linux-gnu");
         Ok(())
     }
 
     #[test]
-    #[allow(unsafe_code)]
     fn cli_target_takes_precedence_over_env_var() -> eyre::Result<()> {
-        let d = RustcTargetDetector;
-        // SAFETY: test is single-threaded for this env var; cleaned up immediately.
-        unsafe { std::env::set_var("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu") };
+        let env = TestEnv {
+            vars: HashMap::from([(
+                "CARGO_BUILD_TARGET".to_string(),
+                "aarch64-unknown-linux-gnu".to_string(),
+            )]),
+        };
+        let d = RustcTargetDetector::with_env(env);
         let args = vec!["--target".to_string(), "wasm32-unknown-unknown".to_string()];
-        let result = d.detect_target(&args);
-        unsafe { std::env::remove_var("CARGO_BUILD_TARGET") };
-        assert_eq!(result?.as_str(), "wasm32-unknown-unknown");
+        let triple = d.detect_target(&args)?;
+        assert_eq!(triple.as_str(), "wasm32-unknown-unknown");
+        Ok(())
+    }
+
+    #[test]
+    fn empty_env_var_falls_through_to_host() -> eyre::Result<()> {
+        let env = TestEnv {
+            vars: HashMap::from([("CARGO_BUILD_TARGET".to_string(), "  ".to_string())]),
+        };
+        let d = RustcTargetDetector::with_env(env);
+        // No --target flag, empty env var → should fall through to host triple.
+        let triple = d.detect_target(&Vec::new())?;
+        assert!(!triple.as_str().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn missing_env_var_falls_through_to_host() -> eyre::Result<()> {
+        let env = TestEnv::default();
+        let d = RustcTargetDetector::with_env(env);
+        let triple = d.detect_target(&Vec::new())?;
+        assert!(!triple.as_str().is_empty());
         Ok(())
     }
 }

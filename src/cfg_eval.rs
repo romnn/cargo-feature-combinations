@@ -178,7 +178,7 @@ mod test {
     #[test]
     fn matches_simple_true_for_target_arch() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::default();
-        let host = crate::target::RustcTargetDetector.detect_target(&Vec::new())?;
+        let host = crate::target::RustcTargetDetector::default().detect_target(&Vec::new())?;
 
         // Host must match its own arch.
         let cfg_set = std::process::Command::new("rustc")
@@ -204,7 +204,7 @@ mod test {
     #[test]
     fn rejects_feature_predicate() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::default();
-        let host = crate::target::RustcTargetDetector.detect_target(&Vec::new())?;
+        let host = crate::target::RustcTargetDetector::default().detect_target(&Vec::new())?;
 
         let err = match eval.matches(r#"cfg(feature = "foo")"#, &host) {
             Ok(v) => eyre::bail!("expected cfg(feature=...) to be rejected, got {v}"),

@@ -276,7 +276,7 @@ pub fn print_feature_matrix(
     pretty: bool,
     packages_only: bool,
 ) -> eyre::Result<ExitCode> {
-    let detector = RustcTargetDetector;
+    let detector = RustcTargetDetector::default();
     let target = detector.detect_target(&Vec::new())?;
     let mut evaluator = RustcCfgEvaluator::default();
     print_feature_matrix_for_target(packages, pretty, packages_only, &target, &mut evaluator)
@@ -355,7 +355,7 @@ pub fn run_cargo_command(
     options: &Options,
 ) -> eyre::Result<ExitCode> {
     // Public API: if called directly, resolve config for the host target.
-    let detector = RustcTargetDetector;
+    let detector = RustcTargetDetector::default();
     let cargo_args_owned: Vec<String> = cargo_args.iter().map(|s| (*s).to_string()).collect();
     let target = detector.detect_target(&cargo_args_owned)?;
     let mut evaluator = RustcCfgEvaluator::default();
