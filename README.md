@@ -6,10 +6,10 @@
 [<img alt="docs.rs" src="https://img.shields.io/docsrs/cargo-feature-combinations/latest?label=docs.rs">](https://docs.rs/cargo-feature-combinations)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/cargo-feature-combinations">](https://crates.io/crates/cargo-feature-combinations)
 
-Plugin for `cargo` to run commands against selected combinations of features.
+Plugin for `cargo` to run commands against selected (or all) combinations of features.
 
 <p align="center">
-  <img src="test-data/screenshot.png" alt="cargo-feature-combinations demo" width="600">
+  <img src="test-data/screenshot.png" alt="cargo-feature-combinations demo" width="550">
 </p>
 
 ### Installation
@@ -23,15 +23,18 @@ cargo install --locked cargo-feature-combinations
 
 ### Usage
 
-In most cases, just use the command as if it was `cargo`:
+Just use the command as if it was `cargo`:
 
 ```bash
 cargo fc check
 cargo fc test
 cargo fc build
+
+# All cargo arguments except `--all-features` are passed along
+cargo fc check -p <my-crate> --all-targets
 ```
 
-In addition, there are a few optional flags and the `matrix` subcommand.
+In addition, there are a few new flags and the `matrix` subcommand.
 To get an idea, consider these examples:
 
 ```bash
@@ -76,30 +79,13 @@ In your `Cargo.toml`, you can configure the feature combination matrix:
 
 ```toml
 [package.metadata.cargo-feature-combinations]
-# When at least one isolated feature set is configured, stop taking all project 
-# features as a whole, and instead take them in these isolated sets. Build a 
-# sub-matrix for each isolated set, then merge sub-matrices into the overall 
-# feature matrix. If any two isolated sets produce an identical feature 
-# combination, such combination will be included in the overall matrix only once.
-#
-# This feature is intended for projects with large number of features, sub-sets 
-# of which are completely independent, and thus don’t need cross-play.
-#
-# Non-existent features are ignored. Other configuration options are still 
-# respected.
-isolated_feature_sets = [
-    ["foo-a", "foo-b", "foo-c"],
-    ["bar-a", "bar-b"],
-    ["other-a", "other-b", "other-c"],
-]
 
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
 # To exclude only the empty feature set from the matrix, you can either enable
 # `no_empty_feature_set = true` or explicitly list an empty set here:
-#
-# exclude_feature_sets = [[]]
+exclude_feature_sets = [[]]
 
 # Exclude features from the feature combination matrix
 exclude_features = ["default", "full"] # formerly "denylist"
@@ -149,9 +135,69 @@ allow_feature_sets = [
 # it would otherwise be generated.
 no_empty_feature_set = true
 
-# Optional: additional metadata merged into `cargo fc matrix` output
+# When at least one isolated feature set is configured, stop taking all project 
+# features as a whole, and instead take them in these isolated sets. Build a 
+# sub-matrix for each isolated set, then merge sub-matrices into the overall 
+# feature matrix. If any two isolated sets produce an identical feature 
+# combination, such combination will be included in the overall matrix only once.
+#
+# This feature is intended for projects with large number of features, sub-sets 
+# of which are completely independent, and thus don’t need cross-play.
+#
+# Non-existent features are ignored. Other configuration options are still 
+# respected.
+isolated_feature_sets = [
+    ["foo-a", "foo-b", "foo-c"],
+    ["bar-a", "bar-b"],
+    ["other-a", "other-b", "other-c"],
+]
+
+# Optional: Additional metadata merged into `cargo fc matrix` output
 matrix = { kind = "ci" }
+
+
+# Optional: The metadata from before can also be written as its own section
+[package.metadata.cargo-feature-combinations.matrix]
+some-useful-metadata-for-this-crate = "i will show up in the feature matrix as an additional property"
+requires-gpu = false
 ```
+
+When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-feature-combinations]
+# Exclude packages in the workspace metadata, or the metadata of the *root* package.
+exclude_packages = ["package-a", "package-b"]
+```
+
+<details>
+<summary>Example: skipping optional dependency features</summary>
+
+```toml
+[features]
+default = []
+core = []
+cli = ["core"]
+
+[dependencies]
+tokio = { version = "1", optional = true }
+serde = { version = "1", optional = true }
+
+[package.metadata.cargo-feature-combinations]
+exclude_features = ["default"]
+skip_optional_dependencies = true
+```
+
+With this configuration, the feature matrix will only vary the `core` and
+`cli` features. The implicit `tokio` and `serde` features that correspond to
+optional dependencies are excluded from the matrix, avoiding a combinatorial
+explosion over integration features. If you still want to test specific
+combinations that include `tokio` or `serde`, you can list them explicitly in
+`include_feature_sets`.
+
+</details>
+
+---
 
 #### Target-specific configuration
 
@@ -202,7 +248,8 @@ configuration (instead of inheriting from the base config). To avoid confusion, 
 `replace = true` is set, patchable fields must not use `add` or `remove` (only override
 is allowed).
 
-Example (using array shorthand, i.e. override):
+<details>
+<summary>Example: Start from fresh config with `replace=true`</summary>
 
 ```toml
 [package.metadata.cargo-feature-combinations]
@@ -215,45 +262,12 @@ skip_optional_dependencies = true
 
 [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
 replace = true
+
 # Start from a fresh default config on Linux: `isolated_feature_sets` and
 # `skip_optional_dependencies` are not inherited from the base config.
-exclude_features = ["default", "cuda"]
+exclude_features = ["default", "cuda"] # using array shorthand, i.e. override
 ```
-
-<details>
-<summary>Example: skipping optional dependency features</summary>
-
-```toml
-[features]
-default = []
-core = []
-cli = ["core"]
-
-[dependencies]
-tokio = { version = "1", optional = true }
-serde = { version = "1", optional = true }
-
-[package.metadata.cargo-feature-combinations]
-exclude_features = ["default"]
-skip_optional_dependencies = true
-```
-
-With this configuration, the feature matrix will only vary the `core` and
-`cli` features. The implicit `tokio` and `serde` features that correspond to
-optional dependencies are excluded from the matrix, avoiding a combinatorial
-explosion over integration features. If you still want to test specific
-combinations that include `tokio` or `serde`, you can list them explicitly in
-`include_feature_sets`.
-
 </details>
-
-When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
-
-```toml
-[workspace.metadata.cargo-feature-combinations]
-# Exclude packages in the workspace metadata, or the metadata of the *root* package.
-exclude_packages = ["package-a", "package-b"]
-```
 
 
 ### Usage with github-actions

@@ -154,21 +154,6 @@ For example:
 
 ```toml
 [package.metadata.cargo-feature-combinations]
-# When at least one isolated feature set is configured, stop taking all project
-# features as a whole, and instead take them in these isolated sets. Build a
-# sub-matrix for each isolated set, then merge sub-matrices into the overall
-# feature matrix. If any two isolated sets produce an identical feature
-# combination, such combination will be included in the overall matrix only once.
-#
-# This feature is intended for projects with large number of features, sub-sets
-# of which are completely independent, and thus don't need cross-play.
-#
-# Other configuration options are still respected.
-isolated_feature_sets = [
-    ["foo-a", "foo-b", "foo-c"],
-    ["bar-a", "bar-b"],
-    ["other-a", "other-b", "other-c"],
-]
 
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
@@ -225,6 +210,22 @@ allow_feature_sets = [
 # When enabled, never include the empty feature set (no `--features`), even if
 # it would otherwise be generated.
 no_empty_feature_set = true
+
+# When at least one isolated feature set is configured, stop taking all project
+# features as a whole, and instead take them in these isolated sets. Build a
+# sub-matrix for each isolated set, then merge sub-matrices into the overall
+# feature matrix. If any two isolated sets produce an identical feature
+# combination, such combination will be included in the overall matrix only once.
+#
+# This feature is intended for projects with large number of features, sub-sets
+# of which are completely independent, and thus don't need cross-play.
+#
+# Other configuration options are still respected.
+isolated_feature_sets = [
+    ["foo-a", "foo-b", "foo-c"],
+    ["bar-a", "bar-b"],
+    ["other-a", "other-b", "other-c"],
+]
 ```
 
 Target-specific configuration can be expressed via Cargo-style `cfg(...)` selectors:
