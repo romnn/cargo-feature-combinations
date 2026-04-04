@@ -131,8 +131,8 @@ static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
 const HELP_TEXT: &str = r#"Run cargo commands for all feature combinations
 
 USAGE:
-    cargo [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
-    cargo [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
+    cargo fc [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
+    cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 
 SUBCOMMAND:
     matrix                  Print JSON feature combination matrix to stdout

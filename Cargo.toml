@@ -68,11 +68,6 @@ default = []
 [package.metadata.cargo-feature-combinations]
 exclude_features = ["default"]
 
-[package.metadata.cargo-feature-combinations.matrix]
-str-key = "str-value"
-str_key = "str_value"
-num_key = 2
-
 [dependencies]
 color-eyre = "0.6"
 cargo_metadata = "0.23"
