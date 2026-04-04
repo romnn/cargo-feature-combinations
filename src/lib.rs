@@ -24,7 +24,7 @@ pub mod workspace;
 pub use cli::{ArgumentParser, Command, Options, parse_arguments};
 pub use package::{FeatureCombinationError, Package};
 pub use runner::{
-    color_spec, error_counts, print_feature_matrix, print_summary, run_cargo_command,
+    ExitCode, color_spec, error_counts, print_feature_matrix, print_summary, run_cargo_command,
     warning_counts,
 };
 pub use workspace::Workspace;
@@ -107,7 +107,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let target = detector.detect_target(&cargo_args_owned)?;
     let mut evaluator = RustcCfgEvaluator::default();
     let result = match options.command {
-        Some(Command::Help | Command::Version) => Ok(()),
+        Some(Command::Help | Command::Version) => Ok(None),
         Some(Command::FeatureMatrix { pretty }) => print_feature_matrix_for_target(
             &packages,
             pretty,
@@ -132,7 +132,8 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     };
 
     match result {
-        Ok(()) => Ok(()),
+        Ok(Some(exit_code)) => process::exit(exit_code),
+        Ok(None) => Ok(()),
         Err(err) => {
             if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
                 print_feature_combination_error(e);

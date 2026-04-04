@@ -20,6 +20,12 @@ static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true))
 static YELLOW: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Yellow, true));
 static GREEN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Green, true));
 
+/// An optional process exit code.
+///
+/// `None` means success (exit 0), `Some(code)` means the process should exit
+/// with the given code.
+pub type ExitCode = Option<i32>;
+
 /// Build a [`ColorSpec`] with the given foreground color and bold setting.
 #[must_use]
 pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
@@ -139,13 +145,17 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
 
 /// Print an aggregated summary for all executed feature combinations.
 ///
+/// Returns the [`ExitCode`] of the first failing feature combination, or
+/// `None` if all combinations succeeded.
+///
 /// This function is used by [`run_cargo_command`] after all packages and
 /// feature sets have been processed.
+#[must_use]
 pub fn print_summary(
     summary: Vec<Summary>,
     mut stdout: termcolor::StandardStream,
     elapsed: Duration,
-) {
+) -> ExitCode {
     let num_packages = summary
         .iter()
         .map(|s| &s.package_name)
@@ -201,9 +211,7 @@ pub fn print_summary(
     }
     println!();
 
-    if let Some(exit_code) = first_bad_exit_code {
-        std::process::exit(exit_code);
-    }
+    first_bad_exit_code
 }
 
 fn print_package_cmd(
@@ -267,7 +275,7 @@ pub fn print_feature_matrix(
     packages: &[&cargo_metadata::Package],
     pretty: bool,
     packages_only: bool,
-) -> eyre::Result<()> {
+) -> eyre::Result<ExitCode> {
     let detector = RustcTargetDetector;
     let target = detector.detect_target(&Vec::new())?;
     let mut evaluator = RustcCfgEvaluator::default();
@@ -280,7 +288,7 @@ pub(crate) fn print_feature_matrix_for_target(
     packages_only: bool,
     target: &TargetTriple,
     evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
-) -> eyre::Result<()> {
+) -> eyre::Result<ExitCode> {
     let per_package_features = packages
         .iter()
         .map(|pkg| {
@@ -317,13 +325,16 @@ pub(crate) fn print_feature_matrix_for_target(
         serde_json::to_string(&matrix)
     }?;
     println!("{matrix}");
-    Ok(())
+    Ok(None)
 }
 
 /// Run a cargo command for all requested packages and feature combinations.
 ///
 /// This function drives the main execution loop by spawning cargo for each
 /// feature set and collecting a [`Summary`] for every run.
+///
+/// Returns the [`ExitCode`] of the first failing feature combination, or
+/// `None` if all combinations succeeded.
 ///
 /// # Errors
 ///
@@ -333,7 +344,7 @@ pub fn run_cargo_command(
     packages: &[&cargo_metadata::Package],
     cargo_args: Vec<&str>,
     options: &Options,
-) -> eyre::Result<()> {
+) -> eyre::Result<ExitCode> {
     // Public API: if called directly, resolve config for the host target.
     let detector = RustcTargetDetector;
     let cargo_args_owned: Vec<String> = cargo_args.iter().map(|s| (*s).to_string()).collect();
@@ -348,7 +359,7 @@ pub(crate) fn run_cargo_command_for_target(
     options: &Options,
     target: &TargetTriple,
     evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
-) -> eyre::Result<()> {
+) -> eyre::Result<ExitCode> {
     let start = Instant::now();
 
     // split into cargo and extra arguments after --
@@ -460,14 +471,15 @@ pub(crate) fn run_cargo_command_for_target(
                     )?;
                     stdout.flush().ok();
                 }
-                print_summary(summary, stdout, start.elapsed());
-                std::process::exit(exit_status.code().unwrap_or(1));
+                let code = print_summary(summary, stdout, start.elapsed())
+                    .or(exit_status.code())
+                    .unwrap_or(1);
+                return Ok(Some(code));
             }
         }
     }
 
-    print_summary(summary, stdout, start.elapsed());
-    Ok(())
+    Ok(print_summary(summary, stdout, start.elapsed()))
 }
 
 #[cfg(test)]
