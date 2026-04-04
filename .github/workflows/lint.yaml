@@ -27,6 +27,7 @@ jobs:
         with:
           components: clippy
       - run: |
+          brew install ast-grep
           brew install cargo-audit
           brew install cargo-udeps
       - name: Audit
