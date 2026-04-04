@@ -144,6 +144,76 @@ allow_feature_sets = [
 # When enabled, never include the empty feature set (no `--features`), even if
 # it would otherwise be generated.
 no_empty_feature_set = true
+
+# Optional: additional metadata merged into `cargo fc matrix` output
+matrix = { kind = "ci" }
+```
+
+#### Target-specific configuration
+
+You can override configuration for specific targets using Cargo-style `cfg(...)` expressions.
+Overrides are configured under:
+
+```toml
+[package.metadata.cargo-feature-combinations.target.'cfg(...)']
+```
+
+Example (exclude different features per OS):
+
+```toml
+[package.metadata.cargo-feature-combinations]
+exclude_features = ["default"]
+
+[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+exclude_features = { add = ["metal"] }
+
+[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "macos")']
+exclude_features = { add = ["cuda"] }
+```
+
+Patch semantics for collection-like keys such as `exclude_features`, `include_features`,
+`only_features`, `*_feature_sets`:
+
+- **Array syntax is always an override**
+  - `exclude_features = ["cuda"]` replaces the entire value.
+  - This is equivalent to `exclude_features = { override = ["cuda"] }`.
+- **Patch object syntax is explicit**
+  - Override (replace the entire value):
+    - `exclude_features = { override = ["cuda"] }`
+  - Add (union with the base value):
+    - `exclude_features = { add = ["cuda"] }`
+  - Remove (subtract from the base value):
+    - `exclude_features = { remove = ["cuda"] }`
+
+Patches are applied in order: override (or base), then remove, then add.
+If a value appears in both `add` and `remove`, add wins.
+
+When multiple target override sections match (e.g. `cfg(unix)` and `cfg(target_os = "linux")`),
+their `add` and `remove` sets are unioned. Conflicting `override` values result in an error.
+
+##### `replace = true`
+
+If a matching target override sets `replace = true`, resolution starts from a fresh default
+configuration (instead of inheriting from the base config). To avoid confusion, when
+`replace = true` is set, patchable fields must not use `add` or `remove` (only override
+is allowed).
+
+Example (using array shorthand, i.e. override):
+
+```toml
+[package.metadata.cargo-feature-combinations]
+exclude_features = ["default"]
+isolated_feature_sets = [
+  ["gpu"],
+  ["ui"],
+]
+skip_optional_dependencies = true
+
+[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+replace = true
+# Start from a fresh default config on Linux: `isolated_feature_sets` and
+# `skip_optional_dependencies` are not inherited from the base config.
+exclude_features = ["default", "cuda"]
 ```
 
 <details>

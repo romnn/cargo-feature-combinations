@@ -1,0 +1,10 @@
+id: doc-after-attribute
+language: Rust
+severity: error
+message: "Doc comment should appear before attributes, not after."
+note: "Place /// doc comments above #[...] attributes."
+rule:
+  kind: line_comment
+  regex: "^///"
+  follows:
+    kind: attribute_item

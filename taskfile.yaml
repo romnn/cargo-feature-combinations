@@ -122,6 +122,11 @@ tasks:
     cmds:
       - cargo fc test --workspace --all-targets {{.CLI_ARGS}}
 
+  lint:ast-grep:
+    desc: "lint with ast-grep rules"
+    cmds:
+      - sg scan
+
   lint:
     desc: "lint cargo workspace"
     cmds:
@@ -131,6 +136,7 @@ tasks:
         --workspace --all-targets --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
+      - task: lint:ast-grep
 
   lint:fc:
     desc: "lint cargo workspace for all combinations of features"
@@ -141,6 +147,7 @@ tasks:
         --workspace --all-targets
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
+      - task: lint:ast-grep
 
   lint:fix:
     desc: "lint and fix cargo workspace"
@@ -153,6 +160,7 @@ tasks:
         --workspace --all-targets --all-features
         {{.CLI_ARGS}}
         -- -Dclippy::all -Dclippy::pedantic
+      - task: lint:ast-grep
 
   lint:actions:
     desc: "lint github actions"
