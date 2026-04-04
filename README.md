@@ -17,7 +17,7 @@ Plugin for `cargo` to run commands against selected (or all) combinations of fea
 ```bash
 brew install --cask romnn/tap/cargo-fc
 
-# or install from source
+# Or install from source
 cargo install --locked cargo-feature-combinations
 ```
 
@@ -30,7 +30,10 @@ cargo fc check
 cargo fc test
 cargo fc build
 
-# All cargo arguments except `--all-features` are passed along
+# All cargo arguments are passed along, except 
+#   - `--all-features`
+#   - `--features` 
+#   - `--no-default-features` 
 cargo fc check -p <my-crate> --all-targets
 ```
 
@@ -38,13 +41,13 @@ In addition, there are a few new flags and the `matrix` subcommand.
 To get an idea, consider these examples:
 
 ```bash
-# run tests and fail on the first failing combination of features
+# Run tests and fail on the first failing combination of features
 cargo fc --fail-fast test
 
-# silence output and only show final summary
+# Silence output and only show final summary
 cargo fc --silent build
 
-# print all combinations of features in JSON (useful for usage in github actions)
+# Print all combinations of features in JSON (useful for usage in github actions)
 cargo fc matrix --pretty
 ```
 
@@ -153,12 +156,24 @@ isolated_feature_sets = [
 ]
 
 # Optional: Additional metadata merged into `cargo fc matrix` output
+# $ cargo fc matrix --pretty
+#   [
+#     { "name": "my-crate", "features": "", "kind": "ci" },
+#     { "name": "my-crate", "features": "a", "kind": "ci" },
+#     { "name": "my-crate", "features": "b", "kind": "ci" },
+#     { "name": "my-crate", "features": "a,b", "kind": "ci" },
+#   ]
 matrix = { kind = "ci" }
 
-
-# Optional: The metadata from before can also be written as its own section
+# Optional: The `matrix` metadata from before can also be its own section
+# $ cargo fc matrix --pretty
+#   [{ 
+#       "requires-gpu": false, 
+#       "value-for-this-crate": "will show up in the feature matrix",
+#       ..
+#    }, .. ]
 [package.metadata.cargo-feature-combinations.matrix]
-some-useful-metadata-for-this-crate = "i will show up in the feature matrix as an additional property"
+value-for-this-crate = "will show up in the feature matrix"
 requires-gpu = false
 ```
 
@@ -199,7 +214,7 @@ combinations that include `tokio` or `serde`, you can list them explicitly in
 
 ---
 
-#### Target-specific configuration
+### Target-specific configuration
 
 You can override configuration for specific targets using Cargo-style `cfg(...)` expressions.
 Overrides are configured under:
@@ -269,12 +284,13 @@ exclude_features = ["default", "cuda"] # using array shorthand, i.e. override
 ```
 </details>
 
+---
 
 ### Usage with github-actions
 
 The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI. See [GITHUB_ACTIONS.md](./docs/GITHUB_ACTIONS.md) for more information.
 
-#### Local development
+### Local development
 
 For local development and testing, you can point `cargo fc` to another project using
 the `--manifest-path` flag.
