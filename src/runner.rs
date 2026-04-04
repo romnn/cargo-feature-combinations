@@ -282,7 +282,16 @@ pub fn print_feature_matrix(
     print_feature_matrix_for_target(packages, pretty, packages_only, &target, &mut evaluator)
 }
 
-pub(crate) fn print_feature_matrix_for_target(
+/// Like [`print_feature_matrix`], but for a specific target and evaluator.
+///
+/// This is useful for library consumers that want to control target
+/// resolution themselves, e.g. when cross-compiling.
+///
+/// # Errors
+///
+/// Returns an error if any configuration can not be parsed or serialization
+/// of the JSON matrix fails.
+pub fn print_feature_matrix_for_target(
     packages: &[&cargo_metadata::Package],
     pretty: bool,
     packages_only: bool,
@@ -353,7 +362,16 @@ pub fn run_cargo_command(
     run_cargo_command_for_target(packages, cargo_args, options, &target, &mut evaluator)
 }
 
-pub(crate) fn run_cargo_command_for_target(
+/// Like [`run_cargo_command`], but for a specific target and evaluator.
+///
+/// This is useful for library consumers that want to control target
+/// resolution themselves, e.g. when cross-compiling.
+///
+/// # Errors
+///
+/// Returns an error if a cargo process can not be spawned or if IO operations
+/// fail while reading cargo's output.
+pub fn run_cargo_command_for_target(
     packages: &[&cargo_metadata::Package],
     mut cargo_args: Vec<&str>,
     options: &Options,

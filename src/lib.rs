@@ -24,14 +24,14 @@ pub mod workspace;
 pub use cli::{ArgumentParser, Command, Options, parse_arguments};
 pub use package::{FeatureCombinationError, Package};
 pub use runner::{
-    ExitCode, color_spec, error_counts, print_feature_matrix, print_summary, run_cargo_command,
-    warning_counts,
+    ExitCode, color_spec, error_counts, print_feature_matrix, print_feature_matrix_for_target,
+    print_summary, run_cargo_command, run_cargo_command_for_target, warning_counts,
 };
 pub use workspace::Workspace;
 
 use crate::cfg_eval::RustcCfgEvaluator;
 use crate::cli::cargo_subcommand;
-use crate::runner::{print_feature_combination_error, print_feature_matrix_for_target};
+use crate::runner::print_feature_combination_error;
 use crate::target::{RustcTargetDetector, TargetDetector};
 
 use color_eyre::eyre;
@@ -121,13 +121,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                     "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
                 );
             }
-            runner::run_cargo_command_for_target(
-                &packages,
-                cargo_args,
-                &options,
-                &target,
-                &mut evaluator,
-            )
+            run_cargo_command_for_target(&packages, cargo_args, &options, &target, &mut evaluator)
         }
     };
 
