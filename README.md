@@ -185,8 +185,11 @@ Patch semantics for collection-like keys such as `exclude_features`, `include_fe
   - Remove (subtract from the base value):
     - `exclude_features = { remove = ["cuda"] }`
 
+Patches are applied in order: override (or base), then remove, then add.
+If a value appears in both `add` and `remove`, add wins.
+
 When multiple target override sections match (e.g. `cfg(unix)` and `cfg(target_os = "linux")`),
-they are merged deterministically. Conflicting `override` values result in an error.
+their `add` and `remove` sets are unioned. Conflicting `override` values result in an error.
 
 ##### `replace = true`
 

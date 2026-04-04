@@ -1220,11 +1220,15 @@ Notes:
 
 - Arrays in target overrides are always treated as overrides.
   Use `{ add = [...] }` / `{ remove = [...] }` for additive changes.
+- Patches are applied in order: override (or base), then remove, then add.
+  If a value appears in both `add` and `remove`, add wins.
+- When multiple sections match, their `add`/`remove` sets are unioned.
+  Conflicting `override` values result in an error.
 - `replace = true` starts from a fresh default config for that target.
   When `replace = true` is set, patchable fields must not use `add`/`remove`.
 - `cfg(feature = "...")` predicates are not supported in target override keys.
-- If `--target <triple>` is provided, it is used to select matching target overrides
-  (this also applies to `cargo fc matrix`).
+- If `--target <triple>` or `CARGO_BUILD_TARGET` is set, it is used to select
+  matching target overrides (this also applies to `cargo fc matrix`).
 
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
 

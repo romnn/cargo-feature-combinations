@@ -103,6 +103,15 @@ exclude_features = { add = ["cuda"], remove = ["metal"] }
 There is **no** `clear` flag. Clearing is achieved via `override = []`.
 
 
+### Patch application order
+
+Patches are applied in this order: **override** (or base), then **remove**, then **add**.
+
+If a value appears in both `add` and `remove`, **add wins** because it is applied last.
+
+When multiple matching target sections contribute patches for the same field, their `add` and `remove` sets are unioned before application. If more than one section provides an `override` for the same field, they must agree on the value or an error is raised.
+
+
 ### Important: arrays are always overrides
 
 To avoid ambiguity, a plain array in a target override section always means **override**, never additive.

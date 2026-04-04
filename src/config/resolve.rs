@@ -247,6 +247,10 @@ struct StringSetOps {
     remove: HashSet<String>,
 }
 
+/// Apply combined patch operations to a string set.
+///
+/// The order is: start from override (or base), then remove, then add.
+/// This means if a value appears in both `add` and `remove`, **add wins**.
 fn apply_string_set_patch(target: &mut HashSet<String>, ops: &StringSetOps) {
     let mut out = if let Some(v) = &ops.override_value {
         v.clone()
@@ -398,6 +402,10 @@ fn combine_feature_set_vec_patch<'a>(
     }))
 }
 
+/// Apply combined patch operations to a feature set list.
+///
+/// The order is: start from override (or base), then remove, then add.
+/// This means if a set appears in both `add` and `remove`, **add wins**.
 fn apply_feature_set_vec_patch(
     base: &[HashSet<String>],
     ops: &FeatureSetVecOps,
