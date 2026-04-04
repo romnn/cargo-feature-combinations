@@ -39,13 +39,3 @@ impl<R: Read, W: Write> Read for Reader<R, W> {
         Ok(n)
     }
 }
-
-impl<R: Read + Clone, W: Write + Clone> Clone for Reader<R, W> {
-    fn clone(&self) -> Self {
-        Self {
-            read: self.read.clone(),
-            output: self.output.clone(),
-            force_flush: self.force_flush,
-        }
-    }
-}
