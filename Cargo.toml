@@ -93,7 +93,7 @@ strip-ansi-escapes = "0.2"
 mimalloc = "0.1"
 
 [dev-dependencies]
-similar-asserts = "1"
+similar-asserts = "2"
 semver = "1"
 cargo_metadata = { version = "0.23", features = ["builder"] }
 assert_fs = "1"
