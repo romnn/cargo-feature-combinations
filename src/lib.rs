@@ -480,8 +480,6 @@ impl Package for cargo_metadata::Package {
         let mut effective_exclude_features = config.exclude_features.clone();
 
         if config.skip_optional_dependencies {
-            use std::collections::HashSet;
-
             let mut implicit_features: HashSet<String> = HashSet::new();
             let mut optional_dep_used_with_dep_syntax_outside: HashSet<String> = HashSet::new();
 
@@ -1474,48 +1472,33 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let detector = RustcTargetDetector;
     let target = detector.detect_target(&cargo_args_owned)?;
     let mut evaluator = RustcCfgEvaluator::default();
-    match options.command {
+    let result = match options.command {
         Some(Command::Help | Command::Version) => Ok(()),
-        Some(Command::FeatureMatrix { pretty }) => {
-            match print_feature_matrix_for_target(
-                &packages,
-                pretty,
-                options.packages_only,
-                &target,
-                &mut evaluator,
-            ) {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
-                        print_feature_combination_error(e);
-                        process::exit(2);
-                    }
-                    Err(err)
-                }
-            }
-        }
+        Some(Command::FeatureMatrix { pretty }) => print_feature_matrix_for_target(
+            &packages,
+            pretty,
+            options.packages_only,
+            &target,
+            &mut evaluator,
+        ),
         None => {
             if cargo_subcommand(cargo_args.as_slice()) == CargoSubcommand::Other {
                 eprintln!(
                     "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
                 );
             }
-            match run_cargo_command_for_target(
-                &packages,
-                cargo_args,
-                &options,
-                &target,
-                &mut evaluator,
-            ) {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
-                        print_feature_combination_error(e);
-                        process::exit(2);
-                    }
-                    Err(err)
-                }
+            run_cargo_command_for_target(&packages, cargo_args, &options, &target, &mut evaluator)
+        }
+    };
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
+                print_feature_combination_error(e);
+                process::exit(2);
             }
+            Err(err)
         }
     }
 }
