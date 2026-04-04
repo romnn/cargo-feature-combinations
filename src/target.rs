@@ -15,8 +15,10 @@ impl TargetTriple {
 
 /// Detect the effective compilation target for this invocation.
 ///
-/// This tool treats the `--target` flag as authoritative. If no explicit target
-/// is passed, the host target is used.
+/// Resolution order:
+/// 1. `--target <triple>` CLI flag (authoritative)
+/// 2. `CARGO_BUILD_TARGET` environment variable
+/// 3. Host target via `rustc -vV`
 pub trait TargetDetector {
     /// Determine the effective target triple.
     ///
@@ -79,6 +81,12 @@ impl TargetDetector for RustcTargetDetector {
         if let Some(triple) = Self::parse_target_flag(cargo_args) {
             return Ok(TargetTriple(triple));
         }
+        if let Ok(triple) = std::env::var("CARGO_BUILD_TARGET") {
+            let triple = triple.trim();
+            if !triple.is_empty() {
+                return Ok(TargetTriple(triple.to_string()));
+            }
+        }
         Self::host_triple()
     }
 }
@@ -103,6 +111,31 @@ mod test {
         let args = vec!["--target=wasm32-unknown-unknown".to_string()];
         let triple = d.detect_target(&args)?;
         assert_eq!(triple.as_str(), "wasm32-unknown-unknown");
+        Ok(())
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn respects_cargo_build_target_env_var() -> eyre::Result<()> {
+        let d = RustcTargetDetector;
+        // SAFETY: test is single-threaded for this env var; cleaned up immediately.
+        unsafe { std::env::set_var("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu") };
+        let result = d.detect_target(&Vec::new());
+        unsafe { std::env::remove_var("CARGO_BUILD_TARGET") };
+        assert_eq!(result?.as_str(), "aarch64-unknown-linux-gnu");
+        Ok(())
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn cli_target_takes_precedence_over_env_var() -> eyre::Result<()> {
+        let d = RustcTargetDetector;
+        // SAFETY: test is single-threaded for this env var; cleaned up immediately.
+        unsafe { std::env::set_var("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu") };
+        let args = vec!["--target".to_string(), "wasm32-unknown-unknown".to_string()];
+        let result = d.detect_target(&args);
+        unsafe { std::env::remove_var("CARGO_BUILD_TARGET") };
+        assert_eq!(result?.as_str(), "wasm32-unknown-unknown");
         Ok(())
     }
 }
