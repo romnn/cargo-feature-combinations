@@ -1,8 +1,8 @@
 //! Workspace-level configuration and package discovery.
 
-use crate::METADATA_KEY;
 use crate::config::{Config, WorkspaceConfig};
 use crate::package::Package;
+use crate::{METADATA_KEY, PKG_METADATA_SECTION, WS_METADATA_SECTION};
 use color_eyre::eyre;
 
 /// Abstraction over a Cargo workspace used by this crate.
@@ -47,7 +47,7 @@ impl Workspace for cargo_metadata::Metadata {
 
             if !config.exclude_packages.is_empty() {
                 eprintln!(
-                    "warning: [package.metadata.cargo-feature-combinations].exclude_packages in the workspace root package is deprecated; use [workspace.metadata.cargo-feature-combinations].exclude_packages instead",
+                    "warning: {PKG_METADATA_SECTION}.exclude_packages in the workspace root package is deprecated; use {WS_METADATA_SECTION}.exclude_packages instead",
                 );
             }
 
@@ -69,7 +69,7 @@ impl Workspace for cargo_metadata::Metadata {
                     && !config.exclude_packages.is_empty()
                 {
                     eprintln!(
-                        "warning: [package.metadata.cargo-feature-combinations].exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                        "warning: {PKG_METADATA_SECTION}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
                         package.name,
                     );
                 }
@@ -89,7 +89,7 @@ impl Workspace for cargo_metadata::Metadata {
 
                     if has_values {
                         eprintln!(
-                            "warning: [workspace.metadata.cargo-feature-combinations].exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                            "warning: {WS_METADATA_SECTION}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
                             package.name,
                         );
                     }

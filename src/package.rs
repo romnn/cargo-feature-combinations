@@ -1,7 +1,7 @@
 //! Package-level configuration, feature combination generation, and error types.
 
-use crate::METADATA_KEY;
 use crate::config::Config;
+use crate::{METADATA_KEY, PKG_METADATA_SECTION};
 use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -37,13 +37,10 @@ impl fmt::Display for FeatureCombinationError {
             } => {
                 write!(
                     f,
-                    "too many configurations for package `{}`: {} feature(s) would produce {} combinations (limit: {})",
-                    package,
-                    num_features,
+                    "too many configurations for package `{package}`: {num_features} feature(s) would produce {} combinations (limit: {limit})",
                     num_configurations
                         .map(|v| v.to_string())
                         .unwrap_or_else(|| "an unbounded number of".to_string()),
-                    limit
                 )
             }
         }
@@ -93,21 +90,21 @@ impl Package for cargo_metadata::Package {
 
         if !config.deprecated.skip_feature_sets.is_empty() {
             eprintln!(
-                "warning: [package.metadata.cargo-feature-combinations].skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
+                "warning: {PKG_METADATA_SECTION}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
                 self.name,
             );
         }
 
         if !config.deprecated.denylist.is_empty() {
             eprintln!(
-                "warning: [package.metadata.cargo-feature-combinations].denylist in package `{}` is deprecated; use exclude_features instead",
+                "warning: {PKG_METADATA_SECTION}.denylist in package `{}` is deprecated; use exclude_features instead",
                 self.name,
             );
         }
 
         if !config.deprecated.exact_combinations.is_empty() {
             eprintln!(
-                "warning: [package.metadata.cargo-feature-combinations].exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
+                "warning: {PKG_METADATA_SECTION}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
                 self.name,
             );
         }

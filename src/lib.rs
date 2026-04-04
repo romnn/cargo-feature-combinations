@@ -29,16 +29,29 @@ pub use runner::{
 };
 pub use workspace::Workspace;
 
-use crate::cfg_eval::RustcCfgEvaluator;
-use crate::cli::cargo_subcommand;
-use crate::runner::print_feature_combination_error;
-use crate::target::{RustcTargetDetector, TargetDetector};
+use cfg_eval::RustcCfgEvaluator;
+use cli::cargo_subcommand;
+use runner::print_feature_combination_error;
+use target::{RustcTargetDetector, TargetDetector};
 
 use color_eyre::eyre;
 use std::process;
 
+/// Expands to the metadata key literal `"cargo-feature-combinations"`.
+macro_rules! metadata_key {
+    () => {
+        "cargo-feature-combinations"
+    };
+}
+
 /// Key used to look up this tool's configuration in Cargo metadata.
-pub(crate) const METADATA_KEY: &str = "cargo-feature-combinations";
+pub(crate) const METADATA_KEY: &str = metadata_key!();
+
+/// TOML section header for per-package configuration.
+pub(crate) const PKG_METADATA_SECTION: &str = concat!("[package.metadata.", metadata_key!(), "]");
+
+/// TOML section header for workspace-level configuration.
+pub(crate) const WS_METADATA_SECTION: &str = concat!("[workspace.metadata.", metadata_key!(), "]");
 
 /// Run the cargo subcommand for all relevant feature combinations.
 ///
