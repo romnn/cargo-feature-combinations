@@ -642,6 +642,257 @@ mod test {
     }
 
     #[test]
+    fn no_match_returns_base_unchanged() -> eyre::Result<()> {
+        let base = Config {
+            exclude_features: hs(&["default"]),
+            skip_optional_dependencies: true,
+            ..Config::default()
+        };
+
+        let mut eval = StubEval::default();
+        // No matches configured, so nothing matches.
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert_eq!(out.exclude_features, hs(&["default"]));
+        assert!(out.skip_optional_dependencies);
+        assert!(out.target.is_empty(), "target metadata should be cleared");
+        Ok(())
+    }
+
+    #[test]
+    fn remove_exclude_features() -> eyre::Result<()> {
+        let mut base = Config {
+            exclude_features: hs(&["default", "cuda", "metal"]),
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            TargetOverride {
+                exclude_features: Some(StringSetPatch::Patch {
+                    r#override: None,
+                    add: HashSet::new(),
+                    remove: hs(&["cuda"]),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches
+            .insert("cfg(target_os = \"linux\")".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert!(out.exclude_features.contains("default"));
+        assert!(out.exclude_features.contains("metal"));
+        assert!(
+            !out.exclude_features.contains("cuda"),
+            "cuda should be removed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multiple_matching_sections_combine_adds() -> eyre::Result<()> {
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                exclude_features: Some(StringSetPatch::Patch {
+                    r#override: None,
+                    add: hs(&["a"]),
+                    remove: HashSet::new(),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        target.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            TargetOverride {
+                exclude_features: Some(StringSetPatch::Patch {
+                    r#override: None,
+                    add: hs(&["b"]),
+                    remove: HashSet::new(),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+        eval.matches
+            .insert("cfg(target_os = \"linux\")".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert!(out.exclude_features.contains("default"));
+        assert!(out.exclude_features.contains("a"));
+        assert!(out.exclude_features.contains("b"));
+        Ok(())
+    }
+
+    #[test]
+    fn add_wins_over_remove_for_same_value() -> eyre::Result<()> {
+        let mut base = Config {
+            exclude_features: hs(&["default"]),
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                exclude_features: Some(StringSetPatch::Patch {
+                    r#override: None,
+                    add: hs(&["cuda"]),
+                    remove: hs(&["cuda"]),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        // add is applied after remove, so "cuda" should be present.
+        assert!(out.exclude_features.contains("cuda"));
+        Ok(())
+    }
+
+    #[test]
+    fn boolean_override_no_empty_feature_set() -> eyre::Result<()> {
+        let mut base = Config {
+            no_empty_feature_set: false,
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                no_empty_feature_set: Some(true),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert!(out.no_empty_feature_set);
+        Ok(())
+    }
+
+    #[test]
+    fn feature_set_vec_patch_add_include_feature_sets() -> eyre::Result<()> {
+        let mut base = Config {
+            include_feature_sets: hss(&[&["a", "b"]]),
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                include_feature_sets: Some(FeatureSetVecPatch::Patch {
+                    r#override: None,
+                    add: hss(&[&["c", "d"]]),
+                    remove: Vec::new(),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert_eq!(out.include_feature_sets.len(), 2);
+        let sets: Vec<HashSet<String>> = out.include_feature_sets;
+        assert!(sets.contains(&hs(&["a", "b"])));
+        assert!(sets.contains(&hs(&["c", "d"])));
+        Ok(())
+    }
+
+    #[test]
+    fn feature_set_vec_patch_remove() -> eyre::Result<()> {
+        let mut base = Config {
+            include_feature_sets: hss(&[&["a", "b"], &["c"]]),
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                include_feature_sets: Some(FeatureSetVecPatch::Patch {
+                    r#override: None,
+                    add: Vec::new(),
+                    remove: hss(&[&["a", "b"]]),
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert_eq!(out.include_feature_sets.len(), 1);
+        assert!(out.include_feature_sets.contains(&hs(&["c"])));
+        Ok(())
+    }
+
+    #[test]
+    fn matrix_metadata_merge_adds_new_key() -> eyre::Result<()> {
+        let mut base = Config::default();
+        base.matrix
+            .insert("existing".to_string(), serde_json::json!("keep"));
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                matrix: Some({
+                    let mut m = HashMap::new();
+                    m.insert("added".to_string(), serde_json::json!("new"));
+                    m
+                }),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert_eq!(
+            out.matrix.get("existing"),
+            Some(&serde_json::json!("keep")),
+            "original key preserved"
+        );
+        assert_eq!(
+            out.matrix.get("added"),
+            Some(&serde_json::json!("new")),
+            "new key added from patch"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn allow_feature_sets_singleton_conflict() -> eyre::Result<()> {
         let mut base = Config {
             exclude_features: hs(&["default"]),
