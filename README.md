@@ -78,10 +78,20 @@ OPTIONS:
 
 ### Configuration
 
-In your `Cargo.toml`, you can configure the feature combination matrix:
+In your `Cargo.toml`, you can configure the feature combination matrix.
+The following metadata key aliases are all supported:
+
+```
+[package.metadata.cargo-fc]              (recommended)
+[package.metadata.fc]
+[package.metadata.cargo-feature-combinations]
+[package.metadata.feature-combinations]
+```
+
+For example:
 
 ```toml
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
@@ -167,12 +177,12 @@ matrix = { kind = "ci" }
 
 # Optional: The `matrix` metadata from before can also be its own section
 # $ cargo fc matrix --pretty
-#   [{ 
-#       "requires-gpu": false, 
+#   [{
+#       "requires-gpu": false,
 #       "value-for-this-crate": "will show up in the feature matrix",
 #       ..
 #    }, .. ]
-[package.metadata.cargo-feature-combinations.matrix]
+[package.metadata.cargo-fc.matrix]
 value-for-this-crate = "will show up in the feature matrix"
 requires-gpu = false
 ```
@@ -180,7 +190,7 @@ requires-gpu = false
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
 
 ```toml
-[workspace.metadata.cargo-feature-combinations]
+[workspace.metadata.cargo-fc]
 # Exclude packages in the workspace metadata, or the metadata of the *root* package.
 exclude_packages = ["package-a", "package-b"]
 ```
@@ -198,7 +208,7 @@ cli = ["core"]
 tokio = { version = "1", optional = true }
 serde = { version = "1", optional = true }
 
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 exclude_features = ["default"]
 skip_optional_dependencies = true
 ```
@@ -220,19 +230,19 @@ You can override configuration for specific targets using Cargo-style `cfg(...)`
 Overrides are configured under:
 
 ```toml
-[package.metadata.cargo-feature-combinations.target.'cfg(...)']
+[package.metadata.cargo-fc.target.'cfg(...)']
 ```
 
 Example (exclude different features per OS):
 
 ```toml
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 exclude_features = ["default"]
 
-[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_features = { add = ["metal"] }
 
-[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "macos")']
+[package.metadata.cargo-fc.target.'cfg(target_os = "macos")']
 exclude_features = { add = ["cuda"] }
 ```
 
@@ -267,7 +277,7 @@ is allowed).
 <summary>Example: Start from fresh config with `replace=true`</summary>
 
 ```toml
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 exclude_features = ["default"]
 isolated_feature_sets = [
   ["gpu"],
@@ -275,7 +285,7 @@ isolated_feature_sets = [
 ]
 skip_optional_dependencies = true
 
-[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 replace = true
 
 # Start from a fresh default config on Linux: `isolated_feature_sets` and

@@ -150,10 +150,17 @@ OPTIONS:
                             when using --fail-fast
 
 Feature sets can be configured in your Cargo.toml configuration.
+The following metadata key aliases are all supported:
+
+    [package.metadata.cargo-fc]            (recommended)
+    [package.metadata.fc]
+    [package.metadata.cargo-feature-combinations]
+    [package.metadata.feature-combinations]
+
 For example:
 
 ```toml
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
@@ -231,10 +238,10 @@ isolated_feature_sets = [
 Target-specific configuration can be expressed via Cargo-style `cfg(...)` selectors:
 
 ```toml
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 exclude_features = ["default"]
 
-[package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_features = { add = ["metal"] }
 ```
 
@@ -255,7 +262,7 @@ Notes:
 When using a cargo workspace, you can also exclude packages in your workspace `Cargo.toml`:
 
 ```toml
-[workspace.metadata.cargo-feature-combinations]
+[workspace.metadata.cargo-fc]
 # Exclude packages in the workspace metadata, or the metadata of the *root* package.
 exclude_packages = ["package-a", "package-b"]
 ```

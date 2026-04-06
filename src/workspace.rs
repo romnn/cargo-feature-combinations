@@ -2,7 +2,10 @@
 
 use crate::config::{Config, WorkspaceConfig};
 use crate::package::Package;
-use crate::{METADATA_KEY, PKG_METADATA_SECTION, WS_METADATA_SECTION};
+use crate::{
+    DEFAULT_METADATA_KEY, METADATA_KEYS, find_metadata_value, pkg_metadata_section,
+    ws_metadata_section,
+};
 use color_eyre::eyre;
 
 /// Abstraction over a Cargo workspace used by this crate.
@@ -25,8 +28,8 @@ pub trait Workspace {
 
 impl Workspace for cargo_metadata::Metadata {
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig> {
-        let config: WorkspaceConfig = match self.workspace_metadata.get(METADATA_KEY) {
-            Some(config) => serde_json::from_value(config.clone())?,
+        let config: WorkspaceConfig = match find_metadata_value(&self.workspace_metadata) {
+            Some((value, _key)) => serde_json::from_value(value.clone())?,
             None => WorkspaceConfig::default(),
         };
         Ok(config)
@@ -43,11 +46,15 @@ impl Workspace for cargo_metadata::Metadata {
         let mut root_id: Option<cargo_metadata::PackageId> = None;
 
         if let Some(root_package) = self.root_package() {
+            let root_key = find_metadata_value(&root_package.metadata)
+                .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
             let config = root_package.config()?;
 
             if !config.exclude_packages.is_empty() {
                 eprintln!(
-                    "warning: {PKG_METADATA_SECTION}.exclude_packages in the workspace root package is deprecated; use {WS_METADATA_SECTION}.exclude_packages instead",
+                    "warning: {}.exclude_packages in the workspace root package is deprecated; use {}.exclude_packages instead",
+                    pkg_metadata_section(root_key),
+                    ws_metadata_section(root_key),
                 );
             }
 
@@ -63,35 +70,42 @@ impl Workspace for cargo_metadata::Metadata {
                     continue;
                 }
 
-                // [package.metadata.cargo-feature-combinations].exclude_packages
-                if let Some(raw) = package.metadata.get(METADATA_KEY)
+                // [package.metadata.<alias>].exclude_packages
+                if let Some((raw, key)) = find_metadata_value(&package.metadata)
                     && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
                     && !config.exclude_packages.is_empty()
                 {
                     eprintln!(
-                        "warning: {PKG_METADATA_SECTION}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                        "warning: {}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                        pkg_metadata_section(key),
                         package.name,
                     );
                 }
 
-                // [workspace.metadata.cargo-feature-combinations].exclude_packages specified in
+                // [workspace.metadata.<alias>].exclude_packages specified in
                 // non-root manifests is also a no-op. Detect the likely JSON shape produced by
                 // cargo metadata and warn if present.
-                if let Some(workspace) = package.metadata.get("workspace")
-                    && let Some(tool) = workspace.get(METADATA_KEY)
-                    && let Some(exclude_packages) = tool.get("exclude_packages")
-                {
-                    let has_values = match exclude_packages {
-                        serde_json::Value::Array(values) => !values.is_empty(),
-                        serde_json::Value::Null => false,
-                        _ => true,
-                    };
+                if let Some(workspace) = package.metadata.get("workspace") {
+                    let ws_tool = METADATA_KEYS
+                        .iter()
+                        .find_map(|&key| workspace.get(key).map(|tool| (key, tool)));
 
-                    if has_values {
-                        eprintln!(
-                            "warning: {WS_METADATA_SECTION}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
-                            package.name,
-                        );
+                    if let Some((key, tool)) = ws_tool
+                        && let Some(exclude_packages) = tool.get("exclude_packages")
+                    {
+                        let has_values = match exclude_packages {
+                            serde_json::Value::Array(values) => !values.is_empty(),
+                            serde_json::Value::Null => false,
+                            _ => true,
+                        };
+
+                        if has_values {
+                            eprintln!(
+                                "warning: {}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                                ws_metadata_section(key),
+                                package.name,
+                            );
+                        }
                     }
                 }
             }
@@ -155,6 +169,75 @@ mod test {
 
         let have = metadata.packages_for_fc()?;
         assert!(have.is_empty(), "expected no packages after exclusion");
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_with_excluded_package_cargo_fc_alias() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "cargo-fc": {
+                    "exclude_packages": [package.name]
+                }
+            }))
+            .build()?;
+
+        let have = metadata.packages_for_fc()?;
+        assert!(
+            have.is_empty(),
+            "expected no packages after exclusion via cargo-fc alias"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_with_excluded_package_fc_alias() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "fc": {
+                    "exclude_packages": [package.name]
+                }
+            }))
+            .build()?;
+
+        let have = metadata.packages_for_fc()?;
+        assert!(
+            have.is_empty(),
+            "expected no packages after exclusion via fc alias"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_with_excluded_package_feature_combinations_alias() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "feature-combinations": {
+                    "exclude_packages": [package.name]
+                }
+            }))
+            .build()?;
+
+        let have = metadata.packages_for_fc()?;
+        assert!(
+            have.is_empty(),
+            "expected no packages after exclusion via feature-combinations alias"
+        );
         Ok(())
     }
 

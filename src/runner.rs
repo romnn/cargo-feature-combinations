@@ -1,6 +1,6 @@
 //! Cargo command execution, output parsing, summary printing, and matrix output.
 
-use crate::PKG_METADATA_SECTION;
+use crate::DEFAULT_PKG_METADATA_SECTION;
 use crate::cfg_eval::RustcCfgEvaluator;
 use crate::cli::{CargoSubcommand, Options, cargo_subcommand};
 use crate::package::{FeatureCombinationError, Package};
@@ -134,7 +134,7 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
             let _ = stderr.reset();
             let _ = writeln!(
                 &mut stderr,
-                "    Consider restricting the matrix using {PKG_METADATA_SECTION}.only_features",
+                "    Consider restricting the matrix using {DEFAULT_PKG_METADATA_SECTION}.only_features",
             );
             let _ = writeln!(
                 &mut stderr,

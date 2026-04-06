@@ -7,12 +7,12 @@ use self::patch::{FeatureSetVecPatch, StringSetPatch};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// Per-package configuration for `cargo-feature-combinations`.
+/// Per-package configuration for `cargo-fc`.
 ///
-/// This is read from `[package.metadata.cargo-feature-combinations]` in a
-/// package's `Cargo.toml`. For workspace-wide options such as
+/// This is read from `[package.metadata.cargo-fc]` (or any supported alias)
+/// in a package's `Cargo.toml`. For workspace-wide options such as
 /// `exclude_packages`, prefer using [`WorkspaceConfig`] via
-/// `[workspace.metadata.cargo-feature-combinations]` instead.
+/// `[workspace.metadata.cargo-fc]` instead.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Config {
     /// Feature sets that must be tested in isolation.
@@ -48,7 +48,7 @@ pub struct Config {
     pub skip_optional_dependencies: bool,
     /// Deprecated: kept for backwards compatibility. Prefer
     /// [`WorkspaceConfig::exclude_packages`] via
-    /// `[workspace.metadata.cargo-feature-combinations].exclude_packages`.
+    /// `[workspace.metadata.cargo-fc].exclude_packages`.
     #[serde(default)]
     pub exclude_packages: HashSet<String>,
     /// Formerly named `skip_feature_sets`
@@ -69,7 +69,7 @@ pub struct Config {
 
     /// Target-specific configuration overrides.
     ///
-    /// This is read from `[package.metadata.cargo-feature-combinations.target.'cfg(...)']`.
+    /// This is read from `[package.metadata.cargo-fc.target.'cfg(...)']`.
     #[serde(default)]
     pub target: BTreeMap<String, TargetOverride>,
     /// Deprecated configuration keys (kept for backwards compatibility).
@@ -120,7 +120,7 @@ pub struct TargetOverride {
     pub matrix: Option<HashMap<String, serde_json::Value>>,
 }
 
-/// Workspace-wide configuration for `cargo-feature-combinations`.
+/// Workspace-wide configuration for `cargo-fc`.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct WorkspaceConfig {
     /// List of package names to exclude from the workspace analysis.

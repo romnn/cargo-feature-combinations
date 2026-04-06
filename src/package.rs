@@ -1,7 +1,7 @@
 //! Package-level configuration, feature combination generation, and error types.
 
 use crate::config::Config;
-use crate::{METADATA_KEY, PKG_METADATA_SECTION};
+use crate::{DEFAULT_METADATA_KEY, find_metadata_value, pkg_metadata_section};
 use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -83,28 +83,30 @@ pub trait Package {
 
 impl Package for cargo_metadata::Package {
     fn config(&self) -> eyre::Result<Config> {
-        let mut config: Config = match self.metadata.get(METADATA_KEY) {
-            Some(config) => serde_json::from_value(config.clone())?,
-            None => Config::default(),
+        let (mut config, key) = match find_metadata_value(&self.metadata) {
+            Some((value, key)) => (serde_json::from_value(value.clone())?, key),
+            None => (Config::default(), DEFAULT_METADATA_KEY),
         };
+
+        let section = pkg_metadata_section(key);
 
         if !config.deprecated.skip_feature_sets.is_empty() {
             eprintln!(
-                "warning: {PKG_METADATA_SECTION}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
+                "warning: {section}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
                 self.name,
             );
         }
 
         if !config.deprecated.denylist.is_empty() {
             eprintln!(
-                "warning: {PKG_METADATA_SECTION}.denylist in package `{}` is deprecated; use exclude_features instead",
+                "warning: {section}.denylist in package `{}` is deprecated; use exclude_features instead",
                 self.name,
             );
         }
 
         if !config.deprecated.exact_combinations.is_empty() {
             eprintln!(
-                "warning: {PKG_METADATA_SECTION}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
+                "warning: {section}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
                 self.name,
             );
         }
@@ -732,6 +734,105 @@ pub(crate) mod test {
         assert!(
             err.to_string().contains("too many configurations"),
             "expected 'too many configurations' error, got: {err}"
+        );
+        Ok(())
+    }
+
+    /// Build a package whose metadata contains a config under the given alias.
+    pub(crate) fn package_with_metadata(
+        features: &[&str],
+        metadata_key: &str,
+        config: &serde_json::Value,
+    ) -> eyre::Result<cargo_metadata::Package> {
+        let mut package = package_with_features(features)?;
+        package.metadata = serde_json::json!({ metadata_key: config });
+        Ok(package)
+    }
+
+    #[test]
+    fn config_from_cargo_fc_alias() -> eyre::Result<()> {
+        init();
+        let package = package_with_metadata(
+            &["foo", "bar"],
+            "cargo-fc",
+            &serde_json::json!({ "exclude_features": ["foo"] }),
+        )?;
+        let config = package.config()?;
+        assert!(config.exclude_features.contains("foo"));
+        assert!(!config.exclude_features.contains("bar"));
+        Ok(())
+    }
+
+    #[test]
+    fn config_from_fc_alias() -> eyre::Result<()> {
+        init();
+        let package = package_with_metadata(
+            &["foo", "bar"],
+            "fc",
+            &serde_json::json!({ "exclude_features": ["bar"] }),
+        )?;
+        let config = package.config()?;
+        assert!(config.exclude_features.contains("bar"));
+        assert!(!config.exclude_features.contains("foo"));
+        Ok(())
+    }
+
+    #[test]
+    fn config_from_feature_combinations_alias() -> eyre::Result<()> {
+        init();
+        let package = package_with_metadata(
+            &["a", "b"],
+            "feature-combinations",
+            &serde_json::json!({ "no_empty_feature_set": true }),
+        )?;
+        let config = package.config()?;
+        assert!(config.no_empty_feature_set);
+        Ok(())
+    }
+
+    #[test]
+    fn config_from_cargo_feature_combinations_alias() -> eyre::Result<()> {
+        init();
+        let package = package_with_metadata(
+            &["a", "b"],
+            "cargo-feature-combinations",
+            &serde_json::json!({ "exclude_features": ["a"] }),
+        )?;
+        let config = package.config()?;
+        assert!(config.exclude_features.contains("a"));
+        Ok(())
+    }
+
+    #[test]
+    fn config_default_when_no_metadata() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo"])?;
+        let config = package.config()?;
+        assert!(config.exclude_features.is_empty());
+        assert!(!config.no_empty_feature_set);
+        Ok(())
+    }
+
+    #[test]
+    fn config_alias_affects_feature_matrix() -> eyre::Result<()> {
+        init();
+        let package = package_with_metadata(
+            &["foo", "bar"],
+            "cargo-fc",
+            &serde_json::json!({ "exclude_features": ["foo"] }),
+        )?;
+        let config = package.config()?;
+        let matrix = package.feature_combinations(&config)?;
+
+        // "foo" is excluded, so no combination should contain it
+        assert!(
+            !matrix.iter().any(|combo| combo.iter().any(|f| *f == "foo")),
+            "expected no combination to contain 'foo', got: {matrix:?}"
+        );
+        // "bar" should still appear
+        assert!(
+            matrix.iter().any(|combo| combo.iter().any(|f| *f == "bar")),
+            "expected 'bar' in at least one combination, got: {matrix:?}"
         );
         Ok(())
     }

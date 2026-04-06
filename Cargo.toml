@@ -65,7 +65,7 @@ indexing_slicing = "deny"
 [features]
 default = []
 
-[package.metadata.cargo-feature-combinations]
+[package.metadata.cargo-fc]
 exclude_features = ["default"]
 
 [dependencies]

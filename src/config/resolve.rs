@@ -9,9 +9,9 @@ use super::{Config, DeprecatedConfig, TargetOverride};
 
 /// Resolve a target-specific effective [`Config`] for the given base config.
 ///
-/// The base config is read from `[package.metadata.cargo-feature-combinations]`.
+/// The base config is read from `[package.metadata.cargo-fc]` (or any supported alias).
 /// Target overrides are read from
-/// `[package.metadata.cargo-feature-combinations.target.'cfg(...)']`.
+/// `[package.metadata.cargo-fc.target.'cfg(...)']`.
 ///
 /// This function:
 ///

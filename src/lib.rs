@@ -37,21 +37,56 @@ use target::{RustcTargetDetector, TargetDetector};
 use color_eyre::eyre;
 use std::process;
 
-/// Expands to the metadata key literal `"cargo-feature-combinations"`.
-macro_rules! metadata_key {
+/// Expands to the default metadata key literal.
+macro_rules! default_metadata_key {
     () => {
-        "cargo-feature-combinations"
+        "cargo-fc"
     };
 }
 
-/// Key used to look up this tool's configuration in Cargo metadata.
-pub(crate) const METADATA_KEY: &str = metadata_key!();
+/// All recognized metadata key aliases, tried in order during lookup.
+///
+/// Longest (most explicit) keys come first so that when a manifest
+/// contains more than one alias the most specific one wins.
+pub(crate) const METADATA_KEYS: &[&str] = &[
+    "cargo-feature-combinations",
+    "feature-combinations",
+    "cargo-fc",
+    "fc",
+];
 
-/// TOML section header for per-package configuration.
-pub(crate) const PKG_METADATA_SECTION: &str = concat!("[package.metadata.", metadata_key!(), "]");
+/// Default metadata key used in hints and help text when no existing
+/// usage is detected.
+pub(crate) const DEFAULT_METADATA_KEY: &str = default_metadata_key!();
 
-/// TOML section header for workspace-level configuration.
-pub(crate) const WS_METADATA_SECTION: &str = concat!("[workspace.metadata.", metadata_key!(), "]");
+/// Default TOML section header for per-package configuration.
+pub(crate) const DEFAULT_PKG_METADATA_SECTION: &str =
+    concat!("[package.metadata.", default_metadata_key!(), "]");
+
+/// Look up configuration from any recognized metadata key alias.
+///
+/// Returns the first matching value and the alias that matched, or
+/// `None` if none of the aliases are present.
+pub(crate) fn find_metadata_value(
+    metadata: &serde_json::Value,
+) -> Option<(&serde_json::Value, &'static str)> {
+    for &key in METADATA_KEYS {
+        if let Some(value) = metadata.get(key) {
+            return Some((value, key));
+        }
+    }
+    None
+}
+
+/// Format a `[package.metadata.<key>]` TOML section header.
+pub(crate) fn pkg_metadata_section(key: &str) -> String {
+    format!("[package.metadata.{key}]")
+}
+
+/// Format a `[workspace.metadata.<key>]` TOML section header.
+pub(crate) fn ws_metadata_section(key: &str) -> String {
+    format!("[workspace.metadata.{key}]")
+}
 
 /// Run the cargo subcommand for all relevant feature combinations.
 ///
@@ -148,5 +183,86 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             }
             Err(err)
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use color_eyre::eyre;
+    use serde_json::json;
+
+    #[test]
+    fn find_metadata_value_returns_none_for_empty_object() {
+        let meta = json!({});
+        assert!(find_metadata_value(&meta).is_none());
+    }
+
+    #[test]
+    fn find_metadata_value_returns_none_for_unrelated_keys() {
+        let meta = json!({ "other-tool": { "key": "value" } });
+        assert!(find_metadata_value(&meta).is_none());
+    }
+
+    #[test]
+    fn find_metadata_value_finds_each_alias() -> eyre::Result<()> {
+        for &alias in METADATA_KEYS {
+            let meta = json!({ alias: { "exclude_features": ["default"] } });
+            let (value, matched) =
+                find_metadata_value(&meta).ok_or_else(|| eyre::eyre!("no match for {alias}"))?;
+            assert_eq!(matched, alias);
+            assert!(value.get("exclude_features").is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn find_metadata_value_prefers_longest_alias() -> eyre::Result<()> {
+        let meta = json!({
+            "cargo-feature-combinations": { "source": "long" },
+            "fc": { "source": "short" },
+        });
+        let (value, matched) = find_metadata_value(&meta).ok_or_else(|| eyre::eyre!("no match"))?;
+        assert_eq!(matched, "cargo-feature-combinations");
+        assert_eq!(value["source"], "long");
+        Ok(())
+    }
+
+    #[test]
+    fn find_metadata_value_prefers_cargo_fc_over_fc() -> eyre::Result<()> {
+        let meta = json!({
+            "cargo-fc": { "source": "cargo-fc" },
+            "fc": { "source": "fc" },
+        });
+        let (_, matched) = find_metadata_value(&meta).ok_or_else(|| eyre::eyre!("no match"))?;
+        assert_eq!(matched, "cargo-fc");
+        Ok(())
+    }
+
+    #[test]
+    fn pkg_metadata_section_formats_correctly() {
+        assert_eq!(
+            pkg_metadata_section("cargo-fc"),
+            "[package.metadata.cargo-fc]"
+        );
+        assert_eq!(pkg_metadata_section("fc"), "[package.metadata.fc]");
+    }
+
+    #[test]
+    fn ws_metadata_section_formats_correctly() {
+        assert_eq!(
+            ws_metadata_section("cargo-fc"),
+            "[workspace.metadata.cargo-fc]"
+        );
+    }
+
+    #[test]
+    fn default_metadata_key_is_cargo_fc() {
+        assert_eq!(DEFAULT_METADATA_KEY, "cargo-fc");
+    }
+
+    #[test]
+    fn default_pkg_metadata_section_uses_default_key() {
+        assert_eq!(DEFAULT_PKG_METADATA_SECTION, "[package.metadata.cargo-fc]");
     }
 }
