@@ -44,8 +44,14 @@ To get an idea, consider these examples:
 # Run tests and fail on the first failing combination of features
 cargo fc --fail-fast test
 
-# Silence output and only show final summary
-cargo fc --silent build
+# Show only diagnostics (warnings/errors), suppress build noise
+cargo fc --diagnostics-only clippy
+
+# Same as `--diagnostics-only`, but also deduplicate identical diagnostics across feature combinations
+cargo fc --dedupe clippy
+
+# Silence output and only show the final summary
+cargo fc --summary-only build
 
 # Print all combinations of features in JSON (useful for usage in github actions)
 cargo fc matrix --pretty
@@ -66,9 +72,13 @@ SUBCOMMAND:
 
 OPTIONS:
     --help                  Print help information
-    --silent                Hide cargo output and only show summary
+    --diagnostics-only      Show only diagnostics (warnings/errors) per
+                            feature combination, suppressing build noise
+    --dedupe                Like --diagnostics-only, but also deduplicate
+                            identical diagnostics across feature combinations
+    --summary-only          Hide cargo output and only show the final summary
     --fail-fast             Fail fast on the first bad feature combination
-    --exclude-package       Exclude a package from feature combinations 
+    --exclude-package       Exclude a package from feature combinations
     --only-packages-with-lib-target
                             Only consider packages with a library target
     --errors-only           Allow all warnings, show errors only (-Awarnings)

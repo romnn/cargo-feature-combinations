@@ -4,6 +4,7 @@ use crate::DEFAULT_PKG_METADATA_SECTION;
 use crate::cfg_eval::RustcCfgEvaluator;
 use crate::cli::{CargoSubcommand, Options, cargo_subcommand};
 use crate::package::{FeatureCombinationError, Package};
+use crate::print_warning;
 use crate::target::{RustcTargetDetector, TargetDetector, TargetTriple};
 
 use color_eyre::eyre;
@@ -36,6 +37,25 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
     spec
 }
 
+/// Force colored output on a subprocess.
+///
+/// Subprocesses see a pipe (not a TTY) on stderr because we capture their
+/// output, so most tools auto-disable color. We counteract this in three ways:
+///
+/// - `CARGO_TERM_COLOR=always` — respected by cargo itself.
+/// - `FORCE_COLOR=1` — widely adopted convention (Node.js, Python, Ruby, many
+///   Rust crates via `anstream`).
+/// - `--color always` is additionally injected into the cargo argument list by
+///   the caller for the direct subcommand.
+///
+/// A more universal fix would be to allocate a pseudo-TTY (e.g. via
+/// `portable-pty`) so that `isatty()` returns true in the subprocess, but the
+/// env-var approach covers the vast majority of real-world cases.
+fn force_color(cmd: &mut process::Command) {
+    cmd.env("CARGO_TERM_COLOR", "always");
+    cmd.env("FORCE_COLOR", "1");
+}
+
 /// Summary of the outcome for running a cargo command on a single feature set.
 #[derive(Debug)]
 pub struct Summary {
@@ -45,6 +65,7 @@ pub struct Summary {
     pedantic_success: bool,
     num_warnings: usize,
     num_errors: usize,
+    num_suppressed: usize,
 }
 
 /// Extract per-crate warning counts from cargo output.
@@ -75,13 +96,58 @@ pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
             clippy::expect_used,
             reason = "hard-coded regex pattern is expected to be valid"
         )]
-        Regex::new(r"error: could not compile `.*` due to\s*(\d*)\s*previous errors?")
+        Regex::new(r"error: could not compile `[^`]*`.*due to\s*(\d*)\s*previous errors?")
             .expect("valid error regex")
     });
     ERROR_REGEX
         .captures_iter(output)
         .filter_map(|cap| cap.get(1))
         .map(|m| m.as_str().parse::<usize>().unwrap_or(1))
+}
+
+/// Result of processing cargo output for a single feature combination.
+pub(crate) struct ProcessResult {
+    pub num_warnings: usize,
+    pub num_errors: usize,
+    pub num_suppressed: usize,
+    pub output: Vec<u8>,
+}
+
+/// Capture cargo stderr, optionally tee-ing it to the terminal.
+///
+/// In summary-only mode the output is buffered only; otherwise it is streamed
+/// to `stdout` while also being captured for later analysis.
+fn capture_stderr(
+    child: &mut process::Child,
+    summary_only: bool,
+    stdout: &mut StandardStream,
+) -> io::Result<ProcessResult> {
+    let output_buffer = Vec::<u8>::new();
+    let mut output_cursor = io::Cursor::new(output_buffer);
+
+    if let Some(proc_stderr) = child.stderr.take() {
+        let mut proc_reader = io::BufReader::new(proc_stderr);
+        if summary_only {
+            io::copy(&mut proc_reader, &mut output_cursor)?;
+        } else {
+            let mut tee_reader = crate::tee::Reader::new(proc_reader, stdout, true);
+            io::copy(&mut tee_reader, &mut output_cursor)?;
+        }
+    } else {
+        eprintln!("ERROR: failed to redirect stderr");
+    }
+
+    let stripped = strip_ansi_escapes::strip(output_cursor.get_ref());
+    let stripped = String::from_utf8_lossy(&stripped);
+    let num_warnings = warning_counts(&stripped).sum::<usize>();
+    let num_errors = error_counts(&stripped).sum::<usize>();
+
+    Ok(ProcessResult {
+        num_warnings,
+        num_errors,
+        num_suppressed: 0,
+        output: output_cursor.into_inner(),
+    })
 }
 
 pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
@@ -153,7 +219,7 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
 /// feature sets have been processed.
 #[must_use]
 pub fn print_summary(
-    summary: Vec<Summary>,
+    summary: &[Summary],
     mut stdout: termcolor::StandardStream,
     elapsed: Duration,
 ) -> ExitCode {
@@ -173,17 +239,22 @@ pub fn print_summary(
     print!("    Finished ");
     stdout.reset().ok();
     println!(
-        "{num_feature_sets} total feature combination{} for {num_packages} package{} in {elapsed:?}",
+        "{num_feature_sets} total feature combination{} for {num_packages} package{} in {:.2}s",
         if num_feature_sets > 1 { "s" } else { "" },
         if num_packages > 1 { "s" } else { "" },
+        elapsed.as_secs_f64(),
     );
     println!();
+
+    let show_suppressed = summary.iter().any(|s| s.num_suppressed > 0);
 
     let mut first_bad_exit_code: Option<i32> = None;
     let most_errors = summary.iter().map(|s| s.num_errors).max().unwrap_or(0);
     let most_warnings = summary.iter().map(|s| s.num_warnings).max().unwrap_or(0);
+    let most_suppressed = summary.iter().map(|s| s.num_suppressed).max().unwrap_or(0);
     let errors_width = most_errors.to_string().len();
     let warnings_width = most_warnings.to_string().len();
+    let suppressed_width = most_suppressed.to_string().len();
 
     for s in summary {
         if !s.pedantic_success {
@@ -200,15 +271,29 @@ pub fn print_summary(
             print!("        PASS ");
         }
         stdout.reset().ok();
-        println!(
-            "{} ( {:ew$} errors, {:ww$} warnings, features = [{}] )",
-            s.package_name,
-            s.num_errors.to_string(),
-            s.num_warnings.to_string(),
-            s.features.iter().join(", "),
-            ew = errors_width,
-            ww = warnings_width,
-        );
+        if show_suppressed {
+            println!(
+                "{} ( {:>ew$} errors, {:>ww$} warnings, {:>sw$} suppressed, features = [{}] )",
+                s.package_name,
+                s.num_errors,
+                s.num_warnings,
+                s.num_suppressed,
+                s.features.iter().join(", "),
+                ew = errors_width,
+                ww = warnings_width,
+                sw = suppressed_width,
+            );
+        } else {
+            println!(
+                "{} ( {:>ew$} errors, {:>ww$} warnings, features = [{}] )",
+                s.package_name,
+                s.num_errors,
+                s.num_warnings,
+                s.features.iter().join(", "),
+                ew = errors_width,
+                ww = warnings_width,
+            );
+        }
     }
     println!();
 
@@ -223,11 +308,13 @@ fn print_package_cmd(
     options: &Options,
     stdout: &mut StandardStream,
 ) {
-    if !options.silent {
+    let compact = options.summary_only || options.diagnostics_only;
+    if !compact {
         println!();
     }
+    let subcommand = cargo_subcommand(cargo_args);
     stdout.set_color(&CYAN).ok();
-    match cargo_subcommand(cargo_args) {
+    match subcommand {
         CargoSubcommand::Test => {
             print!("     Testing ");
         }
@@ -247,7 +334,12 @@ fn print_package_cmd(
             print!("     ");
         }
     }
-    stdout.reset().ok();
+    // For known subcommands, only the verb is colored. For unknown
+    // subcommands (Other) we keep cyan for the entire line so the header
+    // remains visually distinct.
+    if subcommand != CargoSubcommand::Other {
+        stdout.reset().ok();
+    }
     print!(
         "{} ( features = [{}] )",
         package.name,
@@ -256,8 +348,9 @@ fn print_package_cmd(
     if options.verbose {
         print!(" [cargo {}]", all_args.join(" "));
     }
+    stdout.reset().ok();
     println!();
-    if !options.silent {
+    if !compact {
         println!();
     }
 }
@@ -363,6 +456,126 @@ pub fn run_cargo_command(
     run_cargo_command_for_target(packages, cargo_args, options, &target, &mut evaluator)
 }
 
+/// Pre-computed state shared across all feature combinations in a single
+/// [`run_cargo_command_for_target`] invocation.
+struct RunContext<'a> {
+    cargo_args: &'a [&'a str],
+    extra_args: &'a [&'a str],
+    missing_arguments: bool,
+    use_diagnostics_only: bool,
+    options: &'a Options,
+}
+
+/// Result of [`run_single_combination`] for one feature combination.
+struct CombinationResult {
+    summary: Summary,
+    /// Raw (colored) output buffer for potential `--fail-fast` dumping.
+    colored_output: Vec<u8>,
+}
+
+/// Run a single cargo invocation for one feature combination and collect
+/// its output into a [`Summary`].
+fn run_single_combination(
+    package: &cargo_metadata::Package,
+    features: &[&String],
+    ctx: &RunContext<'_>,
+    seen_diagnostics: &mut HashSet<String>,
+    stdout: &mut StandardStream,
+) -> eyre::Result<CombinationResult> {
+    // We set the command working dir to the package manifest parent dir.
+    // This works well for now, but one could also consider `--manifest-path` or `-p`
+    let Some(working_dir) = package.manifest_path.parent() else {
+        eyre::bail!(
+            "could not find parent dir of package {}",
+            package.manifest_path.to_string()
+        )
+    };
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut cmd = process::Command::new(&cargo);
+    force_color(&mut cmd);
+
+    if ctx.options.errors_only {
+        cmd.env(
+            "RUSTFLAGS",
+            format!(
+                "-Awarnings {}", // allows all warnings
+                std::env::var("RUSTFLAGS").unwrap_or_default()
+            ),
+        );
+    }
+
+    let mut args = ctx.cargo_args.to_vec();
+    if ctx.use_diagnostics_only {
+        args.push(crate::diagnostics_only::MESSAGE_FORMAT);
+    }
+    let features_flag = format!("--features={}", &features.iter().join(","));
+    if !ctx.missing_arguments {
+        args.push("--no-default-features");
+        args.push(&features_flag);
+    }
+    args.extend_from_slice(ctx.extra_args);
+    print_package_cmd(
+        package,
+        features,
+        ctx.cargo_args,
+        &args,
+        ctx.options,
+        stdout,
+    );
+
+    cmd.args(&args).current_dir(working_dir);
+    if ctx.use_diagnostics_only {
+        cmd.stdout(process::Stdio::piped());
+    }
+    cmd.stderr(process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    let result = if ctx.use_diagnostics_only {
+        crate::diagnostics_only::process_output(
+            &mut child,
+            ctx.options.summary_only,
+            ctx.options.dedupe,
+            seen_diagnostics,
+            stdout,
+        )?
+    } else {
+        capture_stderr(&mut child, ctx.options.summary_only, stdout)?
+    };
+
+    let exit_status = child.wait()?;
+
+    // Print per-combination dedup note after diagnostics
+    if result.num_suppressed > 0 && !ctx.options.summary_only {
+        stdout.set_color(&CYAN).ok();
+        print!("       Note ");
+        stdout.reset().ok();
+        println!(
+            "{} duplicate diagnostic{} suppressed",
+            result.num_suppressed,
+            if result.num_suppressed > 1 { "s" } else { "" },
+        );
+    }
+
+    let fail = !exit_status.success();
+    let pedantic_fail = ctx.options.pedantic && (result.num_errors > 0 || result.num_warnings > 0);
+
+    let summary = Summary {
+        features: features.iter().map(|s| (*s).clone()).collect(),
+        num_errors: result.num_errors,
+        num_warnings: result.num_warnings,
+        num_suppressed: result.num_suppressed,
+        package_name: package.name.to_string(),
+        exit_code: exit_status.code(),
+        pedantic_success: !(fail || pedantic_fail),
+    };
+
+    Ok(CombinationResult {
+        summary,
+        colored_output: result.output,
+    })
+}
+
 /// Like [`run_cargo_command`], but for a specific target and evaluator.
 ///
 /// This is useful for library consumers that want to control target
@@ -395,110 +608,55 @@ pub fn run_cargo_command_for_target(
         cargo_args.extend(["--color", "always"]);
     }
 
+    // Determine whether we can use diagnostics-only (JSON) mode.
+    let user_has_message_format = cargo_args.iter().any(|a| a.starts_with("--message-format"));
+    let use_diagnostics_only = options.diagnostics_only && !user_has_message_format;
+
+    if options.diagnostics_only && user_has_message_format {
+        print_warning!("--diagnostics-only is ignored when --message-format is already specified");
+    }
+
+    let ctx = RunContext {
+        cargo_args: &cargo_args,
+        extra_args: &extra_args,
+        missing_arguments,
+        use_diagnostics_only,
+        options,
+    };
+
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
     let mut summary: Vec<Summary> = Vec::new();
-
+    let mut seen_diagnostics: HashSet<String> = HashSet::new();
     for package in packages {
         let base_config = package.config()?;
         let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
 
         for features in package.feature_combinations(&config)? {
-            // We set the command working dir to the package manifest parent dir.
-            // This works well for now, but one could also consider `--manifest-path` or `-p`
-            let Some(working_dir) = package.manifest_path.parent() else {
-                eyre::bail!(
-                    "could not find parent dir of package {}",
-                    package.manifest_path.to_string()
-                )
-            };
-
-            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let mut cmd = process::Command::new(&cargo);
-
-            if options.errors_only {
-                cmd.env(
-                    "RUSTFLAGS",
-                    format!(
-                        "-Awarnings {}", // allows all warnings
-                        std::env::var("RUSTFLAGS").unwrap_or_default()
-                    ),
-                );
-            }
-
-            let mut args = cargo_args.clone();
-            let features_flag = format!("--features={}", &features.iter().join(","));
-            if !missing_arguments {
-                args.push("--no-default-features");
-                args.push(&features_flag);
-            }
-            args.extend(extra_args.clone());
-            print_package_cmd(package, &features, &cargo_args, &args, options, &mut stdout);
-
-            cmd.args(args)
-                .current_dir(working_dir)
-                .stderr(process::Stdio::piped());
-            let mut process = cmd.spawn()?;
-
-            // build an output writer buffer
-            let output_buffer = Vec::<u8>::new();
-            let mut colored_output = io::Cursor::new(output_buffer);
-
-            {
-                // tee write to buffer and stdout
-                if let Some(proc_stderr) = process.stderr.take() {
-                    let mut proc_reader = io::BufReader::new(proc_stderr);
-                    if options.silent {
-                        io::copy(&mut proc_reader, &mut colored_output)?;
-                    } else {
-                        let mut tee_reader =
-                            crate::tee::Reader::new(proc_reader, &mut stdout, true);
-                        io::copy(&mut tee_reader, &mut colored_output)?;
-                    }
-                } else {
-                    eprintln!("ERROR: failed to redirect stderr");
-                }
-            }
-
-            let exit_status = process.wait()?;
-            let output = strip_ansi_escapes::strip(colored_output.get_ref());
-            let output = String::from_utf8_lossy(&output);
-
-            let num_warnings = warning_counts(&output).sum::<usize>();
-            let num_errors = error_counts(&output).sum::<usize>();
-            let has_errors = num_errors > 0;
-            let has_warnings = num_warnings > 0;
-
-            let fail = !exit_status.success();
-
-            let pedantic_fail = options.pedantic && (has_errors || has_warnings);
-            let pedantic_success = !(fail || pedantic_fail);
-
-            summary.push(Summary {
-                features: features.into_iter().cloned().collect(),
-                num_errors,
-                num_warnings,
-                package_name: package.name.to_string(),
-                exit_code: exit_status.code(),
-                pedantic_success,
-            });
+            let result = run_single_combination(
+                package,
+                &features,
+                &ctx,
+                &mut seen_diagnostics,
+                &mut stdout,
+            )?;
+            let pedantic_success = result.summary.pedantic_success;
+            let exit_code = result.summary.exit_code;
+            summary.push(result.summary);
 
             if options.fail_fast && !pedantic_success {
-                if options.silent {
-                    io::copy(
-                        &mut io::Cursor::new(colored_output.into_inner()),
-                        &mut stdout,
-                    )?;
+                if options.summary_only {
+                    io::copy(&mut io::Cursor::new(result.colored_output), &mut stdout)?;
                     stdout.flush().ok();
                 }
-                let code = print_summary(summary, stdout, start.elapsed())
-                    .or(exit_status.code())
+                let code = print_summary(&summary, stdout, start.elapsed())
+                    .or(exit_code)
                     .unwrap_or(1);
                 return Ok(Some(code));
             }
         }
     }
 
-    Ok(print_summary(summary, stdout, start.elapsed()))
+    Ok(print_summary(&summary, stdout, start.elapsed()))
 }
 
 #[cfg(test)]
@@ -511,6 +669,22 @@ mod test {
         let stderr = include_str!("../test-data/single_mod_multiple_errors_stderr.txt");
         let errors: Vec<_> = error_counts(stderr).collect();
         sim_assert_eq!(&errors, &vec![2]);
+    }
+
+    #[test]
+    fn error_regex_with_target_kind() {
+        let stderr =
+            "error: could not compile `docparser-paddleocr-vl` (lib) due to 24 previous errors";
+        let errors: Vec<_> = error_counts(stderr).collect();
+        sim_assert_eq!(&errors, &vec![24]);
+    }
+
+    #[test]
+    fn error_regex_with_target_kind_bin() {
+        let stderr =
+            "error: could not compile `my-crate` (bin \"my-crate\") due to 3 previous errors";
+        let errors: Vec<_> = error_counts(stderr).collect();
+        sim_assert_eq!(&errors, &vec![3]);
     }
 
     #[test]

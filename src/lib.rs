@@ -10,6 +10,8 @@ pub mod cfg_eval;
 pub mod cli;
 /// Configuration types and resolution logic for feature combination generation.
 pub mod config;
+/// Diagnostics-only output mode (JSON parsing and deduplication).
+pub mod diagnostics_only;
 /// Package-level configuration, feature combination generation, and error types.
 pub mod package;
 /// Cargo command execution, output parsing, summary printing, and matrix output.
@@ -31,11 +33,41 @@ pub use workspace::Workspace;
 
 use cfg_eval::RustcCfgEvaluator;
 use cli::cargo_subcommand;
+use color_eyre::eyre;
 use runner::print_feature_combination_error;
+use std::process;
 use target::{RustcTargetDetector, TargetDetector};
 
-use color_eyre::eyre;
-use std::process;
+/// Yellow+bold color spec used by the [`print_warning!`] macro.
+static WARNING_COLOR: std::sync::LazyLock<termcolor::ColorSpec> = std::sync::LazyLock::new(|| {
+    let mut spec = termcolor::ColorSpec::new();
+    spec.set_fg(Some(termcolor::Color::Yellow));
+    spec.set_bold(true);
+    spec
+});
+
+/// Print a colored warning to stderr.
+///
+/// Formats as `warning: <message>` with the `warning:` prefix in yellow.
+/// Accepts the same arguments as [`format!`].
+macro_rules! print_warning {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        use termcolor::WriteColor as _;
+        let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
+        let _ = stderr.set_color(&$crate::WARNING_COLOR);
+        let _ = write!(&mut stderr, "warning");
+        let _ = stderr.reset();
+        let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
+    }};
+}
+pub(crate) use print_warning;
+
+/// Whether to warn when the cargo subcommand is not one of the known commands
+/// (`build`, `test`, `run`, `check`, `doc`, `clippy`). Disabled by default
+/// because cargo aliases (e.g. `cargo lint`) are common and the tool handles
+/// unknown subcommands gracefully via best-effort output parsing.
+const WARN_UNKNOWN_SUBCOMMAND: bool = false;
 
 /// Expands to the default metadata key literal.
 macro_rules! default_metadata_key {
@@ -164,9 +196,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             &mut evaluator,
         ),
         None => {
-            if cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other {
-                eprintln!(
-                    "warning: `cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
+            if WARN_UNKNOWN_SUBCOMMAND
+                && cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other
+            {
+                print_warning!(
+                    "`cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
                 );
             }
             run_cargo_command_for_target(&packages, cargo_args, &options, &target, &mut evaluator)

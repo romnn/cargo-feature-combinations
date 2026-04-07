@@ -1,6 +1,7 @@
 //! Package-level configuration, feature combination generation, and error types.
 
 use crate::config::Config;
+use crate::print_warning;
 use crate::{DEFAULT_METADATA_KEY, find_metadata_value, pkg_metadata_section};
 use color_eyre::eyre;
 use itertools::Itertools;
@@ -91,22 +92,22 @@ impl Package for cargo_metadata::Package {
         let section = pkg_metadata_section(key);
 
         if !config.deprecated.skip_feature_sets.is_empty() {
-            eprintln!(
-                "warning: {section}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
+            print_warning!(
+                "{section}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
                 self.name,
             );
         }
 
         if !config.deprecated.denylist.is_empty() {
-            eprintln!(
-                "warning: {section}.denylist in package `{}` is deprecated; use exclude_features instead",
+            print_warning!(
+                "{section}.denylist in package `{}` is deprecated; use exclude_features instead",
                 self.name,
             );
         }
 
         if !config.deprecated.exact_combinations.is_empty() {
-            eprintln!(
-                "warning: {section}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
+            print_warning!(
+                "{section}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
                 self.name,
             );
         }
