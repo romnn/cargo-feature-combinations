@@ -39,7 +39,20 @@ pub struct Options {
     /// Whether to restrict processing to packages with a library target.
     pub only_packages_with_lib_target: bool,
     /// Whether to hide cargo output and only show the final summary.
-    pub silent: bool,
+    ///
+    /// Set by `--summary-only` or its backward-compatible aliases `--summary`
+    /// and `--silent`.
+    pub summary_only: bool,
+    /// Whether to show only diagnostics (warnings/errors) per feature
+    /// combination, suppressing compilation progress noise.
+    ///
+    /// Set by `--diagnostics-only`.
+    pub diagnostics_only: bool,
+    /// Whether to deduplicate diagnostics across feature combinations.
+    ///
+    /// Implies `--diagnostics-only`. Identical diagnostics are printed only
+    /// once; the summary reports how many were suppressed.
+    pub dedupe: bool,
     /// Whether to print more verbose information such as the full cargo command.
     pub verbose: bool,
     /// Whether to treat warnings like errors for the summary and `--fail-fast`.
@@ -140,7 +153,11 @@ SUBCOMMAND:
 
 OPTIONS:
     --help                  Print help information
-    --silent                Hide cargo output and only show summary
+    --diagnostics-only      Show only diagnostics (warnings/errors) per
+                            feature combination, suppressing build noise
+    --dedupe                Like --diagnostics-only, but also deduplicate
+                            identical diagnostics across feature combinations
+    --summary-only          Hide cargo output and only show the final summary
     --fail-fast             Fail fast on the first bad feature combination
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --exclude-package       Exclude a package from feature combinations
@@ -385,10 +402,27 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
-    // Check for silent flag
-    for (span, _) in args.get_all("--silent", false) {
-        options.silent = true;
+    // Check for diagnostics-only flag
+    for (span, _) in args.get_all("--diagnostics-only", false) {
+        options.diagnostics_only = true;
         args.drain(span);
+    }
+
+    // Check for dedupe flag (implies --diagnostics-only)
+    for flag in ["--dedupe", "--dedup"] {
+        for (span, _) in args.get_all(flag, false) {
+            options.dedupe = true;
+            options.diagnostics_only = true;
+            args.drain(span);
+        }
+    }
+
+    // Check for summary-only flag (aliases: --summary, --silent)
+    for flag in ["--summary-only", "--summary", "--silent"] {
+        for (span, _) in args.get_all(flag, false) {
+            options.summary_only = true;
+            args.drain(span);
+        }
     }
 
     // Check for fail fast flag

@@ -2,6 +2,7 @@
 
 use crate::config::{Config, WorkspaceConfig};
 use crate::package::Package;
+use crate::print_warning;
 use crate::{
     DEFAULT_METADATA_KEY, METADATA_KEYS, find_metadata_value, pkg_metadata_section,
     ws_metadata_section,
@@ -51,8 +52,8 @@ impl Workspace for cargo_metadata::Metadata {
             let config = root_package.config()?;
 
             if !config.exclude_packages.is_empty() {
-                eprintln!(
-                    "warning: {}.exclude_packages in the workspace root package is deprecated; use {}.exclude_packages instead",
+                print_warning!(
+                    "{}.exclude_packages in the workspace root package is deprecated; use {}.exclude_packages instead",
                     pkg_metadata_section(root_key),
                     ws_metadata_section(root_key),
                 );
@@ -75,8 +76,8 @@ impl Workspace for cargo_metadata::Metadata {
                     && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
                     && !config.exclude_packages.is_empty()
                 {
-                    eprintln!(
-                        "warning: {}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                    print_warning!(
+                        "{}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
                         pkg_metadata_section(key),
                         package.name,
                     );
@@ -100,8 +101,8 @@ impl Workspace for cargo_metadata::Metadata {
                         };
 
                         if has_values {
-                            eprintln!(
-                                "warning: {}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                            print_warning!(
+                                "{}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
                                 ws_metadata_section(key),
                                 package.name,
                             );
