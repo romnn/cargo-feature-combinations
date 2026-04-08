@@ -531,7 +531,7 @@ fn run_single_combination(
     cmd.stderr(process::Stdio::piped());
     let mut child = cmd.spawn()?;
 
-    let result = if ctx.use_diagnostics_only {
+    let mut result = if ctx.use_diagnostics_only {
         crate::diagnostics_only::process_output(
             &mut child,
             ctx.options.summary_only,
@@ -558,6 +558,21 @@ fn run_single_combination(
     }
 
     let fail = !exit_status.success();
+
+    // In diagnostics-only mode, cargo-level failures (bad CLI arguments,
+    // dependency resolution errors, …) produce no JSON diagnostics — so the
+    // user would only see "FAIL … 0 errors, 0 warnings" with no explanation.
+    // When that happens the output buffer holds the captured stderr which is
+    // the only clue about what went wrong. Print it unconditionally (even in
+    // --summary-only mode) so the failure is never silent.
+    if ctx.use_diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
+        stdout.write_all(&result.output)?;
+        stdout.flush().ok();
+        // Clear the buffer so the --fail-fast dump does not print it a
+        // second time.
+        result.output.clear();
+    }
+
     let pedantic_fail = ctx.options.pedantic && (result.num_errors > 0 || result.num_warnings > 0);
 
     let summary = Summary {

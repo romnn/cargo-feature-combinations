@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-feature-combinations"
-version = "0.0.48"
+version = "0.0.49"
 dependencies = [
  "assert_fs",
  "cargo_metadata",
