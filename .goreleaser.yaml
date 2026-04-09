@@ -13,6 +13,8 @@ homebrew_casks:
     ids:
       - *cargo-feature-combinations
     description: "Plugin for `cargo` to run commands against selected combinations of features."
+    custom_block: |
+      os macos: "darwin", linux: "linux"
     directory: Casks
     commit_author:
       name: romnn
@@ -34,6 +36,8 @@ homebrew_casks:
     ids:
       - *cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
+    custom_block: |
+      os macos: "darwin", linux: "linux"
     directory: Casks
     commit_author:
       name: romnn
