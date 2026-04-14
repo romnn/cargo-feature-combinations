@@ -1,11 +1,10 @@
 //! Cargo command execution, output parsing, summary printing, and matrix output.
 
 use crate::DEFAULT_PKG_METADATA_SECTION;
-use crate::cfg_eval::RustcCfgEvaluator;
 use crate::cli::{CargoSubcommand, Options, cargo_subcommand};
 use crate::package::{FeatureCombinationError, Package};
 use crate::print_warning;
-use crate::target::{RustcTargetDetector, TargetDetector, TargetTriple};
+use crate::target::TargetTriple;
 
 use color_eyre::eyre;
 use itertools::Itertools;
@@ -21,6 +20,11 @@ static CYAN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Cyan, true
 static RED: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Red, true));
 static YELLOW: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Yellow, true));
 static GREEN: LazyLock<ColorSpec> = LazyLock::new(|| color_spec(Color::Green, true));
+static DIMMED: LazyLock<ColorSpec> = LazyLock::new(|| {
+    let mut spec = ColorSpec::new();
+    spec.set_dimmed(true);
+    spec
+});
 
 /// An optional process exit code.
 ///
@@ -56,8 +60,8 @@ fn force_color(cmd: &mut process::Command) {
     cmd.env("FORCE_COLOR", "1");
 }
 
-/// Summary of the outcome for running a cargo command on a single feature set.
-#[derive(Debug)]
+/// Summary of the outcome for running (or pruning) a single feature set.
+#[derive(Debug, Clone)]
 pub struct Summary {
     package_name: String,
     features: Vec<String>,
@@ -66,6 +70,14 @@ pub struct Summary {
     num_warnings: usize,
     num_errors: usize,
     num_suppressed: usize,
+    /// If this combination was pruned, the features of the equivalent combo.
+    equivalent_to: Option<Vec<String>>,
+}
+
+impl Summary {
+    fn is_pruned(&self) -> bool {
+        self.equivalent_to.is_some()
+    }
 }
 
 /// Extract per-crate warning counts from cargo output.
@@ -215,11 +227,12 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
 /// Returns the [`ExitCode`] of the first failing feature combination, or
 /// `None` if all combinations succeeded.
 ///
-/// This function is used by [`run_cargo_command`] after all packages and
+/// This function is used by [`run_cargo_command_for_target`] after all packages and
 /// feature sets have been processed.
 #[must_use]
 pub fn print_summary(
     summary: &[Summary],
+    show_pruned: bool,
     mut stdout: termcolor::StandardStream,
     elapsed: Duration,
 ) -> ExitCode {
@@ -228,76 +241,121 @@ pub fn print_summary(
         .map(|s| &s.package_name)
         .collect::<HashSet<_>>()
         .len();
-    let num_feature_sets = summary
+    let num_total = summary
         .iter()
         .map(|s| (&s.package_name, s.features.iter().collect::<Vec<_>>()))
         .collect::<HashSet<_>>()
         .len();
+    let num_pruned = summary.iter().filter(|s| s.is_pruned()).count();
+    let num_executed = num_total - num_pruned;
 
     println!();
     stdout.set_color(&CYAN).ok();
     print!("    Finished ");
     stdout.reset().ok();
-    println!(
-        "{num_feature_sets} total feature combination{} for {num_packages} package{} in {:.2}s",
-        if num_feature_sets > 1 { "s" } else { "" },
-        if num_packages > 1 { "s" } else { "" },
-        elapsed.as_secs_f64(),
-    );
+    if num_pruned > 0 {
+        print!(
+            "{num_executed} of {num_total} feature combination{} for {num_packages} package{} in {:.2}s",
+            if num_total > 1 { "s" } else { "" },
+            if num_packages > 1 { "s" } else { "" },
+            elapsed.as_secs_f64(),
+        );
+        stdout.set_color(&DIMMED).ok();
+        print!(" ({num_pruned} pruned)");
+        stdout.reset().ok();
+    } else {
+        print!(
+            "{num_total} feature combination{} for {num_packages} package{} in {:.2}s",
+            if num_total > 1 { "s" } else { "" },
+            if num_packages > 1 { "s" } else { "" },
+            elapsed.as_secs_f64(),
+        );
+    }
+    println!();
     println!();
 
-    let show_suppressed = summary.iter().any(|s| s.num_suppressed > 0);
+    let max_errors = summary.iter().map(|s| s.num_errors).max().unwrap_or(0);
+    let max_warnings = summary.iter().map(|s| s.num_warnings).max().unwrap_or(0);
+    let max_suppressed = summary.iter().map(|s| s.num_suppressed).max().unwrap_or(0);
+    let show_suppressed = max_suppressed > 0;
+    let errors_width = max_errors.to_string().len();
+    let warnings_width = max_warnings.to_string().len();
+    let suppressed_width = max_suppressed.to_string().len();
 
     let mut first_bad_exit_code: Option<i32> = None;
-    let most_errors = summary.iter().map(|s| s.num_errors).max().unwrap_or(0);
-    let most_warnings = summary.iter().map(|s| s.num_warnings).max().unwrap_or(0);
-    let most_suppressed = summary.iter().map(|s| s.num_suppressed).max().unwrap_or(0);
-    let errors_width = most_errors.to_string().len();
-    let warnings_width = most_warnings.to_string().len();
-    let suppressed_width = most_suppressed.to_string().len();
 
     for s in summary {
-        if !s.pedantic_success {
-            stdout.set_color(&RED).ok();
-            print!("        FAIL ");
-            if first_bad_exit_code.is_none() {
-                first_bad_exit_code = s.exit_code;
-            }
-        } else if s.num_warnings > 0 {
-            stdout.set_color(&YELLOW).ok();
-            print!("        WARN ");
-        } else {
-            stdout.set_color(&GREEN).ok();
-            print!("        PASS ");
+        if !show_pruned && s.is_pruned() {
+            continue;
         }
-        stdout.reset().ok();
-        if show_suppressed {
-            println!(
-                "{} ( {:>ew$} errors, {:>ww$} warnings, {:>sw$} suppressed, features = [{}] )",
-                s.package_name,
-                s.num_errors,
-                s.num_warnings,
-                s.num_suppressed,
-                s.features.iter().join(", "),
-                ew = errors_width,
-                ww = warnings_width,
-                sw = suppressed_width,
-            );
-        } else {
-            println!(
-                "{} ( {:>ew$} errors, {:>ww$} warnings, features = [{}] )",
-                s.package_name,
-                s.num_errors,
-                s.num_warnings,
-                s.features.iter().join(", "),
-                ew = errors_width,
-                ww = warnings_width,
-            );
+        let fmt = SummaryFormat {
+            show_suppressed,
+            errors_width,
+            warnings_width,
+            suppressed_width,
+        };
+        print_summary_entry(s, &mut stdout, &fmt);
+        if !s.pedantic_success {
+            first_bad_exit_code = first_bad_exit_code.or(s.exit_code);
         }
     }
     println!();
 
     first_bad_exit_code
+}
+
+/// Column widths and display flags for summary entry formatting.
+struct SummaryFormat {
+    show_suppressed: bool,
+    errors_width: usize,
+    warnings_width: usize,
+    suppressed_width: usize,
+}
+
+fn print_summary_entry(s: &Summary, stdout: &mut termcolor::StandardStream, fmt: &SummaryFormat) {
+    if s.is_pruned() {
+        stdout.set_color(&DIMMED).ok();
+        print!("        SKIP ");
+        stdout.reset().ok();
+    } else if !s.pedantic_success {
+        stdout.set_color(&RED).ok();
+        print!("        FAIL ");
+    } else if s.num_warnings > 0 {
+        stdout.set_color(&YELLOW).ok();
+        print!("        WARN ");
+    } else {
+        stdout.set_color(&GREEN).ok();
+        print!("        PASS ");
+    }
+    stdout.reset().ok();
+
+    let feat = s.features.iter().join(", ");
+    let ew = fmt.errors_width;
+    let ww = fmt.warnings_width;
+    let sw = fmt.suppressed_width;
+    let ne = s.num_errors;
+    let nw = s.num_warnings;
+    let ns = s.num_suppressed;
+    if fmt.show_suppressed {
+        print!(
+            "{} ( {ne:>ew$} errors, {nw:>ww$} warnings, {ns:>sw$} suppressed, features = [{feat}] )",
+            s.package_name,
+        );
+    } else {
+        print!(
+            "{} ( {ne:>ew$} errors, {nw:>ww$} warnings, features = [{feat}] )",
+            s.package_name,
+        );
+    }
+
+    if let Some(equiv) = &s.equivalent_to {
+        let equiv = equiv.iter().join(", ");
+        stdout.set_color(&DIMMED).ok();
+        println!(" \u{2190} equivalent to [{equiv}]");
+        stdout.reset().ok();
+    } else {
+        println!();
+    }
 }
 
 fn print_package_cmd(
@@ -355,6 +413,18 @@ fn print_package_cmd(
     }
 }
 
+/// Options for [`print_feature_matrix_for_target`].
+#[derive(Debug, Default)]
+pub struct MatrixOptions {
+    /// Whether to pretty-print the JSON output.
+    pub pretty: bool,
+    /// Whether to emit only one `"default"` entry per package instead of the
+    /// full feature combination matrix.
+    pub packages_only: bool,
+    /// Whether to disable automatic pruning of implied feature combinations.
+    pub no_prune_implied: bool,
+}
+
 /// Print a JSON feature matrix for the given packages to stdout.
 ///
 /// The matrix is a JSON array of objects produced from each package's
@@ -365,42 +435,32 @@ fn print_package_cmd(
 ///
 /// Returns an error if any configuration can not be parsed or serialization
 /// of the JSON matrix fails.
-pub fn print_feature_matrix(
-    packages: &[&cargo_metadata::Package],
-    pretty: bool,
-    packages_only: bool,
-) -> eyre::Result<ExitCode> {
-    let detector = RustcTargetDetector::default();
-    let target = detector.detect_target(&Vec::new())?;
-    let mut evaluator = RustcCfgEvaluator::default();
-    print_feature_matrix_for_target(packages, pretty, packages_only, &target, &mut evaluator)
-}
-
-/// Like [`print_feature_matrix`], but for a specific target and evaluator.
-///
-/// This is useful for library consumers that want to control target
-/// resolution themselves, e.g. when cross-compiling.
-///
-/// # Errors
-///
-/// Returns an error if any configuration can not be parsed or serialization
-/// of the JSON matrix fails.
 pub fn print_feature_matrix_for_target(
     packages: &[&cargo_metadata::Package],
-    pretty: bool,
-    packages_only: bool,
     target: &TargetTriple,
     evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
+    options: &MatrixOptions,
 ) -> eyre::Result<ExitCode> {
     let per_package_features = packages
         .iter()
         .map(|pkg| {
             let base_config = pkg.config()?;
             let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
-            let features = if packages_only {
+            let features = if options.packages_only {
                 vec!["default".to_string()]
             } else {
-                pkg.feature_matrix(&config)?
+                let combos = pkg.feature_combinations(&config)?;
+                let combos = crate::implication::maybe_prune(
+                    combos,
+                    &pkg.features,
+                    &config,
+                    options.no_prune_implied,
+                );
+                combos
+                    .keep
+                    .into_iter()
+                    .map(|combo| combo.into_iter().join(","))
+                    .collect()
             };
             Ok::<_, eyre::Report>((pkg.name.clone(), config, features))
         })
@@ -422,38 +482,13 @@ pub fn print_feature_matrix_for_target(
         })
         .collect();
 
-    let matrix = if pretty {
+    let matrix = if options.pretty {
         serde_json::to_string_pretty(&matrix)
     } else {
         serde_json::to_string(&matrix)
     }?;
     println!("{matrix}");
     Ok(None)
-}
-
-/// Run a cargo command for all requested packages and feature combinations.
-///
-/// This function drives the main execution loop by spawning cargo for each
-/// feature set and collecting a [`Summary`] for every run.
-///
-/// Returns the [`ExitCode`] of the first failing feature combination, or
-/// `None` if all combinations succeeded.
-///
-/// # Errors
-///
-/// Returns an error if a cargo process can not be spawned or if IO operations
-/// fail while reading cargo's output.
-pub fn run_cargo_command(
-    packages: &[&cargo_metadata::Package],
-    cargo_args: Vec<&str>,
-    options: &Options,
-) -> eyre::Result<ExitCode> {
-    // Public API: if called directly, resolve config for the host target.
-    let detector = RustcTargetDetector::default();
-    let cargo_args_owned: Vec<String> = cargo_args.iter().map(|s| (*s).to_string()).collect();
-    let target = detector.detect_target(&cargo_args_owned)?;
-    let mut evaluator = RustcCfgEvaluator::default();
-    run_cargo_command_for_target(packages, cargo_args, options, &target, &mut evaluator)
 }
 
 /// Pre-computed state shared across all feature combinations in a single
@@ -583,6 +618,7 @@ fn run_single_combination(
         package_name: package.name.to_string(),
         exit_code: exit_status.code(),
         pedantic_success: !(fail || pedantic_fail),
+        equivalent_to: None,
     };
 
     Ok(CombinationResult {
@@ -591,7 +627,7 @@ fn run_single_combination(
     })
 }
 
-/// Like [`run_cargo_command`], but for a specific target and evaluator.
+/// Run a cargo command for all requested packages and feature combinations.
 ///
 /// This is useful for library consumers that want to control target
 /// resolution themselves, e.g. when cross-compiling.
@@ -642,36 +678,100 @@ pub fn run_cargo_command_for_target(
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
     let mut summary: Vec<Summary> = Vec::new();
     let mut seen_diagnostics: HashSet<String> = HashSet::new();
+
+    // show_pruned is a display concern for the global summary, so if any
+    // package enables it via config we show pruned entries for all packages.
+    let mut show_pruned = options.show_pruned;
+
     for package in packages {
         let base_config = package.config()?;
         let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
+        show_pruned = show_pruned || config.show_pruned;
 
-        for features in package.feature_combinations(&config)? {
+        let all_combos = package.feature_combinations(&config)?;
+        let prune_result = crate::implication::maybe_prune(
+            all_combos,
+            &package.features,
+            &config,
+            options.no_prune_implied,
+        );
+
+        let pkg_start = summary.len();
+        for features in &prune_result.keep {
             let result = run_single_combination(
                 package,
-                &features,
+                features,
                 &ctx,
                 &mut seen_diagnostics,
                 &mut stdout,
             )?;
-            let pedantic_success = result.summary.pedantic_success;
+            let should_stop = options.fail_fast && !result.summary.pedantic_success;
             let exit_code = result.summary.exit_code;
             summary.push(result.summary);
-
-            if options.fail_fast && !pedantic_success {
+            if should_stop {
                 if options.summary_only {
                     io::copy(&mut io::Cursor::new(result.colored_output), &mut stdout)?;
                     stdout.flush().ok();
                 }
-                let code = print_summary(&summary, stdout, start.elapsed())
+                let code = print_summary(&summary, show_pruned, stdout, start.elapsed())
                     .or(exit_code)
                     .unwrap_or(1);
                 return Ok(Some(code));
             }
         }
+
+        append_pruned_summaries(
+            &mut summary,
+            pkg_start,
+            package.name.as_ref(),
+            prune_result.pruned,
+        );
     }
 
-    Ok(print_summary(&summary, stdout, start.elapsed()))
+    Ok(print_summary(
+        &summary,
+        show_pruned,
+        stdout,
+        start.elapsed(),
+    ))
+}
+
+/// Append pruned summaries for a single package, looking up the equivalent
+/// combo's error/warning counts from already-executed summaries, then sort
+/// all entries for this package by features for interleaved display.
+fn append_pruned_summaries(
+    summary: &mut Vec<Summary>,
+    pkg_start: usize,
+    package_name: &str,
+    pruned: Vec<crate::implication::PrunedCombination>,
+) {
+    let executed: std::collections::HashMap<Vec<String>, Summary> = summary
+        .get(pkg_start..)
+        .unwrap_or_default()
+        .iter()
+        .filter(|s| !s.is_pruned())
+        .map(|s| (s.features.clone(), s.clone()))
+        .collect();
+
+    for p in pruned {
+        let Some(equiv) = executed.get(&p.equivalent_to) else {
+            continue;
+        };
+        summary.push(Summary {
+            package_name: package_name.to_string(),
+            features: p.features,
+            equivalent_to: Some(p.equivalent_to),
+            num_errors: equiv.num_errors,
+            num_warnings: equiv.num_warnings,
+            num_suppressed: equiv.num_suppressed,
+            exit_code: None,
+            pedantic_success: true,
+        });
+    }
+
+    if let Some(slice) = summary.get_mut(pkg_start..) {
+        slice.sort_by(|a, b| a.features.cmp(&b.features));
+    }
 }
 
 #[cfg(test)]

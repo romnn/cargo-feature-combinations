@@ -7,13 +7,18 @@ use self::patch::{FeatureSetVecPatch, StringSetPatch};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+fn default_true() -> bool {
+    true
+}
+
 /// Per-package configuration for `cargo-fc`.
 ///
 /// This is read from `[package.metadata.cargo-fc]` (or any supported alias)
 /// in a package's `Cargo.toml`. For workspace-wide options such as
 /// `exclude_packages`, prefer using [`WorkspaceConfig`] via
 /// `[workspace.metadata.cargo-fc]` instead.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     /// Feature sets that must be tested in isolation.
     #[serde(default)]
@@ -63,6 +68,17 @@ pub struct Config {
     /// When enabled, disallow generating the empty feature set.
     #[serde(default)]
     pub no_empty_feature_set: bool,
+    /// When enabled, automatically detect and skip redundant feature
+    /// combinations whose resolved feature set (after Cargo's feature
+    /// unification) is identical to a smaller combination.
+    ///
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub prune_implied: bool,
+    /// When enabled, include pruned feature combinations in the summary
+    /// output. Pruned combinations are hidden by default.
+    #[serde(default)]
+    pub show_pruned: bool,
     /// Arbitrary user-defined matrix values forwarded to the runner.
     #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
@@ -75,6 +91,28 @@ pub struct Config {
     /// Deprecated configuration keys (kept for backwards compatibility).
     #[serde(flatten)]
     pub deprecated: DeprecatedConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            isolated_feature_sets: Vec::new(),
+            exclude_features: HashSet::new(),
+            include_features: HashSet::new(),
+            only_features: HashSet::new(),
+            skip_optional_dependencies: false,
+            exclude_packages: HashSet::new(),
+            exclude_feature_sets: Vec::new(),
+            include_feature_sets: Vec::new(),
+            allow_feature_sets: Vec::new(),
+            no_empty_feature_set: false,
+            prune_implied: true,
+            show_pruned: false,
+            matrix: HashMap::new(),
+            target: BTreeMap::new(),
+            deprecated: DeprecatedConfig::default(),
+        }
+    }
 }
 
 /// Target-specific configuration override.
@@ -115,6 +153,12 @@ pub struct TargetOverride {
     /// Override for [`Config::no_empty_feature_set`].
     #[serde(default)]
     pub no_empty_feature_set: Option<bool>,
+    /// Override for [`Config::prune_implied`].
+    #[serde(default)]
+    pub prune_implied: Option<bool>,
+    /// Override for [`Config::show_pruned`].
+    #[serde(default)]
+    pub show_pruned: Option<bool>,
     /// Merge override for [`Config::matrix`].
     #[serde(default)]
     pub matrix: Option<HashMap<String, serde_json::Value>>,

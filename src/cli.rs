@@ -63,6 +63,14 @@ pub struct Options {
     pub packages_only: bool,
     /// Whether to stop processing after the first failing feature combination.
     pub fail_fast: bool,
+    /// Whether to disable automatic pruning of implied feature combinations.
+    ///
+    /// Set by `--no-prune-implied`.
+    pub no_prune_implied: bool,
+    /// Whether to show pruned feature combinations in the summary.
+    ///
+    /// Set by `--show-pruned`.
+    pub show_pruned: bool,
 }
 
 /// Helper trait to provide simple argument parsing over `Vec<String>`.
@@ -165,6 +173,9 @@ OPTIONS:
                             Only consider packages with a library target
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
+    --no-prune-implied      Disable automatic pruning of redundant feature
+                            combinations implied by other features
+    --show-pruned           Show pruned feature combinations in the summary
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -234,6 +245,11 @@ allow_feature_sets = [
 # When enabled, never include the empty feature set (no `--features`), even if
 # it would otherwise be generated.
 no_empty_feature_set = true
+
+# Automatically prune redundant feature combinations whose resolved feature
+# set (after Cargo's feature unification) matches a smaller combination.
+# Enabled by default. Disable with `prune_implied = false`.
+# prune_implied = true
 
 # When at least one isolated feature set is configured, stop taking all project
 # features as a whole, and instead take them in these isolated sets. Build a
@@ -384,31 +400,21 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         args.drain(span);
     }
 
-    // Check for pedantic flag
-    for (span, _) in args.get_all("--pedantic", false) {
-        options.pedantic = true;
-        args.drain(span);
-    }
+    let mut drain_flag = |flag: &str, field: &mut bool| {
+        for (span, _) in args.get_all(flag, false) {
+            *field = true;
+            args.drain(span);
+        }
+    };
+    drain_flag("--pedantic", &mut options.pedantic);
+    drain_flag("--errors-only", &mut options.errors_only);
+    drain_flag("--packages-only", &mut options.packages_only);
+    drain_flag("--diagnostics-only", &mut options.diagnostics_only);
+    drain_flag("--fail-fast", &mut options.fail_fast);
+    drain_flag("--no-prune-implied", &mut options.no_prune_implied);
+    drain_flag("--show-pruned", &mut options.show_pruned);
 
-    // Check for errors only
-    for (span, _) in args.get_all("--errors-only", false) {
-        options.errors_only = true;
-        args.drain(span);
-    }
-
-    // Packages only
-    for (span, _) in args.get_all("--packages-only", false) {
-        options.packages_only = true;
-        args.drain(span);
-    }
-
-    // Check for diagnostics-only flag
-    for (span, _) in args.get_all("--diagnostics-only", false) {
-        options.diagnostics_only = true;
-        args.drain(span);
-    }
-
-    // Check for dedupe flag (implies --diagnostics-only)
+    // --dedupe implies --diagnostics-only
     for flag in ["--dedupe", "--dedup"] {
         for (span, _) in args.get_all(flag, false) {
             options.dedupe = true;
@@ -417,18 +423,12 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         }
     }
 
-    // Check for summary-only flag (aliases: --summary, --silent)
+    // --summary-only aliases
     for flag in ["--summary-only", "--summary", "--silent"] {
         for (span, _) in args.get_all(flag, false) {
             options.summary_only = true;
             args.drain(span);
         }
-    }
-
-    // Check for fail fast flag
-    for (span, _) in args.get_all("--fail-fast", false) {
-        options.fail_fast = true;
-        args.drain(span);
     }
 
     // Ignore `--workspace`. This tool already discovers the relevant workspace

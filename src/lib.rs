@@ -12,6 +12,8 @@ pub mod cli;
 pub mod config;
 /// Diagnostics-only output mode (JSON parsing and deduplication).
 pub mod diagnostics_only;
+/// Feature implication graph and redundant-combination pruning.
+pub mod implication;
 /// Package-level configuration, feature combination generation, and error types.
 pub mod package;
 /// Cargo command execution, output parsing, summary printing, and matrix output.
@@ -26,8 +28,8 @@ pub mod workspace;
 pub use cli::{ArgumentParser, Command, Options, parse_arguments};
 pub use package::{FeatureCombinationError, Package};
 pub use runner::{
-    ExitCode, color_spec, error_counts, print_feature_matrix, print_feature_matrix_for_target,
-    print_summary, run_cargo_command, run_cargo_command_for_target, warning_counts,
+    ExitCode, MatrixOptions, color_spec, error_counts, print_feature_matrix_for_target,
+    print_summary, run_cargo_command_for_target, warning_counts,
 };
 pub use workspace::Workspace;
 
@@ -188,13 +190,14 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let mut evaluator = RustcCfgEvaluator::default();
     let result = match options.command {
         Some(Command::Help | Command::Version) => Ok(None),
-        Some(Command::FeatureMatrix { pretty }) => print_feature_matrix_for_target(
-            &packages,
-            pretty,
-            options.packages_only,
-            &target,
-            &mut evaluator,
-        ),
+        Some(Command::FeatureMatrix { pretty }) => {
+            let matrix_opts = runner::MatrixOptions {
+                pretty,
+                packages_only: options.packages_only,
+                no_prune_implied: options.no_prune_implied,
+            };
+            print_feature_matrix_for_target(&packages, &target, &mut evaluator, &matrix_opts)
+        }
         None => {
             if WARN_UNKNOWN_SUBCOMMAND
                 && cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other

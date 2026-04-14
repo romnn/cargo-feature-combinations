@@ -83,6 +83,7 @@ serde_json_merge = "0"
 # terminal colors
 termcolor = "1.4"
 strip-ansi-escapes = "0.2"
+petgraph = "0.8.3"
 
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = "0.1"

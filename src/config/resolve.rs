@@ -165,6 +165,12 @@ fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyr
     if let Some(v) = combine_bool("no_empty_feature_set", matched, |o| o.no_empty_feature_set)? {
         out.no_empty_feature_set = v;
     }
+    if let Some(v) = combine_bool("prune_implied", matched, |o| o.prune_implied)? {
+        out.prune_implied = v;
+    }
+    if let Some(v) = combine_bool("show_pruned", matched, |o| o.show_pruned)? {
+        out.show_pruned = v;
+    }
 
     // Set-like fields
     if let Some(ops) =
@@ -790,6 +796,29 @@ mod test {
 
         let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
         assert!(out.no_empty_feature_set);
+        Ok(())
+    }
+
+    #[test]
+    fn boolean_override_prune_implied() -> eyre::Result<()> {
+        let mut base = Config::default();
+        assert!(base.prune_implied, "prune_implied defaults to true");
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                prune_implied: Some(false),
+                ..TargetOverride::default()
+            },
+        );
+        base.target = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert!(!out.prune_implied, "target override should disable pruning");
         Ok(())
     }
 
