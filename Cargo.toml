@@ -54,6 +54,8 @@ unused_must_use = "deny"
 missing_docs = "warn"
 
 [lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
