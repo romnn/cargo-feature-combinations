@@ -123,6 +123,7 @@ impl ArgumentParser for Vec<String> {
 pub(crate) enum CargoSubcommand {
     Build,
     Check,
+    Lint,
     Test,
     Doc,
     Run,
@@ -131,20 +132,81 @@ pub(crate) enum CargoSubcommand {
 
 /// Determine the cargo subcommand implied by the argument list.
 pub(crate) fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
-    let args: HashSet<&str> = args.iter().map(AsRef::as_ref).collect();
-    if args.contains("build") || args.contains("b") {
-        CargoSubcommand::Build
-    } else if args.contains("check") || args.contains("c") || args.contains("clippy") {
-        CargoSubcommand::Check
-    } else if args.contains("test") || args.contains("t") {
-        CargoSubcommand::Test
-    } else if args.contains("doc") || args.contains("d") {
-        CargoSubcommand::Doc
-    } else if args.contains("run") || args.contains("r") {
-        CargoSubcommand::Run
-    } else {
-        CargoSubcommand::Other
+    fn subcommand_from_token(arg: &str) -> CargoSubcommand {
+        match arg {
+            "build" | "b" => CargoSubcommand::Build,
+            "check" | "c" => CargoSubcommand::Check,
+            "clippy" => CargoSubcommand::Lint,
+            "test" | "t" => CargoSubcommand::Test,
+            "doc" | "d" => CargoSubcommand::Doc,
+            "run" | "r" => CargoSubcommand::Run,
+            _ => CargoSubcommand::Other,
+        }
     }
+
+    fn is_no_value_flag(arg: &str) -> bool {
+        matches!(
+            arg,
+            "-q" | "--quiet"
+                | "--frozen"
+                | "--locked"
+                | "--offline"
+                | "-h"
+                | "--help"
+                | "-V"
+                | "--version"
+                | "--list"
+                | "--verbose"
+        ) || arg.starts_with("-v")
+    }
+
+    fn takes_value(arg: &str) -> bool {
+        matches!(arg, "--color" | "--config" | "--explain" | "-C" | "-Z")
+    }
+
+    fn has_inline_value(arg: &str) -> bool {
+        arg.starts_with("--color=")
+            || arg.starts_with("--config=")
+            || arg.starts_with("--explain=")
+            || (arg.starts_with("-C") && arg.len() > 2)
+            || (arg.starts_with("-Z") && arg.len() > 2)
+    }
+
+    let mut skip_next = false;
+    for arg in args.iter().map(AsRef::as_ref) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--" {
+            return CargoSubcommand::Other;
+        }
+        if arg.starts_with('+') {
+            continue;
+        }
+        if is_no_value_flag(arg) {
+            continue;
+        }
+        if takes_value(arg) {
+            skip_next = true;
+            continue;
+        }
+        if has_inline_value(arg) {
+            continue;
+        }
+
+        if arg.starts_with("--") {
+            return CargoSubcommand::Other;
+        }
+
+        if arg.starts_with('-') {
+            return CargoSubcommand::Other;
+        }
+
+        return subcommand_from_token(arg);
+    }
+
+    CargoSubcommand::Other
 }
 
 static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
@@ -442,4 +504,86 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     }
 
     Ok((options, args))
+}
+
+#[cfg(test)]
+mod test {
+    use super::{CargoSubcommand, cargo_subcommand};
+    use similar_asserts::assert_eq as sim_assert_eq;
+
+    #[test]
+    fn cargo_subcommand_detects_build_and_short_build() {
+        sim_assert_eq!(cargo_subcommand(&["build"]), CargoSubcommand::Build);
+        sim_assert_eq!(cargo_subcommand(&["b"]), CargoSubcommand::Build);
+    }
+
+    #[test]
+    fn cargo_subcommand_detects_check_and_short_check() {
+        sim_assert_eq!(cargo_subcommand(&["check"]), CargoSubcommand::Check);
+        sim_assert_eq!(cargo_subcommand(&["c"]), CargoSubcommand::Check);
+    }
+
+    #[test]
+    fn cargo_subcommand_detects_clippy_as_lint() {
+        sim_assert_eq!(cargo_subcommand(&["clippy"]), CargoSubcommand::Lint);
+    }
+
+    #[test]
+    fn cargo_subcommand_detects_test_and_short_test() {
+        sim_assert_eq!(cargo_subcommand(&["test"]), CargoSubcommand::Test);
+        sim_assert_eq!(cargo_subcommand(&["t"]), CargoSubcommand::Test);
+    }
+
+    #[test]
+    fn cargo_subcommand_detects_doc_and_short_doc() {
+        sim_assert_eq!(cargo_subcommand(&["doc"]), CargoSubcommand::Doc);
+        sim_assert_eq!(cargo_subcommand(&["d"]), CargoSubcommand::Doc);
+    }
+
+    #[test]
+    fn cargo_subcommand_detects_run_and_short_run() {
+        sim_assert_eq!(cargo_subcommand(&["run"]), CargoSubcommand::Run);
+        sim_assert_eq!(cargo_subcommand(&["r"]), CargoSubcommand::Run);
+    }
+
+    #[test]
+    fn cargo_subcommand_skips_known_leading_cargo_flags_and_values() {
+        let subcommand = cargo_subcommand(&[
+            "+nightly",
+            "--config",
+            "net.retry=2",
+            "--color=always",
+            "-vv",
+            "--frozen",
+            "clippy",
+            "build",
+        ]);
+
+        sim_assert_eq!(subcommand, CargoSubcommand::Lint);
+    }
+
+    #[test]
+    fn cargo_subcommand_handles_help_and_version_flags_before_subcommand() {
+        sim_assert_eq!(
+            cargo_subcommand(&["--verbose", "--help", "clippy"]),
+            CargoSubcommand::Lint
+        );
+        sim_assert_eq!(
+            cargo_subcommand(&["-vv", "--frozen", "test"]),
+            CargoSubcommand::Test
+        );
+    }
+
+    #[test]
+    fn cargo_subcommand_returns_other_for_unknown_leading_flag() {
+        let subcommand = cargo_subcommand(&["--mystery-flag", "clippy"]);
+
+        sim_assert_eq!(subcommand, CargoSubcommand::Other);
+    }
+
+    #[test]
+    fn cargo_subcommand_treats_unknown_aliases_as_other() {
+        sim_assert_eq!(cargo_subcommand(&["lint"]), CargoSubcommand::Other);
+        sim_assert_eq!(cargo_subcommand(&["lint", "build"]), CargoSubcommand::Other);
+    }
 }

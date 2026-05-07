@@ -40,8 +40,7 @@ impl fmt::Display for FeatureCombinationError {
                     f,
                     "too many configurations for package `{package}`: {num_features} feature(s) would produce {} combinations (limit: {limit})",
                     num_configurations
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "an unbounded number of".to_string()),
+                        .map_or_else(|| "an unbounded number of".to_string(), |v| v.to_string()),
                 )
             }
         }

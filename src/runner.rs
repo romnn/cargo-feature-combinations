@@ -197,9 +197,7 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
             let _ = writeln!(
                 &mut stderr,
                 " {}",
-                num_configurations
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "unbounded".to_string())
+                num_configurations.map_or_else(|| "unbounded".to_string(), |v| v.to_string())
             );
 
             let _ = stderr.set_color(&CYAN);
@@ -379,6 +377,9 @@ fn print_package_cmd(
         CargoSubcommand::Doc => {
             print!("     Documenting ");
         }
+        CargoSubcommand::Lint => {
+            print!("     Linting ");
+        }
         CargoSubcommand::Check => {
             print!("     Checking ");
         }
@@ -506,6 +507,94 @@ struct CombinationResult {
     summary: Summary,
     /// Raw (colored) output buffer for potential `--fail-fast` dumping.
     colored_output: Vec<u8>,
+}
+
+struct FeatureSelectionNormalization<'a> {
+    subcommand: CargoSubcommand,
+    cargo_args: Vec<&'a str>,
+    removed_args: Vec<&'a str>,
+    has_feature_selection_args: bool,
+}
+
+/// Normalize cargo feature-selection flags before running the matrix.
+///
+/// For known cargo subcommands, explicit feature-selection flags are removed
+/// because `cargo-fc` supplies `--no-default-features` and `--features=...`
+/// itself for each combination. For unknown aliases, the arguments are left
+/// unchanged because the alias may interpret those flags differently.
+fn normalize_feature_selection_args(cargo_args: Vec<&str>) -> FeatureSelectionNormalization<'_> {
+    fn feature_selection_span_length_at(args: &[&str], index: usize) -> Option<usize> {
+        let arg = *args.get(index)?;
+
+        // Cargo feature selection can appear either as a standalone flag
+        // (`--all-features`, `--no-default-features`), as a flag followed by a
+        // value (`--features foo`, `-F foo`), or inline (`--features=foo`,
+        // `-Ffoo`). Return how many argv slots belong to that one logical flag.
+        match arg {
+            "--all-features" | "--no-default-features" => Some(1),
+            "--features" | "-F" => {
+                let has_value = args
+                    .get(index + 1)
+                    .is_some_and(|next_arg| !next_arg.starts_with('-'));
+                Some(if has_value { 2 } else { 1 })
+            }
+            _ if arg.starts_with("--features=") || (arg.starts_with("-F") && arg.len() > 2) => {
+                Some(1)
+            }
+            _ => None,
+        }
+    }
+
+    let subcommand = cargo_subcommand(&cargo_args);
+    if subcommand == CargoSubcommand::Other {
+        // For unknown aliases like `cargo lint`, we cannot safely assume that
+        // `--all-features` or `--features` belong to Cargo itself. The alias may
+        // expand to some wrapper command with its own meaning for those flags, so
+        // the only correct behavior here is to leave the argv unchanged.
+        let has_feature_selection_args = cargo_args.iter().enumerate().any(|(index, _arg)| {
+            feature_selection_span_length_at(cargo_args.as_slice(), index).is_some()
+        });
+        return FeatureSelectionNormalization {
+            subcommand,
+            cargo_args,
+            removed_args: Vec::new(),
+            has_feature_selection_args,
+        };
+    }
+
+    // For known cargo subcommands, the feature matrix owns feature selection.
+    // Strip explicit user-provided feature flags here so the later
+    // `--no-default-features --features=...` pair is the only feature
+    // selection cargo sees for each combination.
+    let mut forwarded_args = Vec::with_capacity(cargo_args.len());
+    let mut removed_args = Vec::new();
+    let mut index = 0;
+
+    while let Some(arg) = cargo_args.get(index).copied() {
+        if let Some(span_len) = feature_selection_span_length_at(cargo_args.as_slice(), index) {
+            // Preserve the original tokens so the caller can emit one clear
+            // warning describing exactly which flags were ignored.
+            if let Some(span_args) = cargo_args.get(index..index + span_len) {
+                removed_args.extend(span_args.iter().copied());
+                debug_assert!(span_len > 0);
+                index += span_len;
+            } else {
+                forwarded_args.push(arg);
+                index += 1;
+            }
+        } else {
+            forwarded_args.push(arg);
+            index += 1;
+        }
+    }
+
+    let has_feature_selection_args = !removed_args.is_empty();
+    FeatureSelectionNormalization {
+        subcommand,
+        cargo_args: forwarded_args,
+        removed_args,
+        has_feature_selection_args,
+    }
 }
 
 /// Run a single cargo invocation for one feature combination and collect
@@ -652,6 +741,29 @@ pub fn run_cargo_command_for_target(
         .unwrap_or(cargo_args.len());
     let extra_args = cargo_args.split_off(extra_args_idx);
 
+    let FeatureSelectionNormalization {
+        subcommand,
+        mut cargo_args,
+        removed_args,
+        has_feature_selection_args,
+    } = normalize_feature_selection_args(cargo_args);
+
+    if !removed_args.is_empty() {
+        let flag_label = if removed_args.len() == 1 {
+            "flag"
+        } else {
+            "flags"
+        };
+        print_warning!(
+            "ignoring cargo feature-selection {flag_label} incompatible with feature matrix: {}",
+            removed_args.iter().join(" ")
+        );
+    } else if subcommand == CargoSubcommand::Other && has_feature_selection_args {
+        print_warning!(
+            "leaving cargo feature-selection flags unchanged for unknown cargo alias/subcommand"
+        );
+    }
+
     let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();
 
     if !cargo_args.contains(&"--color") {
@@ -776,7 +888,8 @@ fn append_pruned_summaries(
 
 #[cfg(test)]
 mod test {
-    use super::{error_counts, warning_counts};
+    use super::{error_counts, normalize_feature_selection_args, warning_counts};
+    use crate::cli::CargoSubcommand;
     use similar_asserts::assert_eq as sim_assert_eq;
 
     #[test]
@@ -807,5 +920,64 @@ mod test {
         let stderr = include_str!("../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
+    }
+
+    #[test]
+    fn strips_feature_selection_flags_for_known_cargo_commands() {
+        let normalization = normalize_feature_selection_args(vec![
+            "--config",
+            "net.retry=2",
+            "clippy",
+            "-vv",
+            "--all-features",
+            "--features",
+            "foo,bar",
+            "--no-default-features",
+            "--color=always",
+        ]);
+
+        sim_assert_eq!(normalization.subcommand, CargoSubcommand::Lint);
+        sim_assert_eq!(
+            normalization.cargo_args,
+            vec!["--config", "net.retry=2", "clippy", "-vv", "--color=always"]
+        );
+        sim_assert_eq!(
+            normalization.removed_args,
+            vec![
+                "--all-features",
+                "--features",
+                "foo,bar",
+                "--no-default-features",
+            ]
+        );
+        assert!(normalization.has_feature_selection_args);
+    }
+
+    #[test]
+    fn preserves_known_cargo_command_args_when_no_feature_selection_is_present() {
+        let normalization = normalize_feature_selection_args(vec![
+            "--config",
+            "net.retry=2",
+            "clippy",
+            "--color=always",
+        ]);
+
+        sim_assert_eq!(normalization.subcommand, CargoSubcommand::Lint);
+        sim_assert_eq!(
+            normalization.cargo_args,
+            vec!["--config", "net.retry=2", "clippy", "--color=always"]
+        );
+        sim_assert_eq!(normalization.removed_args, Vec::<&str>::new());
+        assert!(!normalization.has_feature_selection_args);
+    }
+
+    #[test]
+    fn preserves_feature_selection_flags_for_unknown_aliases() {
+        let normalization = normalize_feature_selection_args(vec!["lint", "--all-features"]);
+
+        sim_assert_eq!(normalization.subcommand, CargoSubcommand::Other);
+        sim_assert_eq!(normalization.cargo_args, vec!["lint", "--all-features"]);
+        sim_assert_eq!(normalization.removed_args, Vec::<&str>::new());
+        assert!(normalization.has_feature_selection_args);
     }
 }
