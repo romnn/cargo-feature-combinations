@@ -44,13 +44,14 @@ pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
 /// Force colored output on a subprocess.
 ///
 /// Subprocesses see a pipe (not a TTY) on stderr because we capture their
-/// output, so most tools auto-disable color. We counteract this in three ways:
+/// output, so most tools auto-disable color. We counteract this with two env
+/// vars:
 ///
-/// - `CARGO_TERM_COLOR=always` — respected by cargo itself.
+/// - `CARGO_TERM_COLOR=always` — Cargo's documented env var, equivalent to
+///   `[term] color = "always"`. Forces colors even when stderr is piped and
+///   propagates `--color=always` to rustc. Stable since Rust 1.42.
 /// - `FORCE_COLOR=1` — widely adopted convention (Node.js, Python, Ruby, many
 ///   Rust crates via `anstream`).
-/// - `--color always` is additionally injected into the cargo argument list by
-///   the caller for the direct subcommand.
 ///
 /// A more universal fix would be to allocate a pseudo-TTY (e.g. via
 /// `portable-pty`) so that `isatty()` returns true in the subprocess, but the
@@ -743,7 +744,7 @@ pub fn run_cargo_command_for_target(
 
     let FeatureSelectionNormalization {
         subcommand,
-        mut cargo_args,
+        cargo_args,
         removed_args,
         has_feature_selection_args,
     } = normalize_feature_selection_args(cargo_args);
@@ -765,11 +766,6 @@ pub fn run_cargo_command_for_target(
     }
 
     let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();
-
-    if !cargo_args.contains(&"--color") {
-        // force colored output
-        cargo_args.extend(["--color", "always"]);
-    }
 
     // Determine whether we can use diagnostics-only (JSON) mode.
     let user_has_message_format = cargo_args.iter().any(|a| a.starts_with("--message-format"));
