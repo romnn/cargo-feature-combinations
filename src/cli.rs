@@ -46,6 +46,11 @@ pub struct Options {
     /// Whether to show only diagnostics (warnings/errors) per feature
     /// combination, suppressing compilation progress noise.
     ///
+    /// Requires the invoked subcommand to accept `--message-format=...` and
+    /// emit rustc's JSON diagnostic format. Built-in cargo subcommands like
+    /// `build`, `check`, `clippy`, and `doc` qualify; so does any alias or
+    /// custom subcommand that does the same.
+    ///
     /// Set by `--diagnostics-only`.
     pub diagnostics_only: bool,
     /// Whether to deduplicate diagnostics across feature combinations.
@@ -224,7 +229,10 @@ SUBCOMMAND:
 OPTIONS:
     --help                  Print help information
     --diagnostics-only      Show only diagnostics (warnings/errors) per
-                            feature combination, suppressing build noise
+                            feature combination. Subcommand must accept
+                            --message-format=... and emit rustc JSON
+                            diagnostics (e.g. build, check, clippy, doc,
+                            or any alias/wrapper that does the same)
     --dedupe                Like --diagnostics-only, but also deduplicate
                             identical diagnostics across feature combinations
     --summary-only          Hide cargo output and only show the final summary
