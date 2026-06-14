@@ -357,18 +357,35 @@ fn print_summary_entry(s: &Summary, stdout: &mut termcolor::StandardStream, fmt:
     }
 }
 
+/// Position of a feature combination within the overall run.
+#[derive(Clone, Copy)]
+struct Progress {
+    index: usize,
+    total: usize,
+    width: usize,
+}
+
 fn print_package_cmd(
     package: &cargo_metadata::Package,
-    features: &[&String],
+    features: &[String],
     cargo_args: &[&str],
     all_args: &[&str],
     options: &Options,
+    progress: Progress,
     stdout: &mut StandardStream,
 ) {
     let compact = options.summary_only || options.diagnostics_only;
     if !compact {
         println!();
     }
+    stdout.set_color(&DIMMED).ok();
+    print!(
+        "[{idx:>width$}/{total}]",
+        idx = progress.index,
+        total = progress.total,
+        width = progress.width,
+    );
+    stdout.reset().ok();
     let subcommand = cargo_subcommand(cargo_args);
     stdout.set_color(&CYAN).ok();
     match subcommand {
@@ -403,7 +420,7 @@ fn print_package_cmd(
     print!(
         "{} ( features = [{}] )",
         package.name,
-        features.as_ref().iter().join(", ")
+        features.iter().join(", ")
     );
     if options.verbose {
         print!(" [cargo {}]", all_args.join(" "));
@@ -602,8 +619,9 @@ fn normalize_feature_selection_args(cargo_args: Vec<&str>) -> FeatureSelectionNo
 /// its output into a [`Summary`].
 fn run_single_combination(
     package: &cargo_metadata::Package,
-    features: &[&String],
+    features: &[String],
     ctx: &RunContext<'_>,
+    progress: Progress,
     seen_diagnostics: &mut HashSet<String>,
     stdout: &mut StandardStream,
 ) -> eyre::Result<CombinationResult> {
@@ -634,7 +652,7 @@ fn run_single_combination(
     if ctx.use_diagnostics_only {
         args.push(crate::diagnostics_only::MESSAGE_FORMAT);
     }
-    let features_flag = format!("--features={}", &features.iter().join(","));
+    let features_flag = format!("--features={}", features.iter().join(","));
     if !ctx.missing_arguments {
         args.push("--no-default-features");
         args.push(&features_flag);
@@ -646,6 +664,7 @@ fn run_single_combination(
         ctx.cargo_args,
         &args,
         ctx.options,
+        progress,
         stdout,
     );
 
@@ -701,7 +720,7 @@ fn run_single_combination(
     let pedantic_fail = ctx.options.pedantic && (result.num_errors > 0 || result.num_warnings > 0);
 
     let summary = Summary {
-        features: features.iter().map(|s| (*s).clone()).collect(),
+        features: features.to_vec(),
         num_errors: result.num_errors,
         num_warnings: result.num_warnings,
         num_suppressed: result.num_suppressed,
@@ -715,6 +734,58 @@ fn run_single_combination(
         summary,
         colored_output: result.output,
     })
+}
+
+/// Pre-computed plan for running one package's feature combinations.
+struct PackagePlan<'a> {
+    package: &'a cargo_metadata::Package,
+    keep: Vec<Vec<String>>,
+    pruned: Vec<crate::implication::PrunedCombination>,
+}
+
+/// Resolve and prune every package's feature combinations up front.
+///
+/// Returns the per-package run plans together with whether any package's
+/// resolved config requested that pruned combinations be shown in the summary.
+///
+/// # Errors
+///
+/// Returns an error if a package's config can not be resolved or its feature
+/// combinations can not be generated (e.g. too many features).
+fn plan_feature_combinations<'a>(
+    packages: &[&'a cargo_metadata::Package],
+    options: &Options,
+    target: &TargetTriple,
+    evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
+) -> eyre::Result<(Vec<PackagePlan<'a>>, bool)> {
+    let mut plans = Vec::with_capacity(packages.len());
+    let mut show_pruned = false;
+    for &package in packages {
+        let base_config = package.config()?;
+        let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
+        show_pruned = show_pruned || config.show_pruned;
+
+        let all_combos = package.feature_combinations(&config)?;
+        let prune_result = crate::implication::maybe_prune(
+            all_combos,
+            &package.features,
+            &config,
+            options.no_prune_implied,
+        );
+        // The generated combinations may borrow from the package config
+        // (`include_features`), so own them before the config is dropped.
+        let keep: Vec<Vec<String>> = prune_result
+            .keep
+            .into_iter()
+            .map(|combo| combo.into_iter().cloned().collect())
+            .collect();
+        plans.push(PackagePlan {
+            package,
+            keep,
+            pruned: prune_result.pruned,
+        });
+    }
+    Ok((plans, show_pruned))
 }
 
 /// Run a cargo command for all requested packages and feature combinations.
@@ -787,29 +858,30 @@ pub fn run_cargo_command_for_target(
     let mut summary: Vec<Summary> = Vec::new();
     let mut seen_diagnostics: HashSet<String> = HashSet::new();
 
+    let (plans, config_show_pruned) =
+        plan_feature_combinations(packages, options, target, evaluator)?;
+
     // show_pruned is a display concern for the global summary, so if any
     // package enables it via config we show pruned entries for all packages.
-    let mut show_pruned = options.show_pruned;
+    let show_pruned = options.show_pruned || config_show_pruned;
 
-    for package in packages {
-        let base_config = package.config()?;
-        let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
-        show_pruned = show_pruned || config.show_pruned;
+    let total: usize = plans.iter().map(|plan| plan.keep.len()).sum();
+    let width = total.to_string().len();
+    let mut index = 0;
 
-        let all_combos = package.feature_combinations(&config)?;
-        let prune_result = crate::implication::maybe_prune(
-            all_combos,
-            &package.features,
-            &config,
-            options.no_prune_implied,
-        );
-
+    for plan in plans {
         let pkg_start = summary.len();
-        for features in &prune_result.keep {
+        for combo in &plan.keep {
+            index += 1;
             let result = run_single_combination(
-                package,
-                features,
+                plan.package,
+                combo,
                 &ctx,
+                Progress {
+                    index,
+                    total,
+                    width,
+                },
                 &mut seen_diagnostics,
                 &mut stdout,
             )?;
@@ -831,8 +903,8 @@ pub fn run_cargo_command_for_target(
         append_pruned_summaries(
             &mut summary,
             pkg_start,
-            package.name.as_ref(),
-            prune_result.pruned,
+            plan.package.name.as_ref(),
+            plan.pruned,
         );
     }
 
@@ -884,9 +956,27 @@ fn append_pruned_summaries(
 
 #[cfg(test)]
 mod test {
-    use super::{error_counts, normalize_feature_selection_args, warning_counts};
-    use crate::cli::CargoSubcommand;
+    use super::{
+        error_counts, normalize_feature_selection_args, plan_feature_combinations, warning_counts,
+    };
+    use crate::cfg_eval::CfgEvaluator;
+    use crate::cli::{CargoSubcommand, Options};
+    use crate::target::TargetTriple;
+    use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
+
+    #[derive(Default)]
+    struct StubEval;
+
+    impl CfgEvaluator for StubEval {
+        fn matches(&mut self, _cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
+            Ok(false)
+        }
+    }
+
+    fn string_vec(values: &[&str]) -> Vec<String> {
+        values.iter().copied().map(String::from).collect()
+    }
 
     #[test]
     fn error_regex_single_mod_multiple_errors() {
@@ -916,6 +1006,58 @@ mod test {
         let stderr = include_str!("../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
+    }
+
+    #[test]
+    fn plan_feature_combinations_keeps_pruned_entries_for_summary() -> eyre::Result<()> {
+        let mut package = crate::package::test::package_with_metadata(
+            &["A", "B", "C"],
+            "cargo-fc",
+            &serde_json::json!({ "show_pruned": true }),
+        )?;
+        let Some(implied_features) = package.features.get_mut("B") else {
+            eyre::bail!("test package should contain feature B");
+        };
+        implied_features.push("A".to_string());
+
+        let packages = vec![&package];
+        let mut evaluator = StubEval;
+        let (plans, show_pruned) = plan_feature_combinations(
+            &packages,
+            &Options::default(),
+            &TargetTriple("test-target".to_string()),
+            &mut evaluator,
+        )?;
+
+        assert!(show_pruned);
+        let [plan] = plans.as_slice() else {
+            eyre::bail!("expected one package plan, got {}", plans.len());
+        };
+        sim_assert_eq!(
+            &plan.keep,
+            &vec![
+                string_vec(&[]),
+                string_vec(&["A"]),
+                string_vec(&["A", "C"]),
+                string_vec(&["B"]),
+                string_vec(&["B", "C"]),
+                string_vec(&["C"]),
+            ],
+        );
+
+        let pruned: Vec<_> = plan
+            .pruned
+            .iter()
+            .map(|p| (p.features.clone(), p.equivalent_to.clone()))
+            .collect();
+        sim_assert_eq!(
+            pruned,
+            vec![
+                (string_vec(&["A", "B"]), string_vec(&["B"])),
+                (string_vec(&["A", "B", "C"]), string_vec(&["B", "C"])),
+            ],
+        );
+        Ok(())
     }
 
     #[test]
