@@ -49,8 +49,16 @@ struct DiagnosticCounts {
 ///   and their `rendered` text is written to `writer`.
 /// - Non-JSON lines (e.g. test runner output) are passed through to `writer`.
 /// - All other JSON messages (artifacts, build-finished) are silently skipped.
-/// - When `dedupe` is true, diagnostics already present in `seen` are counted
-///   but not written.
+/// - When `dedupe` is true:
+///   - Re-emissions of the same diagnostic within this invocation are folded
+///     into the first copy: not counted, not written, and not tallied as
+///     `suppressed`.
+///   - Diagnostics already present in `seen` from an earlier invocation are
+///     counted and tallied as `suppressed`, but not written.
+///
+/// `seen` is shared across feature-combination invocations. The per-run set
+/// keeps duplicate cargo target emissions from inflating the per-combination
+/// warning/error totals or the duplicate-diagnostic note.
 fn process_lines(
     reader: impl BufRead,
     writer: &mut impl Write,
@@ -60,23 +68,32 @@ fn process_lines(
     let mut warnings: usize = 0;
     let mut errors: usize = 0;
     let mut suppressed: usize = 0;
+    let mut seen_this_run: Option<HashSet<String>> = dedupe.then(HashSet::new);
 
     for line in reader.lines() {
         let Ok(line) = line else { break };
         match serde_json::from_str::<CargoMessage>(&line) {
             Ok(msg) if msg.reason == "compiler-message" => {
-                if let Some(ref diag) = msg.message {
-                    match diag.level.as_str() {
-                        "warning" => warnings += 1,
-                        "error" => errors += 1,
-                        _ => {}
-                    }
-                    if let Some(ref rendered) = diag.rendered {
-                        if dedupe && !seen.insert(rendered.clone()) {
-                            suppressed += 1;
-                        } else {
-                            let _ = writer.write_all(rendered.as_bytes());
-                        }
+                let Some(diag) = msg.message else { continue };
+
+                if let (Some(seen_this_run), Some(rendered)) =
+                    (seen_this_run.as_mut(), diag.rendered.as_ref())
+                    && !seen_this_run.insert(rendered.clone())
+                {
+                    continue;
+                }
+
+                match diag.level.as_str() {
+                    "warning" => warnings += 1,
+                    "error" => errors += 1,
+                    _ => {}
+                }
+
+                if let Some(ref rendered) = diag.rendered {
+                    if dedupe && !seen.insert(rendered.clone()) {
+                        suppressed += 1;
+                    } else {
+                        let _ = writer.write_all(rendered.as_bytes());
                     }
                 }
             }
@@ -102,8 +119,10 @@ fn process_lines(
 /// Reads JSON lines from the child's stdout, prints rendered diagnostics, and
 /// drains stderr in a background thread to prevent pipe deadlocks.
 ///
-/// When `dedupe` is `true`, diagnostics whose `rendered` text has already been
-/// inserted into `seen` are counted but not printed.
+/// When `dedupe` is `true`, diagnostics are deduplicated by exact rendered
+/// text. Duplicate target emissions within this cargo invocation are folded,
+/// while diagnostics already present in `seen` from earlier invocations are
+/// counted as suppressed but not printed.
 pub(crate) fn process_output(
     child: &mut process::Child,
     summary_only: bool,
@@ -281,14 +300,48 @@ mod test {
     }
 
     #[test]
-    fn dedupe_suppresses_duplicate_diagnostics() {
+    fn duplicate_rendered_text_is_preserved_without_dedupe() {
+        let line = diag_json("warning", "warning: duplicate\n");
+        let input = format!("{line}\n{line}\n");
+        let mut seen = HashSet::new();
+        let (counts, written) = run_lines(&input, false, &mut seen);
+        sim_assert_eq!(counts.warnings, 2);
+        sim_assert_eq!(counts.suppressed, 0);
+        sim_assert_eq!(written.matches("warning: duplicate").count(), 2);
+    }
+
+    #[test]
+    fn dedupe_folds_duplicate_rendered_text_within_one_invocation() {
+        // Cargo may emit the same lint once per compiled target in a single
+        // invocation. Count and print only one copy; the rest are cargo target
+        // fan-out, not additional user diagnostics.
         let line = diag_json("warning", "warning: duplicate\n");
         let input = format!("{line}\n{line}\n{line}\n");
         let mut seen = HashSet::new();
         let (counts, written) = run_lines(&input, true, &mut seen);
-        sim_assert_eq!(counts.warnings, 3);
-        sim_assert_eq!(counts.suppressed, 2);
+        sim_assert_eq!(counts.warnings, 1);
+        sim_assert_eq!(counts.suppressed, 0);
         sim_assert_eq!(written.matches("warning: duplicate").count(), 1);
+    }
+
+    #[test]
+    fn repeated_two_target_diagnostic_reports_zero_then_one_suppressed() {
+        // Regression test for --all-targets-style output: a lint emitted twice
+        // in each invocation reports no suppressed diagnostics on the first
+        // feature combination and one on later combinations.
+        let line = diag_json("error", "error: too many lines\n");
+        let one_invocation = format!("{line}\n{line}\n");
+        let mut seen = HashSet::new();
+
+        let (c1, o1) = run_lines(&one_invocation, true, &mut seen);
+        sim_assert_eq!(c1.errors, 1);
+        sim_assert_eq!(c1.suppressed, 0);
+        sim_assert_eq!(o1.matches("too many lines").count(), 1);
+
+        let (c2, o2) = run_lines(&one_invocation, true, &mut seen);
+        sim_assert_eq!(c2.errors, 1);
+        sim_assert_eq!(c2.suppressed, 1);
+        assert!(!o2.contains("too many lines"));
     }
 
     #[test]

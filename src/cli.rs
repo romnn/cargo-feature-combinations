@@ -56,7 +56,8 @@ pub struct Options {
     /// Whether to deduplicate diagnostics across feature combinations.
     ///
     /// Implies `--diagnostics-only`. Identical diagnostics are printed only
-    /// once; the summary reports how many were suppressed.
+    /// once; the summary reports how many diagnostics already shown by earlier
+    /// feature combinations were suppressed.
     pub dedupe: bool,
     /// Whether to print more verbose information such as the full cargo command.
     pub verbose: bool,
