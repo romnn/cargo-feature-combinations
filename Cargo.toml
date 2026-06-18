@@ -73,7 +73,7 @@ exclude_features = ["default"]
 [dependencies]
 color-eyre = "0.6"
 cargo_metadata = "0.23"
-itertools = "0.14"
+itertools = "0.15"
 regex = "1.11"
 cfg-expr = "0.20"
 
