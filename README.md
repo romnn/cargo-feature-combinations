@@ -21,6 +21,12 @@ brew install --cask romnn/tap/cargo-fc
 cargo install --locked cargo-feature-combinations
 ```
 
+There is also an unofficial Nix package (community-maintained, not maintained by me):
+
+```bash
+nix-shell --packages cargo-feature-combinations
+```
+
 ### Usage
 
 Just use the command as if it was `cargo`:
