@@ -9,7 +9,7 @@
 Plugin for `cargo` to run commands against selected (or all) combinations of features.
 
 <p align="center">
-  <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="600">
+  <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="500">
 </p>
 
 ### Installation
@@ -66,17 +66,18 @@ cargo fc matrix --pretty
 <details>
 <summary>More screenshots</summary>
 
-| | |
-|---|---|
-| **`--diagnostics-only`** — only warnings/errors, no build noise | **`--dedupe`** — fold identical diagnostics across combinations |
-| <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="420"> | <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="420"> |
-| **`--summary-only`** — just the per-combination result table | **`--show-pruned`** — redundant combinations implied by other features are pruned |
-| <img src="docs/summary.png" alt="cargo fc --summary-only check" width="420"> | <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="420"> |
-| **`matrix --pretty`** — machine-readable feature matrix | |
-| <img src="docs/matrix.png" alt="cargo fc matrix --pretty" width="420"> | |
-
-These are generated from the workspaces under [`examples/`](./examples) by
-[`scripts/screenshots.sh`](./scripts/screenshots.sh) (`task screenshots`).
+| |
+|---|
+| **`--diagnostics-only`** — only warnings/errors, no build noise |
+| <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500"> |
+| **`--dedupe`** — fold identical diagnostics across combinations |
+| <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500"> |
+| **`--summary-only`** — just the per-combination result table |
+| <img src="docs/summary.png" alt="cargo fc --summary-only check" width="500"> |
+| **`--show-pruned`** — redundant combinations implied by other features are pruned |
+| <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500"> |
+| **`matrix --pretty`** — machine-readable feature matrix |
+| <img src="docs/matrix.png" alt="cargo fc matrix --pretty" width="500"> |
 
 </details>
 
