@@ -1,0 +1,7 @@
+# unwrap/expect/panic are denied in production code (workspace lints), but
+# they are the idiomatic failure mode inside tests — a failing test SHOULD
+# panic. These flags scope the denies to non-test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

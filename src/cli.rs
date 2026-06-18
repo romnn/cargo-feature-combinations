@@ -26,7 +26,6 @@ pub enum Command {
 /// Instances of this type are produced by [`parse_arguments`] and consumed by
 /// [`crate::run`] to drive command selection and filtering.
 #[derive(Debug, Default)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct Options {
     /// Optional path to the Cargo manifest that should be inspected.
     pub manifest_path: Option<PathBuf>,

@@ -18,7 +18,6 @@ fn default_true() -> bool {
 /// `exclude_packages`, prefer using [`WorkspaceConfig`] via
 /// `[workspace.metadata.cargo-fc]` instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     /// Feature sets that must be tested in isolation.
     #[serde(default)]
