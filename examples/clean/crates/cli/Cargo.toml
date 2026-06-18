@@ -9,3 +9,7 @@ color = []
 
 [dependencies]
 engine = { path = "../engine" }
+
+[package.metadata.cargo-fc.matrix]
+kind = "bin"
+ci = true

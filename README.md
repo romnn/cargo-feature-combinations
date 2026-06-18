@@ -66,20 +66,25 @@ cargo fc matrix --pretty
 <details>
 <summary>More screenshots</summary>
 
-<p align="center"><b><code>--diagnostics-only</code></b> — only warnings/errors, no build noise<br>
-<img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500"></p>
+1. **`--diagnostics-only`** — only warnings/errors, no build noise
 
-<p align="center"><b><code>--dedupe</code></b> — fold identical diagnostics across combinations<br>
-<img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500"></p>
+   <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500">
 
-<p align="center"><b><code>--summary-only</code></b> — just the per-combination result table<br>
-<img src="docs/summary.png" alt="cargo fc --summary-only check" width="500"></p>
+2. **`--dedupe`** — fold identical diagnostics across combinations
 
-<p align="center"><b><code>--show-pruned</code></b> — redundant combinations implied by other features are pruned<br>
-<img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500"></p>
+   <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500">
 
-<p align="center"><b><code>matrix --pretty</code></b> — machine-readable feature matrix<br>
-<img src="docs/matrix.png" alt="cargo fc matrix --pretty" width="500"></p>
+3. **`--summary-only`** — just the per-combination result table
+
+   <img src="docs/summary.png" alt="cargo fc --summary-only check" width="500">
+
+4. **`--show-pruned`** — redundant combinations implied by other features are pruned
+
+   <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500">
+
+5. **`matrix`** — machine-readable feature matrix (one row per combination)
+
+   <img src="docs/matrix.png" alt="cargo fc matrix piped to jq" width="500">
 
 </details>
 

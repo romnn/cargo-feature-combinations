@@ -21,6 +21,7 @@ max_width=2200
 
 command -v freeze >/dev/null || { echo "freeze not found — install charmbracelet/freeze" >&2; exit 1; }
 command -v magick >/dev/null || { echo "magick not found — install ImageMagick" >&2; exit 1; }
+command -v jq >/dev/null || { echo "jq not found — install jq" >&2; exit 1; }
 [[ -x "$fc" ]] || cargo build --release --bin cargo-fc --manifest-path "$repo/Cargo.toml"
 mkdir -p "$docs"
 
@@ -47,17 +48,26 @@ shoot_term() {
   echo "wrote $out"
 }
 
-# JSON matrix with syntax highlighting (it is data, not a terminal session).
+# Matrix shot: the JSON feature matrix piped through `jq -c` to one row per
+# combination. This keeps the image's proportions and font size in line with the
+# other terminal shots (the multi-line `--pretty` form renders as a tall, narrow
+# strip), while still showing a real command.
 shoot_matrix() {
-  local dir="$examples/$1" out="$docs/$2"; shift 2
-  ( cd "$dir" && "$fc" "$@" | freeze --language json --output "$out" "${frame[@]}" )
+  local dir="$examples/$1" out="$docs/$2"
+  (
+    cd "$dir"
+    {
+      printf '\033[1;32m❯\033[0m cargo fc matrix | jq -c %s\n\n' "'.[]'"
+      "$fc" matrix | jq -c '.[]'
+    } | freeze --language ansi --output "$out" "${frame[@]}"
+  )
   downscale "$out"
   echo "wrote $out"
 }
 
 # Clean workspace — the hero, plus the JSON matrix.
 shoot_term   clean       check.png   check --workspace
-shoot_matrix clean       matrix.png  matrix --pretty
+shoot_matrix clean       matrix.png
 
 # Diagnostics workspace — summary with WARN/FAIL, raw diagnostics, and deduped diagnostics.
 shoot_term   diagnostics summary.png     --summary-only check --workspace

@@ -7,3 +7,8 @@ publish.workspace = true
 [features]
 metrics = []
 tracing = []
+
+# Extra metadata merged into every row of `cargo fc matrix`.
+[package.metadata.cargo-fc.matrix]
+kind = "lib"
+ci = true
