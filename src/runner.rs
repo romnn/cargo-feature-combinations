@@ -378,14 +378,6 @@ fn print_package_cmd(
     if !compact {
         println!();
     }
-    stdout.set_color(&DIMMED).ok();
-    print!(
-        "[{idx:>width$}/{total}]",
-        idx = progress.index,
-        total = progress.total,
-        width = progress.width,
-    );
-    stdout.reset().ok();
     let subcommand = cargo_subcommand(cargo_args);
     stdout.set_color(&CYAN).ok();
     match subcommand {
@@ -411,14 +403,24 @@ fn print_package_cmd(
             print!("     ");
         }
     }
-    // For known subcommands, only the verb is colored. For unknown
-    // subcommands (Other) we keep cyan for the entire line so the header
-    // remains visually distinct.
-    if subcommand != CargoSubcommand::Other {
+    // The progress counter sits immediately to the left of the package name.
+    // It is always dimmed; for known subcommands only the verb is cyan, while
+    // for unknown subcommands (Other) the rest of the line stays cyan so the
+    // header remains visually distinct.
+    stdout.set_color(&DIMMED).ok();
+    print!(
+        "[{idx:>width$}/{total}]",
+        idx = progress.index,
+        total = progress.total,
+        width = progress.width,
+    );
+    if subcommand == CargoSubcommand::Other {
+        stdout.set_color(&CYAN).ok();
+    } else {
         stdout.reset().ok();
     }
     print!(
-        "{} ( features = [{}] )",
+        " {} ( features = [{}] )",
         package.name,
         features.iter().join(", ")
     );
