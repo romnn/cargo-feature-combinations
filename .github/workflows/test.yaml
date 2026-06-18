@@ -22,6 +22,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Homebrew/actions/setup-homebrew@master
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install nextest
+        run: brew install cargo-nextest
       - name: Test
         run: task test --output group --output-group-error-only
 
