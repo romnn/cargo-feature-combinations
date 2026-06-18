@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+# `full` implies both `json` and `yaml`, so combinations like `[full, json]`
+# resolve to the same effective feature set as `[full]` alone and get pruned.
+json = []
+yaml = []
+full = ["json", "yaml"]

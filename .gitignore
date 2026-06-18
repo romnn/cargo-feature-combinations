@@ -2,6 +2,9 @@
 /target
 /goreleaser-dist
 
+# build artifacts from the example workspaces used to generate screenshots
+examples/*/target
+
 # local env files
 .env.local
 .env.*.local

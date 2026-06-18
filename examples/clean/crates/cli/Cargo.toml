@@ -1,0 +1,11 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+color = []
+
+[dependencies]
+engine = { path = "../engine" }

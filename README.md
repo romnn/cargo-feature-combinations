@@ -9,7 +9,7 @@
 Plugin for `cargo` to run commands against selected (or all) combinations of features.
 
 <p align="center">
-  <img src="test-data/screenshot.png" alt="cargo-feature-combinations demo" width="550">
+  <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="600">
 </p>
 
 ### Installation
@@ -62,6 +62,23 @@ cargo fc --summary-only build
 # Print all combinations of features in JSON (useful for usage in github actions)
 cargo fc matrix --pretty
 ```
+
+<details>
+<summary>More screenshots</summary>
+
+| | |
+|---|---|
+| **`--diagnostics-only`** — only warnings/errors, no build noise | **`--dedupe`** — fold identical diagnostics across combinations |
+| <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="420"> | <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="420"> |
+| **`--summary-only`** — just the per-combination result table | **`--show-pruned`** — redundant combinations implied by other features are pruned |
+| <img src="docs/summary.png" alt="cargo fc --summary-only check" width="420"> | <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="420"> |
+| **`matrix --pretty`** — machine-readable feature matrix | |
+| <img src="docs/matrix.png" alt="cargo fc matrix --pretty" width="420"> | |
+
+These are generated from the workspaces under [`examples/`](./examples) by
+[`scripts/screenshots.sh`](./scripts/screenshots.sh) (`task screenshots`).
+
+</details>
 
 For details, please refer to `--help`:
 

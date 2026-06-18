@@ -1,0 +1,10 @@
+[package]
+name = "loader"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+validation = []
+# Deliberately does not compile — demonstrates a failing feature combination.
+experimental = []

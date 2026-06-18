@@ -12,6 +12,11 @@ tasks:
     cmds:
       - cargo run --bin cargo-fc -- {{.CLI_ARGS}}
 
+  screenshots:
+    desc: "regenerate the README screenshots (needs charmbracelet/freeze and ImageMagick)"
+    cmds:
+      - bash scripts/screenshots.sh
+
   build:
     desc: "build in debug mode"
     cmds:

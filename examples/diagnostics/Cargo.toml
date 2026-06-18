@@ -1,0 +1,12 @@
+# A small, standalone workspace that deliberately produces lint warnings (some
+# repeated across the matrix) and a compile error in one feature, so the
+# diagnostics, dedupe, and "failing combination" screenshots have something real
+# to show. The `[workspace]` table keeps it isolated from the parent crate.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false

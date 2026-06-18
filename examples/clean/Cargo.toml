@@ -1,0 +1,12 @@
+# A small, standalone workspace where every feature combination is clean — used
+# only to generate the README "hero" screenshot via `task screenshots`. The
+# `[workspace]` table keeps it isolated from the parent crate, so it is never
+# linted, built, tested, or published as part of `cargo-feature-combinations`.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false

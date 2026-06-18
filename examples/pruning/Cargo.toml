@@ -1,0 +1,12 @@
+# A small, standalone workspace whose `full` feature implies the others, so
+# several feature combinations are redundant and get pruned by `cargo fc`. Used
+# only for the pruning screenshot. The `[workspace]` table keeps it isolated from
+# the parent crate.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false

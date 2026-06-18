@@ -23,6 +23,8 @@ keywords = [
 ]
 exclude = [
   "test-data/",
+  "examples/",
+  "scripts/",
   "taskfile.yaml",
   "action.yml",
   "TODO.md",
