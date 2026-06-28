@@ -69,4 +69,40 @@ jobs:
 Of course you can also apply the same approach for your `test.yaml` or `lint.yaml` workflows!
 Per job, up to 256 feature sets can be processed in parallel.
 
+### Configured targets
+
+If you declare [configured targets](../README.md#configured-targets) in your
+`Cargo.toml`, every `cargo fc matrix` row also carries a `target` field, so you
+can fan out the GitHub Actions matrix over targets too:
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    package: ${{ fromJson(needs.feature-matrix.outputs.matrix) }}
+steps:
+  - uses: actions/checkout@v4
+  - uses: dtolnay/rust-toolchain@stable
+    with:
+      targets: ${{ matrix.package.target }}
+  - run: >-
+      cargo check
+      --package "${{ matrix.package.name }}"
+      --features "${{ matrix.package.features }}"
+      --target "${{ matrix.package.target }}"
+```
+
+Alternatively, for linting/checking where you do not need a separate CI job per
+combination, a **single** invocation iterates every configured target and
+feature combination for you (no GitHub Actions matrix required):
+
+```yaml
+- uses: actions/checkout@v4
+- uses: romnn/cargo-feature-combinations@main
+- run: cargo fc clippy   # or: cargo fc check
+```
+
+Add `--aggregate-targets` to batch each combination's targets into one Cargo
+invocation for extra throughput on many-core runners.
+
 

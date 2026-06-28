@@ -76,6 +76,12 @@ pub struct Options {
     ///
     /// Set by `--show-pruned`.
     pub show_pruned: bool,
+    /// Whether to use aggregate target execution mode.
+    ///
+    /// Set by `--aggregate-targets`. When enabled, one Cargo invocation per
+    /// `(package, combo)` carries every target sharing that combo as repeated
+    /// `--target` flags. The default (flag absent) is serial per-target.
+    pub aggregate_targets: bool,
 }
 
 /// Helper trait to provide simple argument parsing over `Vec<String>`.
@@ -137,18 +143,33 @@ pub(crate) enum CargoSubcommand {
 
 /// Determine the cargo subcommand implied by the argument list.
 pub(crate) fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
-    fn subcommand_from_token(arg: &str) -> CargoSubcommand {
-        match arg {
-            "build" | "b" => CargoSubcommand::Build,
-            "check" | "c" => CargoSubcommand::Check,
-            "clippy" => CargoSubcommand::Lint,
-            "test" | "t" => CargoSubcommand::Test,
-            "doc" | "d" => CargoSubcommand::Doc,
-            "run" | "r" => CargoSubcommand::Run,
-            _ => CargoSubcommand::Other,
-        }
+    match cargo_subcommand_token(args) {
+        Some(token) => subcommand_from_token(&token),
+        None => CargoSubcommand::Other,
     }
+}
 
+fn subcommand_from_token(arg: &str) -> CargoSubcommand {
+    match arg {
+        "build" | "b" => CargoSubcommand::Build,
+        "check" | "c" => CargoSubcommand::Check,
+        "clippy" => CargoSubcommand::Lint,
+        "test" | "t" => CargoSubcommand::Test,
+        "doc" | "d" => CargoSubcommand::Doc,
+        "run" | "r" => CargoSubcommand::Run,
+        _ => CargoSubcommand::Other,
+    }
+}
+
+/// Extract the raw cargo subcommand token from the argument list.
+///
+/// Unlike [`cargo_subcommand`], this preserves the literal token (e.g. `lint`,
+/// `clippy`, `c`) so the command target-capability registry can reason about
+/// aliases that the [`CargoSubcommand`] enum collapses to `Other`.
+///
+/// Returns `None` when no subcommand token is present (e.g. an unknown leading
+/// flag or an early `--`).
+pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String> {
     fn is_no_value_flag(arg: &str) -> bool {
         matches!(
             arg,
@@ -184,7 +205,7 @@ pub(crate) fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
             continue;
         }
         if arg == "--" {
-            return CargoSubcommand::Other;
+            return None;
         }
         if arg.starts_with('+') {
             continue;
@@ -201,17 +222,129 @@ pub(crate) fn cargo_subcommand(args: &[impl AsRef<str>]) -> CargoSubcommand {
         }
 
         if arg.starts_with("--") {
-            return CargoSubcommand::Other;
+            return None;
         }
 
         if arg.starts_with('-') {
-            return CargoSubcommand::Other;
+            return None;
         }
 
-        return subcommand_from_token(arg);
+        return Some(arg.to_string());
     }
 
-    CargoSubcommand::Other
+    None
+}
+
+/// Built-in cargo subcommand tokens cargo-fc knows accept Cargo's `--target`.
+///
+/// This is the initial target-capability registry. It tracks the command
+/// tokens cargo-fc already recognizes today (`build`, `check`, `clippy`,
+/// `test`, `doc`, `run`) plus their short aliases. `matrix` is handled
+/// separately because it is not a forwarded cargo command.
+fn builtin_target_capability(token: &str) -> Option<bool> {
+    match token {
+        "build" | "b" | "check" | "c" | "clippy" | "test" | "t" | "doc" | "d" | "run" | "r" => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+/// Where a command's target capability was decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandCapabilitySource {
+    /// A known built-in cargo subcommand.
+    BuiltIn,
+    /// An alias/custom command opted in via workspace config.
+    WorkspaceConfig,
+    /// An unknown command with no built-in entry and no workspace opt-in.
+    Unknown,
+}
+
+/// Whether configured targets / `--target` injection apply to a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityDecision {
+    /// cargo-fc may expand configured target lists and inject `--target`.
+    Allowed,
+    /// Configured target lists are ignored for this command.
+    Denied,
+}
+
+impl CapabilityDecision {
+    /// Whether the decision allows configured targets.
+    #[must_use]
+    pub fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+/// Resolved target-capability policy for the selected command.
+///
+/// The runner consumes one resolved policy object instead of repeatedly asking
+/// whether a subcommand is known.
+#[derive(Debug, Clone)]
+pub struct ResolvedCommandTargetPolicy {
+    /// The detected command token (e.g. `clippy`, `lint`), or `matrix`.
+    pub command_name: String,
+    /// Where the capability decision came from.
+    pub source: CommandCapabilitySource,
+    /// Whether configured targets apply to this command.
+    pub targets: CapabilityDecision,
+}
+
+/// Resolve the target-capability policy for a forwarded cargo command token.
+///
+/// Built-in commands get their capability from code and ignore workspace
+/// config. If a workspace `subcommands.<token>` entry shadows a built-in
+/// command, it is ignored with a warning. Unknown tokens are denied unless the
+/// workspace opts them in with `targets = true`.
+#[must_use]
+pub fn resolve_command_target_policy(
+    token: Option<&str>,
+    subcommands: &std::collections::BTreeMap<String, crate::config::CommandTargetCapability>,
+) -> ResolvedCommandTargetPolicy {
+    let Some(token) = token else {
+        return ResolvedCommandTargetPolicy {
+            command_name: String::new(),
+            source: CommandCapabilitySource::Unknown,
+            targets: CapabilityDecision::Denied,
+        };
+    };
+
+    if let Some(allowed) = builtin_target_capability(token) {
+        if subcommands.contains_key(token) {
+            crate::print_warning!(
+                "ignoring [workspace.metadata.cargo-fc.subcommands.{token}]: `{token}` is a built-in cargo subcommand whose target capability is provided by cargo-fc"
+            );
+        }
+        return ResolvedCommandTargetPolicy {
+            command_name: token.to_string(),
+            source: CommandCapabilitySource::BuiltIn,
+            targets: if allowed {
+                CapabilityDecision::Allowed
+            } else {
+                CapabilityDecision::Denied
+            },
+        };
+    }
+
+    if let Some(capability) = subcommands.get(token) {
+        return ResolvedCommandTargetPolicy {
+            command_name: token.to_string(),
+            source: CommandCapabilitySource::WorkspaceConfig,
+            targets: if capability.targets {
+                CapabilityDecision::Allowed
+            } else {
+                CapabilityDecision::Denied
+            },
+        };
+    }
+
+    ResolvedCommandTargetPolicy {
+        command_name: token.to_string(),
+        source: CommandCapabilitySource::Unknown,
+        targets: CapabilityDecision::Denied,
+    }
 }
 
 static VALID_BOOLS: [&str; 4] = ["yes", "true", "y", "t"];
@@ -246,6 +379,11 @@ OPTIONS:
     --no-prune-implied      Disable automatic pruning of redundant feature
                             combinations implied by other features
     --show-pruned           Show pruned feature combinations in the summary
+    --aggregate-targets     Batch each combination's configured targets into a
+                            single Cargo invocation (one `--target` per target)
+                            instead of one invocation per target. Faster on
+                            many cores; reports results per target group. Falls
+                            back to serial for `run` and pruned summaries.
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -483,6 +621,7 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     drain_flag("--fail-fast", &mut options.fail_fast);
     drain_flag("--no-prune-implied", &mut options.no_prune_implied);
     drain_flag("--show-pruned", &mut options.show_pruned);
+    drain_flag("--aggregate-targets", &mut options.aggregate_targets);
 
     // --dedupe implies --diagnostics-only
     for flag in ["--dedupe", "--dedup"] {
@@ -516,8 +655,13 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
 
 #[cfg(test)]
 mod test {
-    use super::{CargoSubcommand, cargo_subcommand};
+    use super::{
+        CapabilityDecision, CargoSubcommand, CommandCapabilitySource, cargo_subcommand,
+        cargo_subcommand_token, resolve_command_target_policy,
+    };
+    use crate::config::CommandTargetCapability;
     use similar_asserts::assert_eq as sim_assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn cargo_subcommand_detects_build_and_short_build() {
@@ -593,5 +737,77 @@ mod test {
     fn cargo_subcommand_treats_unknown_aliases_as_other() {
         sim_assert_eq!(cargo_subcommand(&["lint"]), CargoSubcommand::Other);
         sim_assert_eq!(cargo_subcommand(&["lint", "build"]), CargoSubcommand::Other);
+    }
+
+    #[test]
+    fn cargo_subcommand_token_preserves_literal_token() {
+        sim_assert_eq!(
+            cargo_subcommand_token(&["clippy"]),
+            Some("clippy".to_string())
+        );
+        sim_assert_eq!(cargo_subcommand_token(&["lint"]), Some("lint".to_string()));
+        sim_assert_eq!(cargo_subcommand_token(&["c"]), Some("c".to_string()));
+        sim_assert_eq!(
+            cargo_subcommand_token(&["+nightly", "--frozen", "lint", "build"]),
+            Some("lint".to_string())
+        );
+    }
+
+    #[test]
+    fn cargo_subcommand_token_none_for_missing_command() {
+        let empty: [&str; 0] = [];
+        sim_assert_eq!(cargo_subcommand_token(&empty), None);
+        sim_assert_eq!(cargo_subcommand_token(&["--mystery-flag"]), None);
+        sim_assert_eq!(cargo_subcommand_token(&["--"]), None);
+    }
+
+    #[test]
+    fn builtin_clippy_has_target_capability() {
+        let subcommands = BTreeMap::new();
+        let policy = resolve_command_target_policy(Some("clippy"), &subcommands);
+        sim_assert_eq!(policy.source, CommandCapabilitySource::BuiltIn);
+        sim_assert_eq!(policy.targets, CapabilityDecision::Allowed);
+    }
+
+    #[test]
+    fn unknown_lint_lacks_target_capability_unless_configured() {
+        let empty = BTreeMap::new();
+        let policy = resolve_command_target_policy(Some("lint"), &empty);
+        sim_assert_eq!(policy.source, CommandCapabilitySource::Unknown);
+        sim_assert_eq!(policy.targets, CapabilityDecision::Denied);
+
+        let mut configured = BTreeMap::new();
+        configured.insert(
+            "lint".to_string(),
+            CommandTargetCapability { targets: true },
+        );
+        let policy = resolve_command_target_policy(Some("lint"), &configured);
+        sim_assert_eq!(policy.source, CommandCapabilitySource::WorkspaceConfig);
+        sim_assert_eq!(policy.targets, CapabilityDecision::Allowed);
+    }
+
+    #[test]
+    fn configured_alias_with_targets_false_is_denied() {
+        let mut configured = BTreeMap::new();
+        configured.insert(
+            "lint".to_string(),
+            CommandTargetCapability { targets: false },
+        );
+        let policy = resolve_command_target_policy(Some("lint"), &configured);
+        sim_assert_eq!(policy.source, CommandCapabilitySource::WorkspaceConfig);
+        sim_assert_eq!(policy.targets, CapabilityDecision::Denied);
+    }
+
+    #[test]
+    fn builtin_capability_ignores_workspace_shadowing_entry() {
+        let mut configured = BTreeMap::new();
+        configured.insert(
+            "check".to_string(),
+            CommandTargetCapability { targets: false },
+        );
+        // A workspace entry shadowing a built-in must not flip its capability.
+        let policy = resolve_command_target_policy(Some("check"), &configured);
+        sim_assert_eq!(policy.source, CommandCapabilitySource::BuiltIn);
+        sim_assert_eq!(policy.targets, CapabilityDecision::Allowed);
     }
 }

@@ -34,6 +34,9 @@ pub fn resolve_config<E: CfgEvaluator>(
     if matched.is_empty() {
         let mut out = base.clone();
         out.target.clear();
+        // `targets` is a selection field consumed before resolution; clear it so
+        // the resolved (feature-matrix) config never carries it.
+        out.targets = None;
         return Ok(out);
     }
 
@@ -72,6 +75,9 @@ pub fn resolve_config<E: CfgEvaluator>(
     // Remove target metadata from the resolved config.
     out.target.clear();
     out.deprecated = DeprecatedConfig::default();
+    // `targets` is a selection field consumed before resolution; clear it so the
+    // resolved (feature-matrix) config never carries it.
+    out.targets = None;
 
     Ok(out)
 }

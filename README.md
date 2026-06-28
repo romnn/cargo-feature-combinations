@@ -115,6 +115,11 @@ OPTIONS:
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
+    --no-prune-implied      Disable pruning of redundant feature combinations
+    --show-pruned           Show pruned feature combinations in the summary
+    --aggregate-targets     Batch a combination's configured targets into one
+                            Cargo invocation (faster on many cores; group-level
+                            attribution). See "Configured targets" below.
 ```
 
 ### Configuration
@@ -262,6 +267,166 @@ combinations that include `tokio` or `serde`, you can list them explicitly in
 `include_feature_sets`.
 
 </details>
+
+---
+
+### Configured targets
+
+By default `cargo fc` runs for a single effective target (the same one Cargo
+would pick: `--target`, then `CARGO_BUILD_TARGET`, then the host). You can
+instead declare a list of target triples to check by default, turning the run
+into a full matrix of
+
+```text
+selected packages × effective targets × feature combinations
+```
+
+so that a plain local `cargo fc check` exercises exactly the target cfg views
+that CI exercises.
+
+Declare workspace-wide targets in the workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-fc]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+]
+```
+
+Individual packages can override the workspace list, or opt out of it:
+
+```toml
+[package.metadata.cargo-fc]
+# Run only this package on wasm (overrides the workspace list, does not merge).
+targets = ["wasm32-unknown-unknown"]
+
+# Or opt out of configured targets entirely and use the single effective target:
+# targets = []
+```
+
+- **missing key** — inherit the workspace target list,
+- **`targets = []`** — opt out of the workspace list and use the single
+  effective target (`CARGO_BUILD_TARGET`, then host),
+- **`targets = ["…"]`** — this package's own target list (overrides, not
+  merges with, the workspace list).
+
+`targets` only selects which targets are visited. The
+[`target.'cfg(...)'`](#target-specific-configuration) overrides below still
+shape the feature matrix for each concrete target.
+
+#### Precedence
+
+When the selected command supports targets, each package's targets are resolved as:
+
+1. an explicit Cargo `--target <triple>` (wins globally for that run),
+2. the package's `targets`,
+3. the workspace `targets`,
+4. `CARGO_BUILD_TARGET`,
+5. the host target.
+
+> [!IMPORTANT]
+> Configured target lists intentionally take precedence over
+> `CARGO_BUILD_TARGET` — repository config is the declarative matrix and should
+> not be silently collapsed by a developer's ambient environment. This differs
+> from Cargo's own `[build].target` precedence. To run a single target for one
+> invocation, pass an explicit `--target <triple>`, which overrides all
+> configured lists.
+
+#### Which commands receive configured targets
+
+Configured targets are applied only to commands that accept Cargo's `--target`
+flag. Built-in subcommands cargo-fc recognizes — `check`, `clippy`, `build`,
+`doc`, `test`, `run` (and `cargo fc matrix`) — get this capability
+automatically.
+
+Unknown aliases and custom subcommands do **not** receive configured targets
+unless you opt them in. cargo-fc will not guess that `cargo lint` means
+`cargo clippy`; instead, declare it:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.lint]
+targets = true
+```
+
+If configured targets exist but the selected command lacks this capability,
+cargo-fc warns once and falls back to the single effective target.
+
+> [!WARNING]
+> The `targets` list is shared by all target-capable commands. It is motivated
+> by `check`/`clippy` (which only need the target's `rustc`), but it also
+> applies to `build` (needs a linker), and to `test`/`run` (which execute and
+> therefore usually fail for foreign targets). Narrow a single run with an
+> explicit `--target <triple>` when needed. Missing targets surface Cargo's own
+> `rustup target add <triple>` hint; cargo-fc does not install targets for you.
+
+#### Per-target workspace package selection
+
+Workspace package exclusions can vary by target, using the same `cfg(...)`
+selectors and patch semantics as the feature overrides:
+
+```toml
+[workspace.metadata.cargo-fc]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[workspace.metadata.cargo-fc.target.'cfg(target_arch = "wasm32")']
+exclude_packages = { add = ["native-cli"] }
+
+[workspace.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+exclude_packages = { add = ["wasm-app"] }
+```
+
+Workspace target overrides may patch `exclude_packages` only, and they apply to
+every concrete effective target — including single-target runs selected by
+`--target`, `CARGO_BUILD_TARGET`, or the host.
+
+#### Matrix output
+
+Every `cargo fc matrix` row now includes a `target` field:
+
+```json
+{ "name": "my-crate", "target": "x86_64-pc-windows-msvc", "features": "serde,cli" }
+```
+
+`target` is a reserved built-in key: if your `matrix` metadata already defines
+`target`, the built-in value wins and cargo-fc warns. (This is an additive
+schema change — runs with no configured targets still emit `target` = the host
+triple on every row.)
+
+#### Execution modes
+
+cargo-fc is single-threaded and never spawns concurrent Cargo processes; it
+relies on Cargo's own scheduler to use your cores. There are two modes:
+
+- **serial per-target (default)** — one Cargo invocation per
+  `(package, target, combination)`. Output stays live and every PASS/FAIL,
+  diagnostic, and dedupe note is attributed to exactly one target.
+- **`--aggregate-targets`** — one Cargo invocation per `(package, combination)`
+  that passes every target sharing that combination as repeated `--target`
+  flags, letting Cargo overlap their build graphs. Faster on many-core machines,
+  but results are reported per target *group* (`targets = [a, b, …]`) rather
+  than per target.
+
+A worker pool of concurrent Cargo processes was measured and rejected: with a
+shared `target/` directory, Cargo serializes on its build-directory lock, so
+concurrent `--target` builds give no speedup; per-target `CARGO_TARGET_DIR`
+workers do parallelize but recompile shared host artifacts per target (a small
+win on many cores, ~28% slower on 2 cores, plus doubled disk). A single
+multi-target invocation (aggregate mode) is the only approach that is faster on
+many cores and never slower on small CI runners.
+
+`--aggregate-targets` falls back to serial per-target when:
+
+- the subcommand is `run` (Cargo rejects multiple `--target` for `run`),
+- pruned summaries are enabled (`--show-pruned` or `show_pruned` in config) —
+  pruning is target-specific,
+- only one target is effectively planned,
+
+and it has no effect on `cargo fc matrix` (rows are always per target). In each
+case cargo-fc prints a short note. Aggregate warning/error counts are for the
+whole target group and may differ from serial per-target counts; pair
+`--aggregate-targets` with `--dedupe` for the cleanest diagnostics output.
 
 ---
 

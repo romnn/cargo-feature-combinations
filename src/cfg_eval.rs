@@ -81,11 +81,24 @@ impl RustcCfgEvaluator {
                 })?;
 
             if !output.status.success() {
-                eyre::bail!(
-                    "rustc --print cfg --target {} failed with exit code {:?}",
-                    key,
-                    output.status.code()
-                );
+                // Classify the failure at this adapter boundary: surface rustc's
+                // own reason, and add a rustup hint when the triple looks like a
+                // valid-but-not-installed target. (Note: `rustc --print cfg`
+                // succeeds for known targets even when their std is missing, so
+                // in practice this path is reached for unknown/invalid triples;
+                // the rustup hint is only added when rustc says so.)
+                use std::fmt::Write as _;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr = stderr.trim();
+                let mut message = format!("failed to read cfg for target `{key}`");
+                if !stderr.is_empty() {
+                    message.push('\n');
+                    message.push_str(stderr);
+                }
+                if stderr.contains("not installed") || stderr.contains("rustup target add") {
+                    let _ = write!(message, "\nhint: run `rustup target add {key}`");
+                }
+                eyre::bail!(message);
             }
 
             let stdout = String::from_utf8_lossy(&output.stdout);
