@@ -281,9 +281,6 @@ into a full matrix of
 selected packages × effective targets × feature combinations
 ```
 
-so that a plain local `cargo fc check` exercises exactly the target cfg views
-that CI exercises.
-
 Declare workspace-wide targets in the workspace `Cargo.toml`:
 
 ```toml
@@ -299,7 +296,7 @@ Individual packages can override the workspace list, or opt out of it:
 
 ```toml
 [package.metadata.cargo-fc]
-# Run only this package on wasm (overrides the workspace list, does not merge).
+# Run this package only on wasm (overrides the workspace list, does not merge).
 targets = ["wasm32-unknown-unknown"]
 
 # Or opt out of configured targets entirely and use the single effective target:
@@ -342,8 +339,7 @@ flag. Built-in subcommands cargo-fc recognizes — `check`, `clippy`, `build`,
 automatically.
 
 Unknown aliases and custom subcommands do **not** receive configured targets
-unless you opt them in. cargo-fc will not guess that `cargo lint` means
-`cargo clippy`; instead, declare it:
+unless you declare it:
 
 ```toml
 [workspace.metadata.cargo-fc.subcommands.lint]
@@ -380,55 +376,6 @@ exclude_packages = { add = ["wasm-app"] }
 Workspace target overrides may patch `exclude_packages` only, and they apply to
 every concrete effective target — including single-target runs selected by
 `--target`, `CARGO_BUILD_TARGET`, or the host.
-
-#### Matrix output
-
-Every `cargo fc matrix` row now includes a `target` field:
-
-```json
-{ "name": "my-crate", "target": "x86_64-pc-windows-msvc", "features": "serde,cli" }
-```
-
-`target` is a reserved built-in key: if your `matrix` metadata already defines
-`target`, the built-in value wins and cargo-fc warns. (This is an additive
-schema change — runs with no configured targets still emit `target` = the host
-triple on every row.)
-
-#### Execution modes
-
-cargo-fc is single-threaded and never spawns concurrent Cargo processes; it
-relies on Cargo's own scheduler to use your cores. There are two modes:
-
-- **serial per-target (default)** — one Cargo invocation per
-  `(package, target, combination)`. Output stays live and every PASS/FAIL,
-  diagnostic, and dedupe note is attributed to exactly one target.
-- **`--aggregate-targets`** — one Cargo invocation per `(package, combination)`
-  that passes every target sharing that combination as repeated `--target`
-  flags, letting Cargo overlap their build graphs. Faster on many-core machines,
-  but results are reported per target *group* (`targets = [a, b, …]`) rather
-  than per target.
-
-A worker pool of concurrent Cargo processes was measured and rejected: with a
-shared `target/` directory, Cargo serializes on its build-directory lock, so
-concurrent `--target` builds give no speedup; per-target `CARGO_TARGET_DIR`
-workers do parallelize but recompile shared host artifacts per target (a small
-win on many cores, ~28% slower on 2 cores, plus doubled disk). A single
-multi-target invocation (aggregate mode) is the only approach that is faster on
-many cores and never slower on small CI runners.
-
-`--aggregate-targets` falls back to serial per-target when:
-
-- the subcommand is `run` (Cargo rejects multiple `--target` for `run`),
-- pruned summaries are enabled (`--show-pruned` or `show_pruned` in config) —
-  pruning is target-specific,
-- only one target is effectively planned,
-
-and it has no effect on `cargo fc matrix` (rows are always per target). In each
-case cargo-fc prints a short note. Aggregate warning/error counts are for the
-whole target group and may differ from serial per-target counts; pair
-`--aggregate-targets` with `--dedupe` for the cleanest diagnostics output.
-
----
 
 ### Target-specific configuration
 
