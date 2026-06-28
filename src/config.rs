@@ -31,8 +31,8 @@ pub struct Config {
     ///
     /// `targets` is never read by feature-combination generation. Target
     /// override sections (`target.'cfg(...)'`) must not change it.
-    #[serde(default)]
-    pub targets: Option<Vec<String>>,
+    #[serde(default, rename = "targets")]
+    pub package_targets: Option<Vec<String>>,
     /// Feature sets that must be tested in isolation.
     #[serde(default)]
     pub isolated_feature_sets: Vec<HashSet<String>>,
@@ -96,11 +96,11 @@ pub struct Config {
     #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
 
-    /// Target-specific configuration overrides.
+    /// Target-specific package configuration overrides.
     ///
     /// This is read from `[package.metadata.cargo-fc.target.'cfg(...)']`.
-    #[serde(default)]
-    pub target: BTreeMap<String, TargetOverride>,
+    #[serde(default, rename = "target")]
+    pub target_overrides: BTreeMap<String, TargetOverride>,
     /// Deprecated configuration keys (kept for backwards compatibility).
     #[serde(flatten)]
     pub deprecated: DeprecatedConfig,
@@ -109,7 +109,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            targets: None,
+            package_targets: None,
             isolated_feature_sets: Vec::new(),
             exclude_features: HashSet::new(),
             include_features: HashSet::new(),
@@ -123,7 +123,7 @@ impl Default for Config {
             prune_implied: true,
             show_pruned: false,
             matrix: HashMap::new(),
-            target: BTreeMap::new(),
+            target_overrides: BTreeMap::new(),
             deprecated: DeprecatedConfig::default(),
         }
     }
@@ -189,21 +189,21 @@ pub struct WorkspaceConfig {
     /// An empty list means "no configured target list"; behavior falls back to
     /// the existing single effective target detection path. Package-level
     /// `targets` override (do not merge with) this list.
-    #[serde(default)]
-    pub targets: Vec<String>,
+    #[serde(default, rename = "targets")]
+    pub workspace_targets: Vec<String>,
     /// Target-specific workspace overrides keyed by Cargo-style cfg expressions.
     ///
     /// These may patch `exclude_packages` only; they select which workspace
     /// packages participate for one already-selected target.
-    #[serde(default)]
-    pub target: BTreeMap<String, WorkspaceTargetOverride>,
+    #[serde(default, rename = "target")]
+    pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
     /// Per-subcommand configured-target policy.
     ///
     /// Built-in Cargo subcommands default to their code-provided capability.
     /// Unknown aliases (e.g. `lint`) default to denied. Entries in this table
     /// override either default with `targets = true` or `targets = false`.
-    #[serde(default)]
-    pub subcommands: BTreeMap<String, CommandTargetCapability>,
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandTargetCapability>,
 }
 
 /// Target-specific workspace override.

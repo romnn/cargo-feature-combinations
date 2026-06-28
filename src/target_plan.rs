@@ -118,7 +118,7 @@ fn package_target_list(
     env: &impl TargetEnvironment,
     fallback_cache: &mut Option<EffectiveTarget>,
 ) -> eyre::Result<Vec<EffectiveTarget>> {
-    match &selected.config.targets {
+    match &selected.config.package_targets {
         // Package-level list present.
         Some(list) if !list.is_empty() => {
             let triples = normalize_targets(list)?;
@@ -236,7 +236,8 @@ pub fn build_target_plans<'a>(
     let contains_configured_assignments = if cli_target.is_some() {
         true
     } else if capability_allowed {
-        !workspace_config.targets.is_empty() || selected.iter().any(|s| s.config.targets.is_some())
+        !workspace_config.workspace_targets.is_empty()
+            || selected.iter().any(|s| s.config.package_targets.is_some())
     } else {
         false
     };
@@ -263,7 +264,7 @@ pub fn build_target_plans<'a>(
             })
             .collect()
     } else if capability_allowed {
-        let workspace_targets = normalize_targets(&workspace_config.targets)?;
+        let workspace_targets = normalize_targets(&workspace_config.workspace_targets)?;
         let mut out = Vec::with_capacity(selected.len());
         for s in selected {
             let targets = package_target_list(s, &workspace_targets, env, &mut fallback_cache)?;
@@ -295,7 +296,7 @@ pub fn build_target_plans<'a>(
     let mut seen: HashSet<TargetTriple> = HashSet::new();
 
     if cli_target.is_none() && capability_allowed {
-        for triple in normalize_targets(&workspace_config.targets)? {
+        for triple in normalize_targets(&workspace_config.workspace_targets)? {
             if seen.insert(triple.clone()) {
                 order.push(triple);
             }
@@ -314,8 +315,12 @@ pub fn build_target_plans<'a>(
     // exclude set for that target, and drop empty plans.
     let mut plans = Vec::new();
     for triple in &order {
-        let exclude =
-            resolve_target_excludes(base_exclude, &workspace_config.target, triple, evaluator)?;
+        let exclude = resolve_target_excludes(
+            base_exclude,
+            &workspace_config.target_overrides,
+            triple,
+            evaluator,
+        )?;
         let mut packages = Vec::new();
         for pt in &package_targets {
             if exclude.contains(pt.package.name.as_str()) {
@@ -418,14 +423,14 @@ mod test {
 
     fn config_with_targets(targets: Option<&[&str]>) -> Config {
         Config {
-            targets: targets.map(|t| t.iter().map(|s| (*s).to_string()).collect()),
+            package_targets: targets.map(|t| t.iter().map(|s| (*s).to_string()).collect()),
             ..Config::default()
         }
     }
 
     fn workspace_targets(targets: &[&str]) -> WorkspaceConfig {
         WorkspaceConfig {
-            targets: targets.iter().map(|s| (*s).to_string()).collect(),
+            workspace_targets: targets.iter().map(|s| (*s).to_string()).collect(),
             ..WorkspaceConfig::default()
         }
     }
@@ -750,8 +755,8 @@ mod test {
             },
         );
         let ws = WorkspaceConfig {
-            targets: vec!["linux".to_string(), "wasm".to_string()],
-            target,
+            workspace_targets: vec!["linux".to_string(), "wasm".to_string()],
+            target_overrides: target,
             ..WorkspaceConfig::default()
         };
 
@@ -807,7 +812,7 @@ mod test {
             },
         );
         let ws = WorkspaceConfig {
-            target,
+            target_overrides: target,
             ..WorkspaceConfig::default()
         };
 

@@ -87,7 +87,7 @@ Relevant current structure:
 
 - `src/config.rs`
   - `Config` stores per-package cargo-fc config.
-  - `Config::target` stores cfg-keyed target override sections.
+  - `Config::target_overrides` stores cfg-keyed target override sections.
   - `WorkspaceConfig` currently stores workspace-wide `exclude_packages`.
 - `src/workspace.rs`
   - Reads `[workspace.metadata.cargo-fc]`.
@@ -580,12 +580,12 @@ Add fields to `WorkspaceConfig`:
 ```rust
 pub struct WorkspaceConfig {
     pub exclude_packages: HashSet<String>,
-    #[serde(default)]
-    pub targets: Vec<String>,
-    #[serde(default)]
-    pub target: BTreeMap<String, WorkspaceTargetOverride>,
-    #[serde(default)]
-    pub subcommands: BTreeMap<String, CommandTargetCapability>,
+    #[serde(default, rename = "targets")]
+    pub workspace_targets: Vec<String>,
+    #[serde(default, rename = "target")]
+    pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandTargetCapability>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -741,8 +741,8 @@ Add package-level targets to `Config`:
 
 ```rust
 pub struct Config {
-    #[serde(default)]
-    pub targets: Option<Vec<String>>,
+    #[serde(default, rename = "targets")]
+    pub package_targets: Option<Vec<String>>,
     // existing fields...
 }
 ```
@@ -1399,9 +1399,10 @@ are keyed; planning, config resolution, and feature generation are identical.
 
 ### Milestone 1: Config and Target Planning
 
-- Add `WorkspaceConfig::targets`.
-- Add `WorkspaceConfig::target` with `WorkspaceTargetOverride`.
-- Add `Config::targets: Option<Vec<String>>`.
+- Add `WorkspaceConfig::workspace_targets` (`targets` in TOML).
+- Add `WorkspaceConfig::target_overrides` (`target` in TOML) with
+  `WorkspaceTargetOverride`.
+- Add `Config::package_targets: Option<Vec<String>>` (`targets` in TOML).
 - Add workspace `subcommands.<token>.targets` for alias target opt-in.
 - Add target-source domain types.
 - Add raw cargo subcommand token extraction for capability lookup.

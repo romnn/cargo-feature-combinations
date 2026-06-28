@@ -33,10 +33,10 @@ pub fn resolve_config<E: CfgEvaluator>(
     // Fast path: no matching overrides.
     if matched.is_empty() {
         let mut out = base.clone();
-        out.target.clear();
+        out.target_overrides.clear();
         // `targets` is a selection field consumed before resolution; clear it so
         // the resolved (feature-matrix) config never carries it.
-        out.targets = None;
+        out.package_targets = None;
         return Ok(out);
     }
 
@@ -73,11 +73,11 @@ pub fn resolve_config<E: CfgEvaluator>(
     apply_overrides(&mut out, &matched)?;
 
     // Remove target metadata from the resolved config.
-    out.target.clear();
+    out.target_overrides.clear();
     out.deprecated = DeprecatedConfig::default();
     // `targets` is a selection field consumed before resolution; clear it so the
     // resolved (feature-matrix) config never carries it.
-    out.targets = None;
+    out.package_targets = None;
 
     Ok(out)
 }
@@ -88,7 +88,7 @@ fn matching_overrides<'a, E: CfgEvaluator>(
     evaluator: &mut E,
 ) -> eyre::Result<Vec<(&'a str, &'a TargetOverride)>> {
     let mut matched = Vec::new();
-    for (expr, ov) in &base.target {
+    for (expr, ov) in &base.target_overrides {
         let is_match = evaluator
             .matches(expr, target)
             .wrap_err_with(|| format!("failed to evaluate cfg expression `{expr}`"))?;
@@ -498,7 +498,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches
@@ -525,7 +525,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches
@@ -559,7 +559,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -593,7 +593,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -629,7 +629,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -667,7 +667,10 @@ mod test {
         let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
         assert_eq!(out.exclude_features, hs(&["default"]));
         assert!(out.skip_optional_dependencies);
-        assert!(out.target.is_empty(), "target metadata should be cleared");
+        assert!(
+            out.target_overrides.is_empty(),
+            "target metadata should be cleared"
+        );
         Ok(())
     }
 
@@ -690,7 +693,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches
@@ -736,7 +739,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -769,7 +772,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -795,7 +798,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -818,7 +821,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -847,7 +850,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -879,7 +882,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -908,7 +911,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
@@ -949,7 +952,7 @@ mod test {
                 ..TargetOverride::default()
             },
         );
-        base.target = target;
+        base.target_overrides = target;
 
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());

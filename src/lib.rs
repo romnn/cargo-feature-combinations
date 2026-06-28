@@ -346,17 +346,20 @@ fn resolve_capability_and_warn(
     }
 
     let token = cli::cargo_subcommand_token(cargo_args);
-    let policy = cli::configured_target_policy(token.as_deref(), &ws_config.subcommands);
+    let policy = cli::configured_target_policy(token.as_deref(), &ws_config.subcommand_overrides);
     if policy.enabled {
         return true;
     }
 
     // Capability denied: warn (once) only when the user actually configured
     // targets that we are now skipping.
-    let has_raw_configured_targets = !ws_config.targets.is_empty()
-        || selected
-            .iter()
-            .any(|s| s.config.targets.as_ref().is_some_and(|t| !t.is_empty()));
+    let has_raw_configured_targets = !ws_config.workspace_targets.is_empty()
+        || selected.iter().any(|s| {
+            s.config
+                .package_targets
+                .as_ref()
+                .is_some_and(|t| !t.is_empty())
+        });
     if has_raw_configured_targets
         && !policy.explicit
         && let Some(token) = token.as_deref().filter(|t| !t.is_empty())
@@ -523,7 +526,7 @@ mod test {
     fn builtin_command_can_be_disabled_by_workspace_policy() {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
-        ws.subcommands.insert(
+        ws.subcommand_overrides.insert(
             "build".to_string(),
             config::CommandTargetCapability { targets: false },
         );

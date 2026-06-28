@@ -114,7 +114,11 @@ fn alias_cargo_fc_with_target_override() -> eyre::Result<()> {
 
     assert!(config.exclude_features.contains("foo"));
     // Target overrides are stored in the config but not applied until resolve_config
-    assert!(config.target.contains_key("cfg(target_os = \"linux\")"));
+    assert!(
+        config
+            .target_overrides
+            .contains_key("cfg(target_os = \"linux\")")
+    );
     Ok(())
 }
 
@@ -129,7 +133,11 @@ fn alias_fc_with_target_override() -> eyre::Result<()> {
     "#})?;
 
     assert!(config.exclude_features.contains("foo"));
-    assert!(config.target.contains_key("cfg(target_os = \"linux\")"));
+    assert!(
+        config
+            .target_overrides
+            .contains_key("cfg(target_os = \"linux\")")
+    );
     Ok(())
 }
 
