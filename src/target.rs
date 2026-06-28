@@ -44,12 +44,6 @@ impl TargetSource {
     pub fn should_inject_target_arg(self) -> bool {
         matches!(self, Self::PackageConfig | Self::WorkspaceConfig)
     }
-
-    /// Whether this assignment came from configured target metadata.
-    #[must_use]
-    pub fn is_configured(self) -> bool {
-        matches!(self, Self::PackageConfig | Self::WorkspaceConfig)
-    }
 }
 
 /// A concrete target together with where it came from.
@@ -78,27 +72,12 @@ pub trait TargetEnvironment {
 
 /// Production [`TargetEnvironment`] backed by the process environment and
 /// `rustc -vV`.
-#[derive(Debug, Clone)]
-pub struct RustcTargetEnvironment<E = ProcessEnv> {
-    env: E,
-}
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RustcTargetEnvironment;
 
-impl Default for RustcTargetEnvironment {
-    fn default() -> Self {
-        Self { env: ProcessEnv }
-    }
-}
-
-impl<E: Env> RustcTargetEnvironment<E> {
-    /// Create an environment adapter over a custom [`Env`].
-    pub fn with_env(env: E) -> Self {
-        Self { env }
-    }
-}
-
-impl<E: Env> TargetEnvironment for RustcTargetEnvironment<E> {
+impl TargetEnvironment for RustcTargetEnvironment {
     fn cargo_build_target(&self) -> Option<String> {
-        let triple = self.env.var("CARGO_BUILD_TARGET")?;
+        let triple = std::env::var("CARGO_BUILD_TARGET").ok()?;
         let triple = triple.trim();
         if triple.is_empty() {
             None

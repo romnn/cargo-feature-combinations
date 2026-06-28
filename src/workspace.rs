@@ -112,7 +112,7 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
         && !config.exclude_packages.is_empty()
     {
         print_warning!(
-            "{}.exclude_packages in the workspace root package is deprecated; use {}.exclude_packages instead",
+            "[{}].exclude_packages in the workspace root package is deprecated; use [{}].exclude_packages instead",
             pkg_metadata_section(root_key),
             ws_metadata_section(root_key),
         );
@@ -130,7 +130,7 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
             && !config.exclude_packages.is_empty()
         {
             print_warning!(
-                "{}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                "[{}].exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
                 pkg_metadata_section(key),
                 package.name,
             );
@@ -147,7 +147,7 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
             for ws_key in WORKSPACE_ONLY_KEYS {
                 if json_has_values(tool.get(*ws_key)) {
                     print_warning!(
-                        "{}.{} in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                        "[{}].{} in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
                         ws_metadata_section(key),
                         ws_key,
                         package.name,

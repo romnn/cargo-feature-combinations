@@ -119,9 +119,10 @@ pub(crate) const METADATA_KEYS: &[&str] = &[
 /// usage is detected.
 pub(crate) const DEFAULT_METADATA_KEY: &str = default_metadata_key!();
 
-/// Default TOML section header for per-package configuration.
+/// Default dotted `package.metadata.<key>` path for per-package configuration
+/// (no brackets; callers wrap it in `[...]`).
 pub(crate) const DEFAULT_PKG_METADATA_SECTION: &str =
-    concat!("[package.metadata.", default_metadata_key!(), "]");
+    concat!("package.metadata.", default_metadata_key!());
 
 /// Look up configuration from any recognized metadata key alias.
 ///
@@ -138,14 +139,20 @@ pub(crate) fn find_metadata_value(
     None
 }
 
-/// Format a `[package.metadata.<key>]` TOML section header.
+/// Format the dotted `package.metadata.<key>` path (no brackets).
+///
+/// Callers wrap it in `[...]` and may append a sub-key, e.g.
+/// `[{pkg_metadata_section(key)}.target.'cfg(...)']`.
 pub(crate) fn pkg_metadata_section(key: &str) -> String {
-    format!("[package.metadata.{key}]")
+    format!("package.metadata.{key}")
 }
 
-/// Format a `[workspace.metadata.<key>]` TOML section header.
+/// Format the dotted `workspace.metadata.<key>` path (no brackets).
+///
+/// Callers wrap it in `[...]` and may append a sub-key, e.g.
+/// `[{ws_metadata_section(key)}.subcommands.<token>]`.
 pub(crate) fn ws_metadata_section(key: &str) -> String {
-    format!("[workspace.metadata.{key}]")
+    format!("workspace.metadata.{key}")
 }
 
 /// Run the cargo subcommand for all relevant feature combinations.
@@ -203,10 +210,13 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     // Parse an explicit `--target` only before `--`.
     let cli_target = target::parse_cli_target(&cargo_args_owned);
 
+    // Echo the user's own metadata alias in capability hints/warnings.
+    let ws_key = find_metadata_value(&metadata.workspace_metadata)
+        .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
     let capability_allowed =
-        resolve_capability_and_warn(&options, &cargo_args, &ws_config, &selected);
+        resolve_capability_and_warn(&options, &cargo_args, &ws_config, ws_key, &selected);
 
-    let env = RustcTargetEnvironment::default();
+    let env = RustcTargetEnvironment;
     let mut evaluator = RustcCfgEvaluator::default();
     let base_exclude = metadata.base_workspace_exclude_packages()?;
 
@@ -320,6 +330,7 @@ fn resolve_capability_and_warn(
     options: &Options,
     cargo_args: &[&str],
     ws_config: &config::WorkspaceConfig,
+    ws_key: &str,
     selected: &[target_plan::SelectedPackage<'_>],
 ) -> bool {
     // `--no-targets` deliberately ignores configured target lists and falls back
@@ -328,35 +339,34 @@ fn resolve_capability_and_warn(
         return false;
     }
 
-    let is_matrix = matches!(options.command, Some(Command::FeatureMatrix { .. }));
-    let (capability_allowed, policy) = if is_matrix {
-        (true, None)
-    } else {
-        let token = cli::cargo_subcommand_token(cargo_args);
-        let policy = cli::resolve_command_target_policy(token.as_deref(), &ws_config.subcommands);
-        (policy.targets.is_allowed(), Some(policy))
-    };
+    // `matrix` is not a forwarded cargo command: it always uses configured
+    // target planning.
+    if matches!(options.command, Some(Command::FeatureMatrix { .. })) {
+        return true;
+    }
 
+    let token = cli::cargo_subcommand_token(cargo_args);
+    if cli::command_allows_configured_targets(token.as_deref(), &ws_config.subcommands, ws_key) {
+        return true;
+    }
+
+    // Capability denied: warn (once) only when the user actually configured
+    // targets that we are now skipping.
     let has_raw_configured_targets = !ws_config.targets.is_empty()
         || selected
             .iter()
             .any(|s| s.config.targets.as_ref().is_some_and(|t| !t.is_empty()));
-    if !capability_allowed
-        && has_raw_configured_targets
-        && let Some(policy) = &policy
-        && !policy.command_name.is_empty()
-    {
+    if has_raw_configured_targets && let Some(token) = token.as_deref().filter(|t| !t.is_empty()) {
         print_warning!(
-            "not passing configured targets to cargo command `{}` because it has no targets capability",
-            policy.command_name,
+            "not passing configured targets to cargo command `{token}` because it has no targets capability"
         );
         eprintln!(
-            "hint: add [workspace.metadata.cargo-fc.subcommands.{}] targets = true if this command accepts --target",
-            policy.command_name,
+            "hint: add [{}.subcommands.{token}] targets = true if this command accepts --target",
+            ws_metadata_section(ws_key),
         );
     }
 
-    capability_allowed
+    false
 }
 
 /// Resolve the effective target execution mode, emitting a note when an
@@ -483,14 +493,26 @@ mod test {
         let ws = config::WorkspaceConfig::default();
         // Even a target-capable built-in command is denied configured targets
         // when `--no-targets` is set.
-        assert!(!resolve_capability_and_warn(&options, &["check"], &ws, &[]));
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &["check"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
     }
 
     #[test]
     fn builtin_command_allows_capability_without_no_targets() {
         let options = Options::default();
         let ws = config::WorkspaceConfig::default();
-        assert!(resolve_capability_and_warn(&options, &["check"], &ws, &[]));
+        assert!(resolve_capability_and_warn(
+            &options,
+            &["check"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
     }
 
     #[test]
@@ -502,7 +524,13 @@ mod test {
         };
         let ws = config::WorkspaceConfig::default();
         let empty: [&str; 0] = [];
-        assert!(!resolve_capability_and_warn(&options, &empty, &ws, &[]));
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &empty,
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
     }
 
     #[test]
@@ -556,16 +584,16 @@ mod test {
     fn pkg_metadata_section_formats_correctly() {
         assert_eq!(
             pkg_metadata_section("cargo-fc"),
-            "[package.metadata.cargo-fc]"
+            "package.metadata.cargo-fc"
         );
-        assert_eq!(pkg_metadata_section("fc"), "[package.metadata.fc]");
+        assert_eq!(pkg_metadata_section("fc"), "package.metadata.fc");
     }
 
     #[test]
     fn ws_metadata_section_formats_correctly() {
         assert_eq!(
             ws_metadata_section("cargo-fc"),
-            "[workspace.metadata.cargo-fc]"
+            "workspace.metadata.cargo-fc"
         );
     }
 
@@ -576,6 +604,6 @@ mod test {
 
     #[test]
     fn default_pkg_metadata_section_uses_default_key() {
-        assert_eq!(DEFAULT_PKG_METADATA_SECTION, "[package.metadata.cargo-fc]");
+        assert_eq!(DEFAULT_PKG_METADATA_SECTION, "package.metadata.cargo-fc");
     }
 }

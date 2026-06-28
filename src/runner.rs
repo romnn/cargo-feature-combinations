@@ -244,7 +244,7 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
             let _ = stderr.reset();
             let _ = writeln!(
                 &mut stderr,
-                "    Consider restricting the matrix using {DEFAULT_PKG_METADATA_SECTION}.only_features",
+                "    Consider restricting the matrix using [{DEFAULT_PKG_METADATA_SECTION}].only_features",
             );
             let _ = writeln!(
                 &mut stderr,
@@ -633,14 +633,6 @@ pub struct ExecutionPlanSet<'a> {
     /// Whether the `target = ...` field should be shown (not the implicit
     /// single-host default).
     pub show_target: bool,
-}
-
-impl ExecutionPlanSet<'_> {
-    /// The distinct target triples planned, in plan order.
-    #[must_use]
-    pub fn distinct_targets(&self) -> Vec<TargetTriple> {
-        self.plans.iter().map(|p| p.target.clone()).collect()
-    }
 }
 
 /// Build owned execution plans from target plans.

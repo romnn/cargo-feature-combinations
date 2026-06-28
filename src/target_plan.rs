@@ -63,14 +63,6 @@ pub struct TargetPlans<'a> {
     pub contains_configured_assignments: bool,
 }
 
-impl TargetPlans<'_> {
-    /// The distinct target triples planned, in plan order.
-    #[must_use]
-    pub fn distinct_targets(&self) -> Vec<TargetTriple> {
-        self.plans.iter().map(|p| p.target.clone()).collect()
-    }
-}
-
 /// Trim, reject empty, and deduplicate a configured target list, preserving
 /// first-occurrence order.
 fn normalize_targets(raw: &[String]) -> eyre::Result<Vec<TargetTriple>> {

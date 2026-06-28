@@ -92,21 +92,21 @@ impl Package for cargo_metadata::Package {
 
         if !config.deprecated.skip_feature_sets.is_empty() {
             print_warning!(
-                "{section}.skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
+                "[{section}].skip_feature_sets in package `{}` is deprecated; use exclude_feature_sets instead",
                 self.name,
             );
         }
 
         if !config.deprecated.denylist.is_empty() {
             print_warning!(
-                "{section}.denylist in package `{}` is deprecated; use exclude_features instead",
+                "[{section}].denylist in package `{}` is deprecated; use exclude_features instead",
                 self.name,
             );
         }
 
         if !config.deprecated.exact_combinations.is_empty() {
             print_warning!(
-                "{section}.exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
+                "[{section}].exact_combinations in package `{}` is deprecated; use include_feature_sets instead",
                 self.name,
             );
         }
