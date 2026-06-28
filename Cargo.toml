@@ -67,6 +67,7 @@ todo = "deny"
 indexing_slicing = "deny"
 # Every `#[allow(...)]` must carry a `reason = "..."` justifying the escape hatch.
 allow_attributes_without_reason = "deny"
+expect_attributes_without_reason = "deny"
 
 struct_excessive_bools = "allow"
 
