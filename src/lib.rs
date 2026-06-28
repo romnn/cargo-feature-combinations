@@ -346,7 +346,8 @@ fn resolve_capability_and_warn(
     }
 
     let token = cli::cargo_subcommand_token(cargo_args);
-    if cli::command_allows_configured_targets(token.as_deref(), &ws_config.subcommands, ws_key) {
+    let policy = cli::configured_target_policy(token.as_deref(), &ws_config.subcommands);
+    if policy.enabled {
         return true;
     }
 
@@ -356,7 +357,10 @@ fn resolve_capability_and_warn(
         || selected
             .iter()
             .any(|s| s.config.targets.as_ref().is_some_and(|t| !t.is_empty()));
-    if has_raw_configured_targets && let Some(token) = token.as_deref().filter(|t| !t.is_empty()) {
+    if has_raw_configured_targets
+        && !policy.explicit
+        && let Some(token) = token.as_deref().filter(|t| !t.is_empty())
+    {
         print_warning!(
             "not passing configured targets to cargo command `{token}` because it has no targets capability"
         );
@@ -509,6 +513,24 @@ mod test {
         assert!(resolve_capability_and_warn(
             &options,
             &["check"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn builtin_command_can_be_disabled_by_workspace_policy() {
+        let options = Options::default();
+        let mut ws = config::WorkspaceConfig::default();
+        ws.subcommands.insert(
+            "build".to_string(),
+            config::CommandTargetCapability { targets: false },
+        );
+
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &["build"],
             &ws,
             DEFAULT_METADATA_KEY,
             &[]

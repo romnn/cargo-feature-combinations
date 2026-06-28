@@ -373,9 +373,10 @@ consumers to migrate immediately.
 ## Command Scope
 
 Configured target lists should apply only when the selected cargo subcommand has
-the target capability. Built-in Cargo subcommands get this capability from a
-small built-in registry. Unknown aliases get no target capability unless the
-workspace config opts them in.
+the target capability. Built-in Cargo subcommands default to this capability via
+a small built-in registry. Unknown aliases default to no target capability
+unless the workspace config opts them in. Workspace config may override either
+default per command token.
 
 This avoids guessing that `cargo lint` means `cargo clippy`. `lint` could be any
 Cargo alias or custom command, so it must remain unknown unless the workspace
@@ -397,7 +398,10 @@ Known built-in commands should have explicit built-in target allowlist entries.
 The allowlist is not only for Cargo's built-in binaries; it is for command
 tokens that cargo-fc knows how to reason about. For example, `clippy` must be in
 the built-in allowlist because cargo-fc knows `cargo clippy` accepts Cargo's
-`--target` flag.
+`--target` flag. The built-in entry is a default, not a hard lock: users may set
+`subcommands.<token>.targets = false` to keep a built-in command on the single
+effective target while still running other commands across the configured target
+list.
 
 Encode the table below as the initial built-in registry. If implementation
 tests prove that a command does not actually accept `--target`, adjust the
@@ -501,10 +505,13 @@ and before target planning:
 1. Detect the raw cargo subcommand token using the same cargo-flag skipping
    rules currently used by `cargo_subcommand`. This needs a token-extracting
    helper because the current enum collapses all unknown commands to `Other`.
-2. If the token maps to a known built-in cargo subcommand, use the built-in
-   target-capability registry.
-3. Otherwise, look up `[workspace.metadata.cargo-fc.subcommands.<token>]`.
-4. If no configured entry exists, deny configured targets for that command.
+2. Look up `[workspace.metadata.cargo-fc.subcommands.<token>]`.
+3. For built-in short aliases, if there is no exact alias entry, also look up
+   the long built-in command key.
+4. If no configured entry exists and the token maps to a known built-in cargo
+   subcommand, use the built-in target-capability registry.
+5. If no configured entry exists for an unknown command, deny configured
+   targets for that command.
 
 The `cargo fc matrix` command is not a forwarded cargo subcommand: it has target
 capability unconditionally and skips token detection entirely. The resolution
@@ -535,11 +542,11 @@ The exact type names can differ. The important design rule is that the runner
 consumes one resolved policy object instead of repeatedly asking whether a
 subcommand is known.
 
-Built-in commands should not require workspace config. If a workspace config
-entry uses the same name as a built-in command, either reject it or warn that it
-is ignored. Do not silently let a config table change built-in command behavior
-in the first implementation; that would make standard cargo-fc behavior harder
-to reason about.
+Built-in commands should not require workspace config. Workspace config is still
+allowed to override their default target policy, because "should cargo-fc apply
+the configured target axis for this command?" is a repo policy decision. This
+supports workflows such as linting every configured target while keeping
+`cargo fc build` on the single effective target.
 
 The target warning must be driven from raw config state, not from the planned
 targets after capability filtering. Before planning, compute whether any
@@ -663,8 +670,7 @@ those values into the base exclude set before target-specific patches.
 
 ### Command Target Capability Config
 
-Add a workspace-level target-capability table for aliases and custom cargo
-subcommands:
+Add a workspace-level target-capability table for cargo subcommands:
 
 ```toml
 [workspace.metadata.cargo-fc.subcommands.lint]
@@ -673,6 +679,17 @@ targets = true
 
 This means: when the detected cargo subcommand is `lint`, cargo-fc is allowed to
 expand configured target lists and inject `--target <triple>`.
+
+The same table may override built-in defaults:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.build]
+targets = false
+```
+
+This means: `cargo fc build` uses the single effective target unless the user
+passes an explicit Cargo `--target`, while other commands can still use the
+workspace/package target lists.
 
 This table must not change generated feature-selection behavior or diagnostics
 behavior in v1.
@@ -687,35 +704,36 @@ pub struct CommandTargetCapability {
 }
 ```
 
-A plain `bool` (default `false`) is enough in v1. Only unknown aliases consult
-this table and the default is deny, so "omitted" and "`targets = false`" are
-indistinguishable in practice; `Option<bool>` would add a distinction with no
-observable effect. If a future version grows more capabilities with non-deny
-defaults, switch the relevant fields to `Option<bool>` then.
+A plain `bool` (default `false`) is enough in v1. Unknown aliases default to
+deny, while built-ins default according to the registry. A present
+`targets = false` entry is an explicit opt-out and should suppress the unknown
+command "how to opt in" warning for that token.
 
 For unknown aliases the default is therefore `targets = false` (denied).
-Built-in commands get their capability from code and ignore this table.
+Built-in commands get their default from code, and this table may override it.
 
 Keep this table in workspace metadata only. Command aliases are an invocation
 property, not a package property. Per-package command target capability would
 make a single `cargo fc lint` invocation ambiguous when selected packages
 disagree.
 
-Built-in target capability should be provided by code. Workspace config is for
-aliases/custom commands only. Do not require users to configure standard Cargo
-subcommands such as `check`, `clippy`, or `build`, and do not let workspace
-config silently override built-in command behavior in the first implementation.
+Built-in target capability should be provided by code. Do not require users to
+configure standard Cargo subcommands such as `check`, `clippy`, or `build`, but
+do allow workspace config to override those defaults intentionally.
 
 The `targets` capability name describes cargo-fc behavior: cargo-fc may expand
 configured target lists and add `--target <triple>`.
 
-When configured targets exist and the selected command lacks target capability,
-cargo-fc should skip the target expansion and warn. For example:
+When configured targets exist and the selected command lacks target capability
+by default, cargo-fc should skip the target expansion and warn. For example:
 
 ```text
 warning: not passing --target to cargo alias `lint` because it has no configured targets capability
 hint: add [workspace.metadata.cargo-fc.subcommands.lint] targets = true if this alias accepts --target
 ```
+
+When the command is explicitly configured with `targets = false`, cargo-fc
+should skip target expansion without warning.
 
 ### Package Config
 
@@ -1586,8 +1604,9 @@ Closed decisions:
 - Target plans are deduplicated by target triple, while package-target
   assignments carry `TargetSource` for per-package injection decisions.
 - Workspace target overrides may patch only `exclude_packages`.
-- Command target capability is workspace-level policy for aliases. Built-in
-  `clippy` is known; literal `lint` is unknown unless configured.
+- Command target capability is workspace-level policy. Built-in `clippy` is
+  known by default; literal `lint` is unknown unless configured; any command
+  token may be explicitly overridden with `targets = true/false`.
 - Unknown aliases retain legacy best-effort feature selection, but configured
   targets require explicit target capability.
 - Existing `--diagnostics-only`/`--dedupe` eligibility is preserved in v1.

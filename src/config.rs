@@ -197,11 +197,11 @@ pub struct WorkspaceConfig {
     /// packages participate for one already-selected target.
     #[serde(default)]
     pub target: BTreeMap<String, WorkspaceTargetOverride>,
-    /// Per-subcommand target-capability opt-in for aliases and custom commands.
+    /// Per-subcommand configured-target policy.
     ///
-    /// Built-in Cargo subcommands get their target capability from code and
-    /// ignore this table. Unknown aliases (e.g. `lint`) are denied configured
-    /// targets unless listed here with `targets = true`.
+    /// Built-in Cargo subcommands default to their code-provided capability.
+    /// Unknown aliases (e.g. `lint`) default to denied. Entries in this table
+    /// override either default with `targets = true` or `targets = false`.
     #[serde(default)]
     pub subcommands: BTreeMap<String, CommandTargetCapability>,
 }
@@ -217,11 +217,11 @@ pub struct WorkspaceTargetOverride {
     pub exclude_packages: Option<StringSetPatch>,
 }
 
-/// Workspace-level target-capability opt-in for a single command token.
+/// Workspace-level configured-target policy for a single command token.
 ///
-/// A plain `bool` (default `false`) is enough in v1: only unknown aliases
-/// consult this table and the default is deny, so "omitted" and
-/// `targets = false` are indistinguishable in practice.
+/// A plain `bool` is enough in v1. Unknown aliases default to deny, while
+/// built-ins default according to cargo-fc's registry. A present
+/// `targets = false` entry is therefore an explicit command-level opt-out.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct CommandTargetCapability {
     /// When `true`, cargo-fc may expand configured target lists and inject

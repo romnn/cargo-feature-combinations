@@ -339,7 +339,7 @@ When the selected command supports targets, each package's targets are resolved 
 Configured targets are applied only to commands that accept Cargo's `--target`
 flag. Built-in subcommands cargo-fc recognizes — `check`, `clippy`, `build`,
 `doc`, `test`, `run` (and `cargo fc matrix`) — get this capability
-automatically.
+automatically by default.
 
 Unknown aliases and custom subcommands do **not** receive configured targets
 unless you declare it:
@@ -349,8 +349,18 @@ unless you declare it:
 targets = true
 ```
 
-If configured targets exist but the selected command lacks this capability,
-cargo-fc warns once and falls back to the single effective target.
+The same table can override built-in defaults. For example, lint every
+configured target but keep `cargo fc build` on the single effective target:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.build]
+targets = false
+```
+
+For built-in short aliases, the long command's policy also applies unless the
+short alias has its own entry. If configured targets exist but the selected
+command lacks this capability by default, cargo-fc warns once and falls back to
+the single effective target. An explicit `targets = false` opt-out is quiet.
 
 > [!WARNING]
 > The `targets` list is shared by all target-capable commands. It is motivated
