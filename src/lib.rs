@@ -322,6 +322,12 @@ fn resolve_capability_and_warn(
     ws_config: &config::WorkspaceConfig,
     selected: &[target_plan::SelectedPackage<'_>],
 ) -> bool {
+    // `--no-targets` deliberately ignores configured target lists and falls back
+    // to Cargo's default single target, so deny without warning.
+    if options.no_targets {
+        return false;
+    }
+
     let is_matrix = matches!(options.command, Some(Command::FeatureMatrix { .. }));
     let (capability_allowed, policy) = if is_matrix {
         (true, None)
@@ -466,6 +472,37 @@ mod test {
             resolve_execution_mode(&options, &["check"], &plan_set),
             runner::TargetExecutionMode::SerialPerTarget
         );
+    }
+
+    #[test]
+    fn no_targets_flag_denies_capability() {
+        let options = Options {
+            no_targets: true,
+            ..Options::default()
+        };
+        let ws = config::WorkspaceConfig::default();
+        // Even a target-capable built-in command is denied configured targets
+        // when `--no-targets` is set.
+        assert!(!resolve_capability_and_warn(&options, &["check"], &ws, &[]));
+    }
+
+    #[test]
+    fn builtin_command_allows_capability_without_no_targets() {
+        let options = Options::default();
+        let ws = config::WorkspaceConfig::default();
+        assert!(resolve_capability_and_warn(&options, &["check"], &ws, &[]));
+    }
+
+    #[test]
+    fn no_targets_flag_denies_capability_for_matrix() {
+        let options = Options {
+            no_targets: true,
+            command: Some(Command::FeatureMatrix { pretty: false }),
+            ..Options::default()
+        };
+        let ws = config::WorkspaceConfig::default();
+        let empty: [&str; 0] = [];
+        assert!(!resolve_capability_and_warn(&options, &empty, &ws, &[]));
     }
 
     #[test]

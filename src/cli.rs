@@ -82,6 +82,13 @@ pub struct Options {
     /// `(package, combo)` carries every target sharing that combo as repeated
     /// `--target` flags. The default (flag absent) is serial per-target.
     pub aggregate_targets: bool,
+    /// Whether to ignore configured target lists for this invocation.
+    ///
+    /// Set by `--no-targets`. Temporarily disables running for all configured
+    /// targets and falls back to Cargo's default single effective target
+    /// (`--target`, then `CARGO_BUILD_TARGET`, then host). An alternative to
+    /// passing an explicit `--target <triple>`.
+    pub no_targets: bool,
 }
 
 /// Helper trait to provide simple argument parsing over `Vec<String>`.
@@ -384,6 +391,10 @@ OPTIONS:
                             instead of one invocation per target. Faster on
                             many cores; reports results per target group. Falls
                             back to serial for `run` and pruned summaries.
+    --no-targets            Ignore configured target lists for this invocation
+                            and use Cargo's default single target (--target,
+                            then CARGO_BUILD_TARGET, then host). An alternative
+                            to passing an explicit --target <triple>.
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -622,6 +633,7 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     drain_flag("--no-prune-implied", &mut options.no_prune_implied);
     drain_flag("--show-pruned", &mut options.show_pruned);
     drain_flag("--aggregate-targets", &mut options.aggregate_targets);
+    drain_flag("--no-targets", &mut options.no_targets);
 
     // --dedupe implies --diagnostics-only
     for flag in ["--dedupe", "--dedup"] {

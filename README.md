@@ -120,6 +120,8 @@ OPTIONS:
     --aggregate-targets     Batch a combination's configured targets into one
                             Cargo invocation (faster on many cores; group-level
                             attribution). See "Configured targets" below.
+    --no-targets            Ignore configured target lists and use Cargo's
+                            default single target. See "Configured targets".
 ```
 
 ### Configuration
@@ -329,7 +331,8 @@ When the selected command supports targets, each package's targets are resolved 
 > not be silently collapsed by a developer's ambient environment. This differs
 > from Cargo's own `[build].target` precedence. To run a single target for one
 > invocation, pass an explicit `--target <triple>`, which overrides all
-> configured lists.
+> configured lists, or pass `--no-targets` to ignore the configured lists and
+> fall back to Cargo's default single target.
 
 #### Which commands receive configured targets
 
@@ -354,8 +357,10 @@ cargo-fc warns once and falls back to the single effective target.
 > by `check`/`clippy` (which only need the target's `rustc`), but it also
 > applies to `build` (needs a linker), and to `test`/`run` (which execute and
 > therefore usually fail for foreign targets). Narrow a single run with an
-> explicit `--target <triple>` when needed. Missing targets surface Cargo's own
-> `rustup target add <triple>` hint; cargo-fc does not install targets for you.
+> explicit `--target <triple>` when needed, or pass `--no-targets` to ignore
+> the configured lists entirely and use Cargo's default single target. Missing
+> targets surface Cargo's own `rustup target add <triple>` hint; cargo-fc does
+> not install targets for you.
 
 #### Per-target workspace package selection
 
