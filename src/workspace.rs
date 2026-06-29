@@ -10,7 +10,13 @@ use color_eyre::eyre;
 use std::collections::HashSet;
 
 /// Workspace-only metadata keys read solely from the workspace root.
-const WORKSPACE_ONLY_KEYS: &[&str] = &["exclude_packages", "targets", "target", "subcommands"];
+const WORKSPACE_ONLY_KEYS: &[&str] = &[
+    "exclude_packages",
+    "targets",
+    "install_missing_targets",
+    "target",
+    "subcommands",
+];
 
 /// Abstraction over a Cargo workspace used by this crate.
 pub trait Workspace {
@@ -163,6 +169,7 @@ fn json_has_values(value: Option<&serde_json::Value>) -> bool {
     match value {
         Some(serde_json::Value::Array(values)) => !values.is_empty(),
         Some(serde_json::Value::Object(map)) => !map.is_empty(),
+        Some(serde_json::Value::Bool(value)) => *value,
         Some(serde_json::Value::Null) | None => false,
         Some(_) => true,
     }
@@ -170,7 +177,7 @@ fn json_has_values(value: Option<&serde_json::Value>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use super::Workspace;
+    use super::{Workspace, json_has_values};
     use color_eyre::eyre;
     use serde_json::json;
 
@@ -284,6 +291,33 @@ mod test {
             "expected no packages after exclusion via feature-combinations alias"
         );
         Ok(())
+    }
+
+    #[test]
+    fn workspace_config_reads_install_missing_targets() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "cargo-fc": {
+                    "install_missing_targets": true
+                }
+            }))
+            .build()?;
+
+        let config = metadata.workspace_config()?;
+
+        assert!(config.install_missing_targets);
+        Ok(())
+    }
+
+    #[test]
+    fn json_has_values_treats_false_as_default_empty_value() {
+        assert!(!json_has_values(Some(&json!(false))));
+        assert!(json_has_values(Some(&json!(true))));
     }
 
     fn workspace_builder() -> cargo_metadata::MetadataBuilder {

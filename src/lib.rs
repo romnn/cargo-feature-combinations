@@ -20,6 +20,8 @@ pub mod package;
 pub mod runner;
 /// Target triple handling and host/flag based detection.
 pub mod target;
+/// Optional Rust target installation.
+mod target_install;
 /// Target selection and target-plan construction.
 pub mod target_plan;
 /// IO utilities.
@@ -90,6 +92,7 @@ macro_rules! print_note {
         let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
     }};
 }
+pub(crate) use print_note;
 
 /// Whether to warn when the cargo subcommand is not one of the known commands
 /// (`build`, `test`, `run`, `check`, `doc`, `clippy`). Disabled by default
@@ -239,6 +242,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 options.packages_only,
                 &mut evaluator,
             )?;
+            if options.install_missing_targets {
+                print_note!(
+                    "--install-missing-targets has no effect for matrix output; matrix only prints planned targets"
+                );
+            }
             if options.aggregate_targets {
                 print_note!(
                     "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
@@ -261,6 +269,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             }
             let plan_set =
                 runner::build_execution_plans(&target_plans, &options, false, &mut evaluator)?;
+            maybe_install_missing_targets(&options, &ws_config, &plan_set, &env, &cargo_args)?;
             let mode = resolve_execution_mode(&options, &cargo_args, &plan_set);
             runner::run_execution_plans(&plan_set, cargo_args, &options, mode)
         }
@@ -318,6 +327,21 @@ fn select_candidate_packages<'a>(
     }
 
     Ok(packages)
+}
+
+fn maybe_install_missing_targets(
+    options: &Options,
+    ws_config: &config::WorkspaceConfig,
+    plan_set: &runner::ExecutionPlanSet<'_>,
+    env: &impl target::TargetEnvironment,
+    cargo_args: &[&str],
+) -> eyre::Result<()> {
+    if options.install_missing_targets || ws_config.install_missing_targets {
+        let installer =
+            target_install::RustupTargetInstaller::new(cli::rustup_toolchain(cargo_args));
+        target_install::ensure_missing_targets_installed(plan_set, env, &installer)?;
+    }
+    Ok(())
 }
 
 /// Resolve the selected command's target capability and warn (once) if

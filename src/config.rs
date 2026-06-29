@@ -191,6 +191,13 @@ pub struct WorkspaceConfig {
     /// `targets` override (do not merge with) this list.
     #[serde(default, rename = "targets")]
     pub workspace_targets: Vec<String>,
+    /// Whether to install missing Rust target components before execution.
+    ///
+    /// This is workspace-wide because it mutates the active Rust toolchain for
+    /// the whole invocation. `cargo fc matrix` ignores it because matrix output
+    /// is introspection-only and does not run Cargo.
+    #[serde(default)]
+    pub install_missing_targets: bool,
     /// Target-specific workspace overrides keyed by Cargo-style cfg expressions.
     ///
     /// These may patch `exclude_packages` only; they select which workspace

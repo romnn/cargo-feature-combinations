@@ -89,6 +89,12 @@ pub struct Options {
     /// (`--target`, then `CARGO_BUILD_TARGET`, then host). An alternative to
     /// passing an explicit `--target <triple>`.
     pub no_targets: bool,
+    /// Whether to install missing Rust target components before execution.
+    ///
+    /// Set by `--install-missing-targets`. cargo-fc deduplicates the planned
+    /// target triples, skips the host target, and invokes `rustup target add`
+    /// once for targets that are not installed yet.
+    pub install_missing_targets: bool,
 }
 
 /// Helper trait to provide simple argument parsing over `Vec<String>`.
@@ -242,6 +248,19 @@ pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String>
     None
 }
 
+/// Extract a rustup toolchain override from forwarded Cargo args.
+///
+/// Cargo accepts `+toolchain` before the subcommand. When cargo-fc installs
+/// missing target components, rustup must receive the same override or it may
+/// install targets into the default toolchain instead.
+pub(crate) fn rustup_toolchain(args: &[impl AsRef<str>]) -> Option<String> {
+    let first = args.first()?.as_ref();
+    first
+        .strip_prefix('+')
+        .filter(|toolchain| !toolchain.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 /// Canonical long command name for built-in cargo subcommands cargo-fc knows
 /// accept Cargo's `--target` flag.
 ///
@@ -359,6 +378,10 @@ OPTIONS:
                             and use Cargo's default single target (--target,
                             then CARGO_BUILD_TARGET, then host). An alternative
                             to passing an explicit --target <triple>.
+    --install-missing-targets
+                            Install missing Rust target components with rustup
+                            before running Cargo. Explicit opt-in because this
+                            may mutate the toolchain and use the network.
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -598,6 +621,10 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     drain_flag("--show-pruned", &mut options.show_pruned);
     drain_flag("--aggregate-targets", &mut options.aggregate_targets);
     drain_flag("--no-targets", &mut options.no_targets);
+    drain_flag(
+        "--install-missing-targets",
+        &mut options.install_missing_targets,
+    );
 
     // --dedupe implies --diagnostics-only
     for flag in ["--dedupe", "--dedup"] {
@@ -633,6 +660,7 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
 mod test {
     use super::{
         CargoSubcommand, cargo_subcommand, cargo_subcommand_token, configured_target_policy,
+        rustup_toolchain,
     };
     use crate::config::CommandTargetCapability;
     use similar_asserts::assert_eq as sim_assert_eq;
@@ -734,6 +762,24 @@ mod test {
         sim_assert_eq!(cargo_subcommand_token(&empty), None);
         sim_assert_eq!(cargo_subcommand_token(&["--mystery-flag"]), None);
         sim_assert_eq!(cargo_subcommand_token(&["--"]), None);
+    }
+
+    #[test]
+    fn rustup_toolchain_detects_cargo_toolchain_override() {
+        sim_assert_eq!(
+            rustup_toolchain(&["+nightly", "--frozen", "check"]),
+            Some("nightly".to_string())
+        );
+    }
+
+    #[test]
+    fn rustup_toolchain_ignores_args_after_double_dash() {
+        sim_assert_eq!(rustup_toolchain(&["run", "--", "+nightly"]), None);
+    }
+
+    #[test]
+    fn rustup_toolchain_ignores_plus_values_after_leading_position() {
+        sim_assert_eq!(rustup_toolchain(&["check", "--target-dir", "+out"]), None);
     }
 
     #[test]

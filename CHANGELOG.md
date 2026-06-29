@@ -40,6 +40,9 @@
 - Added per-subcommand target capability overrides via
   `[workspace.metadata.cargo-fc.subcommands.<name>] targets = true|false`.
 - Added `--no-targets` to ignore configured target lists for one invocation.
+- Added explicit opt-in missing target installation with
+  `--install-missing-targets` and
+  `[workspace.metadata.cargo-fc] install_missing_targets = true`.
 - Added `--aggregate-targets` to batch compatible configured targets for the
   same package and feature combination into one Cargo invocation.
 - Added per-target execution planning so `cargo fc check`, `cargo fc clippy`,

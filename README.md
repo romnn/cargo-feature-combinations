@@ -122,6 +122,10 @@ OPTIONS:
                             attribution). See "Configured targets" below.
     --no-targets            Ignore configured target lists and use Cargo's
                             default single target. See "Configured targets".
+    --install-missing-targets
+                            Install missing Rust target components with rustup
+                            before running Cargo. Explicit opt-in because this
+                            may mutate the toolchain and use the network.
 ```
 
 ### Configuration
@@ -373,9 +377,24 @@ the single effective target. An explicit `targets = false` opt-out is quiet.
 > applies to `build` (needs a linker), and to `test`/`run` (which execute and
 > therefore usually fail for foreign targets). Narrow a single run with an
 > explicit `--target <triple>` when needed, or pass `--no-targets` to ignore
-> the configured lists entirely and use Cargo's default single target. Missing
-> targets surface Cargo's own `rustup target add <triple>` hint; cargo-fc does
-> not install targets for you.
+> the configured lists entirely and use Cargo's default single target.
+
+#### Installing missing Rust targets
+
+By default cargo-fc does not mutate the Rust toolchain. To install missing
+configured target components via rustup before running a command, opt in per
+invocation:
+
+```bash
+cargo fc check --install-missing-targets
+```
+
+Or opt in for the workspace:
+
+```toml
+[workspace.metadata.cargo-fc]
+install_missing_targets = true
+```
 
 #### Per-target workspace package selection
 

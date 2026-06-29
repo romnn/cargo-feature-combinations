@@ -109,6 +109,9 @@ feature combination for you (no GitHub Actions matrix required):
 - run: cargo fc clippy   # or: cargo fc check
 ```
 
+If the runner does not already have the configured Rust targets installed, add
+`--install-missing-targets` or preinstall them in your toolchain setup step. The
+preinstall route is usually more reproducible and cache-friendly for CI.
+
 Add `--aggregate-targets` to batch each combination's targets into one Cargo
 invocation for extra throughput on many-core runners.
-

@@ -352,13 +352,16 @@ consumers to migrate immediately.
 - Preserve live output by keeping cargo-fc single-threaded in both modes.
 - Add an opt-in `--aggregate-targets` flag that batches a combination's targets
   into one Cargo invocation (`--target A --target B ...`) for throughput.
+- Add explicit opt-in missing-target installation via
+  `--install-missing-targets` and workspace `install_missing_targets = true`.
 - Add a small command target policy so aliases can explicitly opt in to
   configured targets and cargo-fc-injected `--target` flags.
 
 ## Non-Goals
 
-- Do not install Rust targets automatically. If a target is missing, fail with a
-  clear `rustup target add <triple>` hint.
+- Do not install Rust targets implicitly. If a target is missing and installation
+  is not explicitly enabled, fail with Cargo/rustc's
+  `rustup target add <triple>` hint.
 - Do not guarantee that cross-target `build`, `test`, or `run` succeeds. These
   commands may require linkers, runners, or target OS support. cargo-fc can pass
   supported flags; the toolchain prerequisites remain the user's
@@ -583,6 +586,8 @@ pub struct WorkspaceConfig {
     pub exclude_packages: HashSet<String>,
     #[serde(default, rename = "targets")]
     pub workspace_targets: Vec<String>,
+    #[serde(default)]
+    pub install_missing_targets: bool,
     #[serde(default, rename = "target")]
     pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
     #[serde(default, rename = "subcommands")]
@@ -598,6 +603,7 @@ pub struct WorkspaceTargetOverride {
 Suggested defaults:
 
 - `targets = []`
+- `install_missing_targets = false`
 - `target = {}`
 - `subcommands = {}`
 
@@ -606,8 +612,8 @@ back to the existing effective target detection path.
 
 Workspace-only keys should be read only from the workspace root, matching the
 current `exclude_packages` behavior. This includes `targets`, workspace
-`target.'cfg(...)'` overrides, and `subcommands`. If a non-root package appears
-to contain one of these
+`install_missing_targets`, `target.'cfg(...)'` overrides, and `subcommands`. If
+a non-root package appears to contain one of these
 `[workspace.metadata.cargo-fc]` keys, warn that workspace metadata is only read
 from the workspace root.
 
@@ -770,11 +776,17 @@ harmlessly or clear it from the resolved config. The critical rule is that
 
 ### CLI Flags
 
-Add exactly one new cargo-fc flag in v1: `--aggregate-targets`. It is a boolean
-flag, drained before forwarding args to Cargo (like `--summary-only` and the
-other cargo-fc flags), and selects aggregate execution mode (one Cargo
-invocation per `(package, combo)` carrying all that combo's targets). The default
-(flag absent) is serial per-target. There are no concurrency flags.
+Add two target-related cargo-fc flags in v1:
+
+- `--aggregate-targets`: selects aggregate execution mode (one Cargo invocation
+  per `(package, combo)` carrying all that combo's targets). The default (flag
+  absent) is serial per-target.
+- `--install-missing-targets`: before execution, use rustup to install missing
+  target components for the final planned target list. The default (flag absent)
+  is non-mutating.
+
+Both flags are drained before forwarding args to Cargo (like `--summary-only`
+and the other cargo-fc flags). There are no concurrency flags.
 
 The existing forwarded Cargo `--target` flag becomes more important because it
 overrides configured target lists. Parse it only from forwarded Cargo args
@@ -940,13 +952,12 @@ Keep validation intentionally small:
 Do not try to validate triples against rustc target lists during config parsing.
 The authoritative check is the existing `rustc --print cfg --target <triple>`
 path and the eventual Cargo invocation. If a target is not installed, surface a
-clear hint.
+clear hint unless installation was explicitly enabled.
 
 ### Target Availability Errors
 
-Do not add a separate "validate all installed targets" preflight in the first
-implementation. It would duplicate rustc/Cargo behavior and add another slow
-toolchain call.
+By default, do not add a separate "validate all installed targets" preflight. It
+would duplicate rustc/Cargo behavior and add another toolchain call.
 
 Instead, classify failures at the existing adapter boundaries:
 
@@ -963,6 +974,34 @@ hint: run `rustup target add <triple>`
 
 Keep the original error as context. Do not hide non-target toolchain failures
 behind the rustup hint.
+
+### Optional Target Installation
+
+When `--install-missing-targets` or workspace
+`install_missing_targets = true` is enabled for a command that executes Cargo:
+
+- collect target triples from the final `ExecutionPlanSet`, after feature
+  generation/pruning has succeeded,
+- skip package-target plans with no feature combinations to execute,
+- group installs by each package manifest directory so rustup sees the same
+  directory-local toolchain override that Cargo will see,
+- deduplicate target triples per install context in plan order,
+- skip the host triple,
+- run `rustup target list --installed`,
+- run one `rustup target add ...` command for the missing targets in that
+  context,
+- if a batch install fails, retry the missing targets individually so one
+  un-installable target does not block valid targets,
+- warn and continue on host detection and rustup list/install failures; Cargo
+  still runs and owns the final per-target result,
+- honor a forwarded Cargo `+toolchain` by passing the matching `--toolchain`
+  option to rustup,
+- print `note: attempting to install missing Rust targets: ...` before
+  installation.
+
+Do not install targets for `cargo fc matrix`; matrix output is introspection-only
+and should not mutate the user's toolchain. If the user explicitly passes
+`--install-missing-targets` to `matrix`, emit a one-line no-op note.
 
 ## Injecting Cargo Targets
 
@@ -1510,7 +1549,8 @@ This milestone delivers the core serial feature.
   when combining aggregate mode with diagnostics-only output.
 - Document that the workspace `targets` list also applies to `test`/`run`, that
   foreign-target `test`/`run` typically fail, and that `--target` narrows a run.
-- Document rustup target prerequisites.
+- Document rustup target prerequisites and the explicit
+  `--install-missing-targets` / `install_missing_targets = true` opt-in.
 - Document that configured target lists intentionally take precedence over
   `CARGO_BUILD_TARGET`; use explicit `--target` to select one target.
 - Document the `cargo fc matrix` schema change: `target` is top-level and user
@@ -1577,7 +1617,10 @@ processes was measured and rejected, so no parallelism work remains.
   - package `targets = []` opts out of workspace targets,
   - explicit `--target` ignores configured target lists,
   - target override sections still apply correctly,
-  - configured target missing from rustup produces a clear failure,
+  - configured target missing from rustup produces a clear failure by default,
+  - `--install-missing-targets` deduplicates final planned targets, skips host,
+    and installs only missing targets,
+  - `--install-missing-targets` is a no-op for matrix output,
   - `--diagnostics-only`/`--dedupe` behavior for `test`, `run`, and aliases is
     not regressed,
   - matrix output for a workspace with no configured targets still includes
@@ -1595,13 +1638,14 @@ processes was measured and rejected, so no parallelism work remains.
 
 The v1 feature is complete when configured targets, package-level targets,
 target-specific workspace exclusions, target capability, the serial per-target
-and aggregate (`--aggregate-targets`) execution modes, matrix output, tests, and
-final README documentation all land together.
+and aggregate (`--aggregate-targets`) execution modes, explicit missing-target
+installation, matrix output, tests, and final README documentation all land
+together.
 
 Closed decisions:
 
 - cargo-fc is single-threaded and never spawns concurrent Cargo processes. The
-  only execution flag is `--aggregate-targets` (default off); there is no
+  only target batching flag is `--aggregate-targets` (default off); there is no
   `--max-concurrent-targets` flag, no `max_concurrent_targets` config key, and no
   worker/thread pool.
 - Target plans are deduplicated by target triple, while package-target
