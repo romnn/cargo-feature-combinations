@@ -232,12 +232,16 @@ pub fn build_target_plans<'a>(
     evaluator: &mut impl CfgEvaluator,
 ) -> eyre::Result<TargetPlans<'a>> {
     let mut fallback_cache: Option<EffectiveTarget> = None;
+    let workspace_targets = if cli_target.is_none() && capability_allowed {
+        normalize_targets(&workspace_config.workspace_targets)?
+    } else {
+        Vec::new()
+    };
 
     let contains_configured_assignments = if cli_target.is_some() {
         true
     } else if capability_allowed {
-        !workspace_config.workspace_targets.is_empty()
-            || selected.iter().any(|s| s.config.package_targets.is_some())
+        !workspace_targets.is_empty() || selected.iter().any(|s| s.config.package_targets.is_some())
     } else {
         false
     };
@@ -264,7 +268,6 @@ pub fn build_target_plans<'a>(
             })
             .collect()
     } else if capability_allowed {
-        let workspace_targets = normalize_targets(&workspace_config.workspace_targets)?;
         let mut out = Vec::with_capacity(selected.len());
         for s in selected {
             let targets = package_target_list(s, &workspace_targets, env, &mut fallback_cache)?;
@@ -295,11 +298,9 @@ pub fn build_target_plans<'a>(
     let mut order: Vec<TargetTriple> = Vec::new();
     let mut seen: HashSet<TargetTriple> = HashSet::new();
 
-    if cli_target.is_none() && capability_allowed {
-        for triple in normalize_targets(&workspace_config.workspace_targets)? {
-            if seen.insert(triple.clone()) {
-                order.push(triple);
-            }
+    for triple in workspace_targets {
+        if seen.insert(triple.clone()) {
+            order.push(triple);
         }
     }
     for pt in &package_targets {

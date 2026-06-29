@@ -529,11 +529,44 @@ pub struct MatrixOptions {
     pub no_prune_implied: bool,
 }
 
+fn load_configs_for_packages(packages: &[&cargo_metadata::Package]) -> eyre::Result<Vec<Config>> {
+    packages
+        .iter()
+        .map(|package| package.config())
+        .collect::<eyre::Result<Vec<_>>>()
+}
+
+fn single_target_plans<'a>(
+    packages: &[&'a cargo_metadata::Package],
+    configs: &'a [Config],
+    target: &TargetTriple,
+) -> TargetPlans<'a> {
+    let effective_target = EffectiveTarget {
+        triple: target.clone(),
+        source: TargetSource::Cli,
+    };
+
+    TargetPlans {
+        plans: vec![TargetPlan {
+            target: target.clone(),
+            packages: packages
+                .iter()
+                .zip(configs)
+                .map(|(package, config)| PlannedPackage {
+                    package,
+                    config,
+                    target: effective_target.clone(),
+                })
+                .collect(),
+        }],
+        contains_configured_assignments: false,
+    }
+}
+
 /// Print a JSON feature matrix for the given packages to stdout.
 ///
-/// The matrix is a JSON array of objects produced from each package's
-/// configuration and the feature combinations returned by
-/// [`Package::feature_matrix`].
+/// The matrix is a JSON array of objects produced from each package's resolved
+/// target-specific configuration and feature combinations.
 ///
 /// # Errors
 ///
@@ -545,56 +578,19 @@ pub fn print_feature_matrix_for_target(
     evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
     options: &MatrixOptions,
 ) -> eyre::Result<ExitCode> {
-    let per_package_features = packages
-        .iter()
-        .map(|pkg| {
-            let base_config = pkg.config()?;
-            let config = crate::config::resolve::resolve_config(&base_config, target, evaluator)?;
-            let features = if options.packages_only {
-                vec!["default".to_string()]
-            } else {
-                let combos = pkg.feature_combinations(&config)?;
-                let combos = crate::implication::maybe_prune(
-                    combos,
-                    &pkg.features,
-                    &config,
-                    options.no_prune_implied,
-                );
-                combos
-                    .keep
-                    .into_iter()
-                    .map(|combo| combo.into_iter().join(","))
-                    .collect()
-            };
-            Ok::<_, eyre::Report>((pkg.name.clone(), config, features))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let matrix: Vec<serde_json::Value> = per_package_features
-        .into_iter()
-        .flat_map(|(name, config, features)| {
-            let target = target.as_str().to_string();
-            features.into_iter().map(move |ft| {
-                use serde_json_merge::{iter::dfs::Dfs, merge::Merge};
-
-                let mut out = serde_json::json!(config.matrix);
-                out.merge::<Dfs>(&serde_json::json!({
-                    "name": name,
-                    "target": target,
-                    "features": ft,
-                }));
-                out
-            })
-        })
-        .collect();
-
-    let matrix = if options.pretty {
-        serde_json::to_string_pretty(&matrix)
-    } else {
-        serde_json::to_string(&matrix)
-    }?;
-    println!("{matrix}");
-    Ok(None)
+    let configs = load_configs_for_packages(packages)?;
+    let target_plans = single_target_plans(packages, &configs, target);
+    let build_options = Options {
+        no_prune_implied: options.no_prune_implied,
+        ..Options::default()
+    };
+    let plan_set = build_execution_plans(
+        &target_plans,
+        &build_options,
+        options.packages_only,
+        evaluator,
+    )?;
+    print_matrix_for_execution_plans(&plan_set, options)
 }
 
 /// A resolved, owned execution plan for one concrete target.
@@ -1023,30 +1019,8 @@ pub fn run_cargo_command_for_target(
     target: &TargetTriple,
     evaluator: &mut impl CfgEvaluator,
 ) -> eyre::Result<ExitCode> {
-    let configs: Vec<Config> = packages
-        .iter()
-        .map(|package| package.config())
-        .collect::<eyre::Result<Vec<_>>>()?;
-
-    let target_plans = TargetPlans {
-        plans: vec![TargetPlan {
-            target: target.clone(),
-            packages: packages
-                .iter()
-                .zip(&configs)
-                .map(|(package, config)| PlannedPackage {
-                    package,
-                    config,
-                    target: EffectiveTarget {
-                        triple: target.clone(),
-                        source: TargetSource::Cli,
-                    },
-                })
-                .collect(),
-        }],
-        contains_configured_assignments: false,
-    };
-
+    let configs = load_configs_for_packages(packages)?;
+    let target_plans = single_target_plans(packages, &configs, target);
     let plan_set = build_execution_plans(&target_plans, options, false, evaluator)?;
     run_execution_plans(
         &plan_set,
@@ -1198,18 +1172,14 @@ fn execute_serial(
                     seen_diagnostics,
                     stdout,
                 )?;
-                let should_stop = ctx.options.fail_fast && !result.summary.pedantic_success;
-                let exit_code = result.summary.exit_code;
-                summary.push(result.summary);
-                if should_stop {
-                    if ctx.options.summary_only {
-                        io::copy(&mut io::Cursor::new(result.colored_output), stdout)?;
-                        stdout.flush().ok();
-                    }
-                    let code =
-                        print_summary(&summary, plan_set.show_pruned, stdout, start.elapsed())
-                            .or(exit_code)
-                            .unwrap_or(1);
+                if let Some(code) = record_result_and_maybe_stop(
+                    &mut summary,
+                    result,
+                    plan_set.show_pruned,
+                    ctx,
+                    stdout,
+                    start,
+                )? {
                     return Ok(Some(code));
                 }
             }
@@ -1277,17 +1247,14 @@ fn execute_aggregate(
             seen_diagnostics,
             stdout,
         )?;
-        let should_stop = ctx.options.fail_fast && !result.summary.pedantic_success;
-        let exit_code = result.summary.exit_code;
-        summary.push(result.summary);
-        if should_stop {
-            if ctx.options.summary_only {
-                io::copy(&mut io::Cursor::new(result.colored_output), stdout)?;
-                stdout.flush().ok();
-            }
-            let code = print_summary(&summary, plan_set.show_pruned, stdout, start.elapsed())
-                .or(exit_code)
-                .unwrap_or(1);
+        if let Some(code) = record_result_and_maybe_stop(
+            &mut summary,
+            result,
+            plan_set.show_pruned,
+            ctx,
+            stdout,
+            start,
+        )? {
             return Ok(Some(code));
         }
     }
@@ -1297,6 +1264,37 @@ fn execute_aggregate(
         plan_set.show_pruned,
         stdout,
         start.elapsed(),
+    ))
+}
+
+fn record_result_and_maybe_stop(
+    summary: &mut Vec<Summary>,
+    result: CombinationResult,
+    show_pruned: bool,
+    ctx: &RunContext<'_>,
+    stdout: &mut StandardStream,
+    start: Instant,
+) -> eyre::Result<ExitCode> {
+    let CombinationResult {
+        summary: result_summary,
+        colored_output,
+    } = result;
+    let should_stop = ctx.options.fail_fast && !result_summary.pedantic_success;
+    let exit_code = result_summary.exit_code;
+    summary.push(result_summary);
+
+    if !should_stop {
+        return Ok(None);
+    }
+
+    if ctx.options.summary_only {
+        io::copy(&mut io::Cursor::new(colored_output), stdout)?;
+        stdout.flush().ok();
+    }
+    Ok(Some(
+        print_summary(summary, show_pruned, stdout, start.elapsed())
+            .or(exit_code)
+            .unwrap_or(1),
     ))
 }
 
