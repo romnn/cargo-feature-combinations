@@ -185,13 +185,13 @@ impl CfgEvaluator for RustcCfgEvaluator {
 #[cfg(test)]
 mod test {
     use super::{CfgEvaluator, RustcCfgEvaluator};
-    use crate::target::TargetDetector;
+    use crate::target::host_triple;
     use color_eyre::eyre;
 
     #[test]
     fn matches_simple_true_for_target_arch() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::default();
-        let host = crate::target::RustcTargetDetector::default().detect_target(&Vec::new())?;
+        let host = host_triple()?;
 
         // Host must match its own arch.
         let cfg_set = std::process::Command::new("rustc")
@@ -217,7 +217,7 @@ mod test {
     #[test]
     fn rejects_feature_predicate() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::default();
-        let host = crate::target::RustcTargetDetector::default().detect_target(&Vec::new())?;
+        let host = host_triple()?;
 
         let err = match eval.matches(r#"cfg(feature = "foo")"#, &host) {
             Ok(v) => eyre::bail!("expected cfg(feature=...) to be rejected, got {v}"),

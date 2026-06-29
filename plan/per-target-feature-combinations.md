@@ -253,8 +253,9 @@ pub struct SelectedPackage<'a> {
 
 The exact trait names can differ. The point is that target planning should be
 unit-testable without invoking real `rustc` or spawning Cargo. The production
-adapter can delegate to the existing `RustcTargetDetector`,
-`RustcCfgEvaluator`, and one package config loading pass.
+adapter can read `CARGO_BUILD_TARGET`, delegate host detection to `rustc -vV`,
+use `RustcCfgEvaluator` for cfg matching, and share one package config loading
+pass.
 
 Planning must also receive a `CfgEvaluator`. Target-specific workspace
 `exclude_packages` uses `cfg(...)` keys, so planning needs the same target cfg
