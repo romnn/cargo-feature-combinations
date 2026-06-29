@@ -1,13 +1,16 @@
 //! Workspace-level configuration and package discovery.
 
 use crate::config::{Config, WorkspaceConfig};
-use crate::package::Package;
 use crate::print_warning;
 use crate::{
     DEFAULT_METADATA_KEY, METADATA_KEYS, find_metadata_value, pkg_metadata_section,
     ws_metadata_section,
 };
 use color_eyre::eyre;
+use std::collections::HashSet;
+
+/// Workspace-only metadata keys read solely from the workspace root.
+const WORKSPACE_ONLY_KEYS: &[&str] = &["exclude_packages", "targets", "target", "subcommands"];
 
 /// Abstraction over a Cargo workspace used by this crate.
 pub trait Workspace {
@@ -19,7 +22,34 @@ pub trait Workspace {
     /// deserialized.
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig>;
 
+    /// Return the candidate packages for feature combinations **without**
+    /// applying workspace package exclusions.
+    ///
+    /// This emits the deprecation and no-op warnings for misplaced workspace
+    /// metadata once. Workspace `exclude_packages` (and its target-specific
+    /// patches) are applied later, per target, by the planner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if metadata can not be parsed.
+    fn candidate_packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>>;
+
+    /// Return the base, target-independent workspace exclude set.
+    ///
+    /// This is the union of `[workspace.metadata.*].exclude_packages` and the
+    /// deprecated root-package `exclude_packages`. Target-specific workspace
+    /// overrides patch this set per target during planning. This method emits
+    /// no warnings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if workspace metadata can not be parsed.
+    fn base_workspace_exclude_packages(&self) -> eyre::Result<HashSet<String>>;
+
     /// Return the packages that should be considered for feature combinations.
+    ///
+    /// This is the backward-compatible single path: candidate discovery plus
+    /// the base (target-independent) workspace exclude set.
     ///
     /// # Errors
     ///
@@ -36,91 +66,105 @@ impl Workspace for cargo_metadata::Metadata {
         Ok(config)
     }
 
-    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>> {
-        let mut packages = self.workspace_packages();
+    fn candidate_packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>> {
+        warn_workspace_metadata_misuse(self);
+        Ok(self.workspace_packages())
+    }
 
-        let workspace_config = self.workspace_config()?;
+    fn base_workspace_exclude_packages(&self) -> eyre::Result<HashSet<String>> {
+        let mut exclude = self.workspace_config()?.exclude_packages;
 
-        // Determine the workspace root package (if any) and load its config so we can both
-        // apply filtering and emit deprecation warnings for legacy configuration.
-        let mut root_config: Option<Config> = None;
-        let mut root_id: Option<cargo_metadata::PackageId> = None;
-
-        if let Some(root_package) = self.root_package() {
-            let root_key = find_metadata_value(&root_package.metadata)
-                .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
-            let config = root_package.config()?;
-
-            if !config.exclude_packages.is_empty() {
-                print_warning!(
-                    "{}.exclude_packages in the workspace root package is deprecated; use {}.exclude_packages instead",
-                    pkg_metadata_section(root_key),
-                    ws_metadata_section(root_key),
-                );
-            }
-
-            root_id = Some(root_package.id.clone());
-            root_config = Some(config);
+        // Fold in the deprecated root-package exclude_packages without emitting
+        // warnings here (warnings are emitted once in candidate discovery).
+        if let Some(root_package) = self.root_package()
+            && let Some((value, _key)) = find_metadata_value(&root_package.metadata)
+            && let Ok(config) = serde_json::from_value::<Config>(value.clone())
+        {
+            exclude.extend(config.exclude_packages);
         }
 
-        // For non-root workspace members, using exclude_packages is a no-op. Emit warnings for
-        // such configurations so users are aware that these fields are ignored.
-        if root_id.is_some() {
-            for package in &self.packages {
-                if Some(&package.id) == root_id.as_ref() {
-                    continue;
-                }
+        Ok(exclude)
+    }
 
-                // [package.metadata.<alias>].exclude_packages
-                if let Some((raw, key)) = find_metadata_value(&package.metadata)
-                    && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
-                    && !config.exclude_packages.is_empty()
-                {
+    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>> {
+        let mut packages = self.candidate_packages_for_fc()?;
+        let exclude = self.base_workspace_exclude_packages()?;
+        packages.retain(|p| !exclude.contains(p.name.as_str()));
+        Ok(packages)
+    }
+}
+
+/// Emit deprecation and no-op warnings for misplaced workspace metadata.
+///
+/// Warnings are intentionally side effects of candidate discovery so they fire
+/// once per invocation regardless of how many targets are later planned.
+fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
+    let Some(root_package) = metadata.root_package() else {
+        return;
+    };
+
+    let root_key =
+        find_metadata_value(&root_package.metadata).map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
+
+    // Root-package exclude_packages is deprecated in favor of workspace metadata.
+    if let Some((value, _key)) = find_metadata_value(&root_package.metadata)
+        && let Ok(config) = serde_json::from_value::<Config>(value.clone())
+        && !config.exclude_packages.is_empty()
+    {
+        print_warning!(
+            "[{}].exclude_packages in the workspace root package is deprecated; use [{}].exclude_packages instead",
+            pkg_metadata_section(root_key),
+            ws_metadata_section(root_key),
+        );
+    }
+
+    let root_id = &root_package.id;
+    for package in &metadata.packages {
+        if &package.id == root_id {
+            continue;
+        }
+
+        // [package.metadata.<alias>].exclude_packages in a non-root member is a no-op.
+        if let Some((raw, key)) = find_metadata_value(&package.metadata)
+            && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
+            && !config.exclude_packages.is_empty()
+        {
+            print_warning!(
+                "[{}].exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
+                pkg_metadata_section(key),
+                package.name,
+            );
+        }
+
+        // [workspace.metadata.<alias>].<key> specified in non-root manifests is
+        // also a no-op. Detect the JSON shape produced by cargo metadata and
+        // warn for any workspace-only key that carries values.
+        if let Some(workspace) = package.metadata.get("workspace")
+            && let Some((key, tool)) = METADATA_KEYS
+                .iter()
+                .find_map(|&key| workspace.get(key).map(|tool| (key, tool)))
+        {
+            for ws_key in WORKSPACE_ONLY_KEYS {
+                if json_has_values(tool.get(*ws_key)) {
                     print_warning!(
-                        "{}.exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
-                        pkg_metadata_section(key),
+                        "[{}].{} in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
+                        ws_metadata_section(key),
+                        ws_key,
                         package.name,
                     );
                 }
-
-                // [workspace.metadata.<alias>].exclude_packages specified in
-                // non-root manifests is also a no-op. Detect the likely JSON shape produced by
-                // cargo metadata and warn if present.
-                if let Some(workspace) = package.metadata.get("workspace") {
-                    let ws_tool = METADATA_KEYS
-                        .iter()
-                        .find_map(|&key| workspace.get(key).map(|tool| (key, tool)));
-
-                    if let Some((key, tool)) = ws_tool
-                        && let Some(exclude_packages) = tool.get("exclude_packages")
-                    {
-                        let has_values = match exclude_packages {
-                            serde_json::Value::Array(values) => !values.is_empty(),
-                            serde_json::Value::Null => false,
-                            _ => true,
-                        };
-
-                        if has_values {
-                            print_warning!(
-                                "{}.exclude_packages in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
-                                ws_metadata_section(key),
-                                package.name,
-                            );
-                        }
-                    }
-                }
             }
         }
+    }
+}
 
-        // Filter packages based on workspace metadata configuration
-        packages.retain(|p| !workspace_config.exclude_packages.contains(p.name.as_str()));
-
-        if let Some(config) = root_config {
-            // Filter packages based on root package Cargo.toml configuration
-            packages.retain(|p| !config.exclude_packages.contains(p.name.as_str()));
-        }
-
-        Ok(packages)
+/// Whether a JSON value carries meaningful (non-empty) configuration.
+fn json_has_values(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::Array(values)) => !values.is_empty(),
+        Some(serde_json::Value::Object(map)) => !map.is_empty(),
+        Some(serde_json::Value::Null) | None => false,
+        Some(_) => true,
     }
 }
 

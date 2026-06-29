@@ -115,6 +115,13 @@ OPTIONS:
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
+    --no-prune-implied      Disable pruning of redundant feature combinations
+    --show-pruned           Show pruned feature combinations in the summary
+    --aggregate-targets     Batch a combination's configured targets into one
+                            Cargo invocation (faster on many cores; group-level
+                            attribution). See "Configured targets" below.
+    --no-targets            Ignore configured target lists and use Cargo's
+                            default single target. See "Configured targets".
 ```
 
 ### Configuration
@@ -264,6 +271,126 @@ combinations that include `tokio` or `serde`, you can list them explicitly in
 </details>
 
 ---
+
+### Configured targets
+
+By default `cargo fc` runs for a single effective target (the same one Cargo
+would pick: `--target`, then `CARGO_BUILD_TARGET`, then the host). You can
+instead declare a list of target triples to check by default, turning the run
+into a full matrix of
+
+```text
+selected packages × effective targets × feature combinations
+```
+
+Declare workspace-wide targets in the workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-fc]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+]
+```
+
+Individual packages can override the workspace list, or opt out of it:
+
+```toml
+[package.metadata.cargo-fc]
+# Run this package only on wasm (overrides the workspace list, does not merge).
+targets = ["wasm32-unknown-unknown"]
+
+# Or opt out of configured targets entirely and use the single effective target:
+# targets = []
+```
+
+- **missing key** — inherit the workspace target list,
+- **`targets = []`** — opt out of the workspace list and use the single
+  effective target (`CARGO_BUILD_TARGET`, then host),
+- **`targets = ["…"]`** — this package's own target list (overrides, not
+  merges with, the workspace list).
+
+`targets` only selects which targets are visited. The
+[`target.'cfg(...)'`](#target-specific-configuration) overrides below still
+shape the feature matrix for each concrete target.
+
+#### Precedence
+
+When the selected command supports targets, each package's targets are resolved as:
+
+1. an explicit Cargo `--target <triple>` (wins globally for that run),
+2. the package's `targets`,
+3. the workspace `targets`,
+4. `CARGO_BUILD_TARGET`,
+5. the host target.
+
+> [!IMPORTANT]
+> Configured target lists intentionally take precedence over
+> `CARGO_BUILD_TARGET` — repository config is the declarative matrix and should
+> not be silently collapsed by a developer's ambient environment. This differs
+> from Cargo's own `[build].target` precedence. To run a single target for one
+> invocation, pass an explicit `--target <triple>`, which overrides all
+> configured lists, or pass `--no-targets` to ignore the configured lists and
+> fall back to Cargo's default single target.
+
+#### Which commands receive configured targets
+
+Configured targets are applied only to commands that accept Cargo's `--target`
+flag. Built-in subcommands cargo-fc recognizes — `check`, `clippy`, `build`,
+`doc`, `test`, `run` (and `cargo fc matrix`) — get this capability
+automatically by default.
+
+Unknown aliases and custom subcommands do **not** receive configured targets
+unless you declare it:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.lint]
+targets = true
+```
+
+The same table can override built-in defaults. For example, lint every
+configured target but keep `cargo fc build` on the single effective target:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.build]
+targets = false
+```
+
+For built-in short aliases, the long command's policy also applies unless the
+short alias has its own entry. If configured targets exist but the selected
+command lacks this capability by default, cargo-fc warns once and falls back to
+the single effective target. An explicit `targets = false` opt-out is quiet.
+
+> [!WARNING]
+> The `targets` list is shared by all target-capable commands. It is motivated
+> by `check`/`clippy` (which only need the target's `rustc`), but it also
+> applies to `build` (needs a linker), and to `test`/`run` (which execute and
+> therefore usually fail for foreign targets). Narrow a single run with an
+> explicit `--target <triple>` when needed, or pass `--no-targets` to ignore
+> the configured lists entirely and use Cargo's default single target. Missing
+> targets surface Cargo's own `rustup target add <triple>` hint; cargo-fc does
+> not install targets for you.
+
+#### Per-target workspace package selection
+
+Workspace package exclusions can vary by target, using the same `cfg(...)`
+selectors and patch semantics as the feature overrides:
+
+```toml
+[workspace.metadata.cargo-fc]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[workspace.metadata.cargo-fc.target.'cfg(target_arch = "wasm32")']
+exclude_packages = { add = ["native-cli"] }
+
+[workspace.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+exclude_packages = { add = ["wasm-app"] }
+```
+
+Workspace target overrides may patch `exclude_packages` only, and they apply to
+every concrete effective target — including single-target runs selected by
+`--target`, `CARGO_BUILD_TARGET`, or the host.
 
 ### Target-specific configuration
 

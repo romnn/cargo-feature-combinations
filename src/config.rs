@@ -19,6 +19,20 @@ fn default_true() -> bool {
 /// `[workspace.metadata.cargo-fc]` instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
+    /// Package-level target triples to check by default.
+    ///
+    /// This is a target *selection* field, not a feature-matrix field:
+    ///
+    /// - `None` (key absent): inherit the workspace target list.
+    /// - `Some([])`: explicit opt-out of the workspace target list; use the
+    ///   single effective target (`CARGO_BUILD_TARGET` or host) instead.
+    /// - `Some([..])`: this package's own target list, overriding the workspace
+    ///   list.
+    ///
+    /// `targets` is never read by feature-combination generation. Target
+    /// override sections (`target.'cfg(...)'`) must not change it.
+    #[serde(default, rename = "targets")]
+    pub package_targets: Option<Vec<String>>,
     /// Feature sets that must be tested in isolation.
     #[serde(default)]
     pub isolated_feature_sets: Vec<HashSet<String>>,
@@ -82,11 +96,11 @@ pub struct Config {
     #[serde(default)]
     pub matrix: HashMap<String, serde_json::Value>,
 
-    /// Target-specific configuration overrides.
+    /// Target-specific package configuration overrides.
     ///
     /// This is read from `[package.metadata.cargo-fc.target.'cfg(...)']`.
-    #[serde(default)]
-    pub target: BTreeMap<String, TargetOverride>,
+    #[serde(default, rename = "target")]
+    pub target_overrides: BTreeMap<String, TargetOverride>,
     /// Deprecated configuration keys (kept for backwards compatibility).
     #[serde(flatten)]
     pub deprecated: DeprecatedConfig,
@@ -95,6 +109,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            package_targets: None,
             isolated_feature_sets: Vec::new(),
             exclude_features: HashSet::new(),
             include_features: HashSet::new(),
@@ -108,7 +123,7 @@ impl Default for Config {
             prune_implied: true,
             show_pruned: false,
             matrix: HashMap::new(),
-            target: BTreeMap::new(),
+            target_overrides: BTreeMap::new(),
             deprecated: DeprecatedConfig::default(),
         }
     }
@@ -169,6 +184,50 @@ pub struct WorkspaceConfig {
     /// List of package names to exclude from the workspace analysis.
     #[serde(default)]
     pub exclude_packages: HashSet<String>,
+    /// Target triples checked by default for the whole workspace.
+    ///
+    /// An empty list means "no configured target list"; behavior falls back to
+    /// the existing single effective target detection path. Package-level
+    /// `targets` override (do not merge with) this list.
+    #[serde(default, rename = "targets")]
+    pub workspace_targets: Vec<String>,
+    /// Target-specific workspace overrides keyed by Cargo-style cfg expressions.
+    ///
+    /// These may patch `exclude_packages` only; they select which workspace
+    /// packages participate for one already-selected target.
+    #[serde(default, rename = "target")]
+    pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
+    /// Per-subcommand configured-target policy.
+    ///
+    /// Built-in Cargo subcommands default to their code-provided capability.
+    /// Unknown aliases (e.g. `lint`) default to denied. Entries in this table
+    /// override either default with `targets = true` or `targets = false`.
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandTargetCapability>,
+}
+
+/// Target-specific workspace override.
+///
+/// Keyed by Cargo-style cfg expressions, e.g. `cfg(target_arch = "wasm32")`.
+/// Workspace target overrides may patch `exclude_packages` only.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct WorkspaceTargetOverride {
+    /// Patch operations for [`WorkspaceConfig::exclude_packages`].
+    #[serde(default)]
+    pub exclude_packages: Option<StringSetPatch>,
+}
+
+/// Workspace-level configured-target policy for a single command token.
+///
+/// A plain `bool` is enough in v1. Unknown aliases default to deny, while
+/// built-ins default according to cargo-fc's registry. A present
+/// `targets = false` entry is therefore an explicit command-level opt-out.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct CommandTargetCapability {
+    /// When `true`, cargo-fc may expand configured target lists and inject
+    /// `--target <triple>` for this command.
+    #[serde(default)]
+    pub targets: bool,
 }
 
 /// Deprecated configuration keys kept for backwards compatibility.

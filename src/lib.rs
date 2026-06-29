@@ -20,6 +20,8 @@ pub mod package;
 pub mod runner;
 /// Target triple handling and host/flag based detection.
 pub mod target;
+/// Target selection and target-plan construction.
+pub mod target_plan;
 /// IO utilities.
 pub mod tee;
 /// Workspace-level configuration and package discovery.
@@ -38,12 +40,20 @@ use cli::cargo_subcommand;
 use color_eyre::eyre;
 use runner::print_feature_combination_error;
 use std::process;
-use target::{RustcTargetDetector, TargetDetector};
+use target::RustcTargetEnvironment;
 
 /// Yellow+bold color spec used by the [`print_warning!`] macro.
 static WARNING_COLOR: std::sync::LazyLock<termcolor::ColorSpec> = std::sync::LazyLock::new(|| {
     let mut spec = termcolor::ColorSpec::new();
     spec.set_fg(Some(termcolor::Color::Yellow));
+    spec.set_bold(true);
+    spec
+});
+
+/// Cyan+bold color spec used by the [`print_note!`] macro.
+static NOTE_COLOR: std::sync::LazyLock<termcolor::ColorSpec> = std::sync::LazyLock::new(|| {
+    let mut spec = termcolor::ColorSpec::new();
+    spec.set_fg(Some(termcolor::Color::Cyan));
     spec.set_bold(true);
     spec
 });
@@ -64,6 +74,22 @@ macro_rules! print_warning {
     }};
 }
 pub(crate) use print_warning;
+
+/// Print a colored informational note to stderr.
+///
+/// Formats as `note: <message>` with the `note:` prefix in cyan. Used for
+/// non-fatal mode fallbacks/no-ops such as `--aggregate-targets` adjustments.
+macro_rules! print_note {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        use termcolor::WriteColor as _;
+        let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
+        let _ = stderr.set_color(&$crate::NOTE_COLOR);
+        let _ = write!(&mut stderr, "note");
+        let _ = stderr.reset();
+        let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
+    }};
+}
 
 /// Whether to warn when the cargo subcommand is not one of the known commands
 /// (`build`, `test`, `run`, `check`, `doc`, `clippy`). Disabled by default
@@ -93,9 +119,10 @@ pub(crate) const METADATA_KEYS: &[&str] = &[
 /// usage is detected.
 pub(crate) const DEFAULT_METADATA_KEY: &str = default_metadata_key!();
 
-/// Default TOML section header for per-package configuration.
+/// Default dotted `package.metadata.<key>` path for per-package configuration
+/// (no brackets; callers wrap it in `[...]`).
 pub(crate) const DEFAULT_PKG_METADATA_SECTION: &str =
-    concat!("[package.metadata.", default_metadata_key!(), "]");
+    concat!("package.metadata.", default_metadata_key!());
 
 /// Look up configuration from any recognized metadata key alias.
 ///
@@ -112,14 +139,20 @@ pub(crate) fn find_metadata_value(
     None
 }
 
-/// Format a `[package.metadata.<key>]` TOML section header.
+/// Format the dotted `package.metadata.<key>` path (no brackets).
+///
+/// Callers wrap it in `[...]` and may append a sub-key, e.g.
+/// `[{pkg_metadata_section(key)}.target.'cfg(...)']`.
 pub(crate) fn pkg_metadata_section(key: &str) -> String {
-    format!("[package.metadata.{key}]")
+    format!("package.metadata.{key}")
 }
 
-/// Format a `[workspace.metadata.<key>]` TOML section header.
+/// Format the dotted `workspace.metadata.<key>` path (no brackets).
+///
+/// Callers wrap it in `[...]` and may append a sub-key, e.g.
+/// `[{ws_metadata_section(key)}.subcommands.<token>]`.
 pub(crate) fn ws_metadata_section(key: &str) -> String {
-    format!("[workspace.metadata.{key}]")
+    format!("workspace.metadata.{key}")
 }
 
 /// Run the cargo subcommand for all relevant feature combinations.
@@ -151,7 +184,110 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         cmd.manifest_path(manifest_path);
     }
     let metadata = cmd.exec()?;
-    let mut packages = metadata.packages_for_fc()?;
+
+    let ws_config = metadata.workspace_config()?;
+    // Discover candidate packages without applying workspace exclusions; those
+    // (and their target-specific patches) are applied per target during
+    // planning.
+    let packages = select_candidate_packages(&metadata, &options)?;
+
+    // Cache each selected package's base config once so planning and execution
+    // never re-read the manifest (which would duplicate deprecation warnings).
+    let configs: Vec<config::Config> = packages
+        .iter()
+        .map(|package| package.config())
+        .collect::<eyre::Result<Vec<_>>>()?;
+    let selected: Vec<target_plan::SelectedPackage<'_>> = packages
+        .iter()
+        .zip(&configs)
+        .map(|(package, config)| target_plan::SelectedPackage { package, config })
+        .collect();
+
+    // Preserve the original String args for `--target` detection.
+    let cargo_args_owned = cargo_args;
+    let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
+
+    // Parse an explicit `--target` only before `--`.
+    let cli_target = target::parse_cli_target(&cargo_args_owned);
+
+    // Echo the user's own metadata alias in capability hints/warnings.
+    let ws_key = find_metadata_value(&metadata.workspace_metadata)
+        .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
+    let capability_allowed =
+        resolve_capability_and_warn(&options, &cargo_args, &ws_config, ws_key, &selected);
+
+    let env = RustcTargetEnvironment;
+    let mut evaluator = RustcCfgEvaluator::default();
+    let base_exclude = metadata.base_workspace_exclude_packages()?;
+
+    let target_plans = target_plan::build_target_plans(
+        &selected,
+        &ws_config,
+        &base_exclude,
+        cli_target.as_deref(),
+        capability_allowed,
+        &env,
+        &mut evaluator,
+    )?;
+
+    let result = match options.command {
+        Some(Command::Help | Command::Version) => Ok(None),
+        Some(Command::FeatureMatrix { pretty }) => {
+            let plan_set = runner::build_execution_plans(
+                &target_plans,
+                &options,
+                options.packages_only,
+                &mut evaluator,
+            )?;
+            if options.aggregate_targets {
+                print_note!(
+                    "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
+                );
+            }
+            let matrix_opts = runner::MatrixOptions {
+                pretty,
+                packages_only: options.packages_only,
+                no_prune_implied: options.no_prune_implied,
+            };
+            runner::print_matrix_for_execution_plans(&plan_set, &matrix_opts)
+        }
+        None => {
+            if WARN_UNKNOWN_SUBCOMMAND
+                && cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other
+            {
+                print_warning!(
+                    "`cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
+                );
+            }
+            let plan_set =
+                runner::build_execution_plans(&target_plans, &options, false, &mut evaluator)?;
+            let mode = resolve_execution_mode(&options, &cargo_args, &plan_set);
+            runner::run_execution_plans(&plan_set, cargo_args, &options, mode)
+        }
+    };
+
+    match result {
+        Ok(Some(exit_code)) => process::exit(exit_code),
+        Ok(None) => Ok(()),
+        Err(err) => {
+            if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
+                print_feature_combination_error(e);
+                process::exit(2);
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Discover candidate workspace packages and apply CLI-level package filters.
+///
+/// Workspace `exclude_packages` (and its target-specific patches) are applied
+/// later, per target, by the planner — not here.
+fn select_candidate_packages<'a>(
+    metadata: &'a cargo_metadata::Metadata,
+    options: &Options,
+) -> eyre::Result<Vec<&'a cargo_metadata::Package>> {
+    let mut packages = metadata.candidate_packages_for_fc()?;
 
     // When `--manifest-path` points to a workspace member, `cargo metadata`
     // still returns the entire workspace. Unless the user explicitly selected
@@ -181,46 +317,99 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         packages.retain(|p| options.packages.contains(p.name.as_str()));
     }
 
-    // Preserve the original String args for `--target` detection.
-    let cargo_args_owned = cargo_args;
-    let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
+    Ok(packages)
+}
 
-    let detector = RustcTargetDetector::default();
-    let target = detector.detect_target(&cargo_args_owned)?;
-    let mut evaluator = RustcCfgEvaluator::default();
-    let result = match options.command {
-        Some(Command::Help | Command::Version) => Ok(None),
-        Some(Command::FeatureMatrix { pretty }) => {
-            let matrix_opts = runner::MatrixOptions {
-                pretty,
-                packages_only: options.packages_only,
-                no_prune_implied: options.no_prune_implied,
-            };
-            print_feature_matrix_for_target(&packages, &target, &mut evaluator, &matrix_opts)
-        }
-        None => {
-            if WARN_UNKNOWN_SUBCOMMAND
-                && cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other
-            {
-                print_warning!(
-                    "`cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
-                );
-            }
-            run_cargo_command_for_target(&packages, cargo_args, &options, &target, &mut evaluator)
-        }
-    };
-
-    match result {
-        Ok(Some(exit_code)) => process::exit(exit_code),
-        Ok(None) => Ok(()),
-        Err(err) => {
-            if let Some(e) = err.downcast_ref::<FeatureCombinationError>() {
-                print_feature_combination_error(e);
-                process::exit(2);
-            }
-            Err(err)
-        }
+/// Resolve the selected command's target capability and warn (once) if
+/// configured targets exist but the command can not accept them.
+///
+/// `matrix` is not a forwarded cargo command: it always uses configured target
+/// planning. The warning is driven from raw config state, not from the planned
+/// targets after capability filtering.
+fn resolve_capability_and_warn(
+    options: &Options,
+    cargo_args: &[&str],
+    ws_config: &config::WorkspaceConfig,
+    ws_key: &str,
+    selected: &[target_plan::SelectedPackage<'_>],
+) -> bool {
+    // `--no-targets` deliberately ignores configured target lists and falls back
+    // to Cargo's default single target, so deny without warning.
+    if options.no_targets {
+        return false;
     }
+
+    // `matrix` is not a forwarded cargo command: it always uses configured
+    // target planning.
+    if matches!(options.command, Some(Command::FeatureMatrix { .. })) {
+        return true;
+    }
+
+    let token = cli::cargo_subcommand_token(cargo_args);
+    let policy = cli::configured_target_policy(token.as_deref(), &ws_config.subcommand_overrides);
+    if policy.enabled {
+        return true;
+    }
+
+    // Capability denied: warn (once) only when the user actually configured
+    // targets that we are now skipping.
+    let has_raw_configured_targets = !ws_config.workspace_targets.is_empty()
+        || selected.iter().any(|s| {
+            s.config
+                .package_targets
+                .as_ref()
+                .is_some_and(|t| !t.is_empty())
+        });
+    if has_raw_configured_targets
+        && !policy.explicit
+        && let Some(token) = token.as_deref().filter(|t| !t.is_empty())
+    {
+        print_warning!(
+            "not passing configured targets to cargo command `{token}` because it has no targets capability"
+        );
+        eprintln!(
+            "hint: add [{}.subcommands.{token}] targets = true if this command accepts --target",
+            ws_metadata_section(ws_key),
+        );
+    }
+
+    false
+}
+
+/// Resolve the effective target execution mode, emitting a note when an
+/// explicitly requested `--aggregate-targets` falls back to serial or is a
+/// no-op.
+fn resolve_execution_mode(
+    options: &Options,
+    cargo_args: &[&str],
+    plan_set: &runner::ExecutionPlanSet<'_>,
+) -> runner::TargetExecutionMode {
+    use runner::TargetExecutionMode;
+
+    if !options.aggregate_targets {
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if plan_set.plans.len() <= 1 {
+        print_note!("--aggregate-targets has no effect for a single target; running normally");
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run {
+        print_note!(
+            "--aggregate-targets does not apply to `run` (cargo runs one target at a time); running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if plan_set.show_pruned {
+        print_note!(
+            "--aggregate-targets is disabled because pruned summaries are target-specific; running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    TargetExecutionMode::Aggregate
 }
 
 #[cfg(test)]
@@ -228,6 +417,146 @@ mod test {
     use super::*;
     use color_eyre::eyre;
     use serde_json::json;
+
+    fn execution_plan_set(
+        targets: &[&str],
+        show_pruned: bool,
+    ) -> runner::ExecutionPlanSet<'static> {
+        runner::ExecutionPlanSet {
+            plans: targets
+                .iter()
+                .map(|target| runner::ExecutionPlan {
+                    target: target::TargetTriple((*target).to_string()),
+                    package_plans: Vec::new(),
+                })
+                .collect(),
+            show_pruned,
+            show_target: targets.len() > 1,
+        }
+    }
+
+    #[test]
+    fn aggregate_execution_mode_selected_for_supported_multi_target_command() {
+        let options = Options {
+            aggregate_targets: true,
+            ..Options::default()
+        };
+        let plan_set = execution_plan_set(&["t1", "t2"], false);
+
+        assert_eq!(
+            resolve_execution_mode(&options, &["check"], &plan_set),
+            runner::TargetExecutionMode::Aggregate
+        );
+    }
+
+    #[test]
+    fn aggregate_execution_mode_falls_back_for_run() {
+        let options = Options {
+            aggregate_targets: true,
+            ..Options::default()
+        };
+        let plan_set = execution_plan_set(&["t1", "t2"], false);
+
+        assert_eq!(
+            resolve_execution_mode(&options, &["run"], &plan_set),
+            runner::TargetExecutionMode::SerialPerTarget
+        );
+    }
+
+    #[test]
+    fn aggregate_execution_mode_falls_back_for_pruned_summaries() {
+        let options = Options {
+            aggregate_targets: true,
+            ..Options::default()
+        };
+        let plan_set = execution_plan_set(&["t1", "t2"], true);
+
+        assert_eq!(
+            resolve_execution_mode(&options, &["check"], &plan_set),
+            runner::TargetExecutionMode::SerialPerTarget
+        );
+    }
+
+    #[test]
+    fn aggregate_execution_mode_is_noop_for_single_target() {
+        let options = Options {
+            aggregate_targets: true,
+            ..Options::default()
+        };
+        let plan_set = execution_plan_set(&["t1"], false);
+
+        assert_eq!(
+            resolve_execution_mode(&options, &["check"], &plan_set),
+            runner::TargetExecutionMode::SerialPerTarget
+        );
+    }
+
+    #[test]
+    fn no_targets_flag_denies_capability() {
+        let options = Options {
+            no_targets: true,
+            ..Options::default()
+        };
+        let ws = config::WorkspaceConfig::default();
+        // Even a target-capable built-in command is denied configured targets
+        // when `--no-targets` is set.
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &["check"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn builtin_command_allows_capability_without_no_targets() {
+        let options = Options::default();
+        let ws = config::WorkspaceConfig::default();
+        assert!(resolve_capability_and_warn(
+            &options,
+            &["check"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn builtin_command_can_be_disabled_by_workspace_policy() {
+        let options = Options::default();
+        let mut ws = config::WorkspaceConfig::default();
+        ws.subcommand_overrides.insert(
+            "build".to_string(),
+            config::CommandTargetCapability { targets: false },
+        );
+
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &["build"],
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn no_targets_flag_denies_capability_for_matrix() {
+        let options = Options {
+            no_targets: true,
+            command: Some(Command::FeatureMatrix { pretty: false }),
+            ..Options::default()
+        };
+        let ws = config::WorkspaceConfig::default();
+        let empty: [&str; 0] = [];
+        assert!(!resolve_capability_and_warn(
+            &options,
+            &empty,
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
 
     #[test]
     fn find_metadata_value_returns_none_for_empty_object() {
@@ -280,16 +609,16 @@ mod test {
     fn pkg_metadata_section_formats_correctly() {
         assert_eq!(
             pkg_metadata_section("cargo-fc"),
-            "[package.metadata.cargo-fc]"
+            "package.metadata.cargo-fc"
         );
-        assert_eq!(pkg_metadata_section("fc"), "[package.metadata.fc]");
+        assert_eq!(pkg_metadata_section("fc"), "package.metadata.fc");
     }
 
     #[test]
     fn ws_metadata_section_formats_correctly() {
         assert_eq!(
             ws_metadata_section("cargo-fc"),
-            "[workspace.metadata.cargo-fc]"
+            "workspace.metadata.cargo-fc"
         );
     }
 
@@ -300,6 +629,6 @@ mod test {
 
     #[test]
     fn default_pkg_metadata_section_uses_default_key() {
-        assert_eq!(DEFAULT_PKG_METADATA_SECTION, "[package.metadata.cargo-fc]");
+        assert_eq!(DEFAULT_PKG_METADATA_SECTION, "package.metadata.cargo-fc");
     }
 }
