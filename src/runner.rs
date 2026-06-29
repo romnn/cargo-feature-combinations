@@ -617,7 +617,7 @@ pub struct PackageExecutionPlan<'a> {
     pub pruned: Vec<PrunedCombination>,
     /// Resolved user matrix metadata for this package-target (matrix output
     /// only; the executor ignores it).
-    pub matrix: HashMap<String, serde_json::Value>,
+    pub matrix: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The full set of execution plans plus display flags.
@@ -709,28 +709,19 @@ pub fn build_execution_plans<'a>(
 
 /// Build the JSON feature-matrix rows for the given execution plans.
 ///
-/// Every row carries `name`, `target`, and `features`. Built-in fields win over
-/// user `matrix` metadata that uses the same keys; because `target` is now a
-/// reserved built-in key, a compatibility warning is emitted (once per package)
-/// if user matrix metadata already defines it.
+/// Every row carries cargo-fc-owned top-level fields (`name`, `target`,
+/// `features`) plus `metadata`, which contains the package's user-defined
+/// matrix metadata.
 #[must_use]
 pub fn build_matrix_rows(
     plan_set: &ExecutionPlanSet,
     packages_only: bool,
 ) -> Vec<serde_json::Value> {
-    use serde_json_merge::{iter::dfs::Dfs, merge::Merge};
-
     let mut rows = Vec::new();
-    let mut warned_packages: HashSet<String> = HashSet::new();
 
     for plan in &plan_set.plans {
         for pp in &plan.package_plans {
             let name = pp.package.name.to_string();
-            if pp.matrix.contains_key("target") && warned_packages.insert(name.clone()) {
-                print_warning!(
-                    "package `{name}` matrix metadata defines the reserved `target` key; cargo-fc overwrites it with the configured target triple"
-                );
-            }
 
             let features_list: Vec<String> = if packages_only {
                 vec!["default".to_string()]
@@ -742,18 +733,41 @@ pub fn build_matrix_rows(
             };
 
             for ft in features_list {
-                let mut out = serde_json::json!(pp.matrix);
-                out.merge::<Dfs>(&serde_json::json!({
-                    "name": name,
-                    "target": pp.target.triple.as_str(),
-                    "features": ft,
-                }));
-                rows.push(out);
+                let mut row = serde_json::Map::new();
+                row.insert("features".to_string(), serde_json::json!(ft));
+                row.insert("metadata".to_string(), sorted_json_object(&pp.matrix));
+                row.insert("name".to_string(), serde_json::json!(name.as_str()));
+                row.insert(
+                    "target".to_string(),
+                    serde_json::json!(pp.target.triple.as_str()),
+                );
+                rows.push(serde_json::Value::Object(row));
             }
         }
     }
 
     rows
+}
+
+fn sorted_json_object(object: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    let mut entries: Vec<_> = object.iter().collect();
+    entries.sort_by_key(|(key, _)| *key);
+
+    let mut out = serde_json::Map::new();
+    for (key, value) in entries {
+        out.insert(key.clone(), sorted_json_value(value));
+    }
+    serde_json::Value::Object(out)
+}
+
+fn sorted_json_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(sorted_json_value).collect())
+        }
+        serde_json::Value::Object(object) => sorted_json_object(object),
+        _ => value.clone(),
+    }
 }
 
 /// Print a JSON feature matrix built from execution plans to stdout.
@@ -1509,14 +1523,14 @@ mod test {
                             target: effective_target("t1"),
                             combinations: vec![string_vec(&["b"]), string_vec(&[])],
                             pruned: Vec::new(),
-                            matrix: std::collections::HashMap::new(),
+                            matrix: serde_json::Map::new(),
                         },
                         PackageExecutionPlan {
                             package: &package_b,
                             target: effective_target("t1"),
                             combinations: vec![string_vec(&["z"])],
                             pruned: Vec::new(),
-                            matrix: std::collections::HashMap::new(),
+                            matrix: serde_json::Map::new(),
                         },
                     ],
                 },
@@ -1528,14 +1542,14 @@ mod test {
                             target: effective_target("t2"),
                             combinations: vec![string_vec(&[]), string_vec(&["a"])],
                             pruned: Vec::new(),
-                            matrix: std::collections::HashMap::new(),
+                            matrix: serde_json::Map::new(),
                         },
                         PackageExecutionPlan {
                             package: &package_b,
                             target: effective_target("t2"),
                             combinations: vec![string_vec(&["z"])],
                             pruned: Vec::new(),
-                            matrix: std::collections::HashMap::new(),
+                            matrix: serde_json::Map::new(),
                         },
                     ],
                 },

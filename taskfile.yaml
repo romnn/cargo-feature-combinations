@@ -105,7 +105,7 @@ tasks:
     desc: "check for unused cargo workspace dependencies"
     aliases: [unused-dependencies]
     cmds:
-      - cargo +nightly udeps {{.CLI_ARGS}}
+      - cargo +nightly udeps --workspace --all-targets {{.CLI_ARGS}}
 
   audit:
     desc: "audit cargo workspace dependencies"

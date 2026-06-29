@@ -5,7 +5,7 @@ pub mod resolve;
 
 use self::patch::{FeatureSetVecPatch, StringSetPatch};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 fn default_true() -> bool {
     true
@@ -94,7 +94,7 @@ pub struct Config {
     pub show_pruned: bool,
     /// Arbitrary user-defined matrix values forwarded to the runner.
     #[serde(default)]
-    pub matrix: HashMap<String, serde_json::Value>,
+    pub matrix: serde_json::Map<String, serde_json::Value>,
 
     /// Target-specific package configuration overrides.
     ///
@@ -122,7 +122,7 @@ impl Default for Config {
             no_empty_feature_set: false,
             prune_implied: true,
             show_pruned: false,
-            matrix: HashMap::new(),
+            matrix: serde_json::Map::new(),
             target_overrides: BTreeMap::new(),
             deprecated: DeprecatedConfig::default(),
         }
@@ -175,7 +175,7 @@ pub struct TargetOverride {
     pub show_pruned: Option<bool>,
     /// Merge override for [`Config::matrix`].
     #[serde(default)]
-    pub matrix: Option<HashMap<String, serde_json::Value>>,
+    pub matrix: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Workspace-wide configuration for `cargo-fc`.

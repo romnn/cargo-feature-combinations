@@ -66,6 +66,13 @@ jobs:
           --all-targets
 ```
 
+If you configure custom package matrix metadata, it is available under
+`matrix.package.metadata`:
+
+```yaml
+name: build ${{ matrix.package.name }} (${{ matrix.package.metadata.kind }})
+```
+
 Of course you can also apply the same approach for your `test.yaml` or `lint.yaml` workflows!
 Per job, up to 256 feature sets can be processed in parallel.
 
@@ -104,5 +111,4 @@ feature combination for you (no GitHub Actions matrix required):
 
 Add `--aggregate-targets` to batch each combination's targets into one Cargo
 invocation for extra throughput on many-core runners.
-
 

@@ -86,7 +86,6 @@ cfg-expr = "0.20"
 # serde
 serde = "1"
 serde_json = "1"
-serde_json_merge = "0"
 
 # terminal colors
 termcolor = "1.4"

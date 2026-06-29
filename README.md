@@ -43,7 +43,7 @@ cargo fc build
 cargo fc check -p <my-crate> --all-targets
 ```
 
-In addition, there are a few new flags and the `matrix` subcommand.
+In addition, cargo-fc provides these flags and the `matrix` subcommand.
 To get an idea, consider these examples:
 
 ```bash
@@ -142,14 +142,14 @@ For example:
 [package.metadata.cargo-fc]
 
 # Exclude groupings of features that are incompatible or do not make sense
-exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
+exclude_feature_sets = [["foo", "bar"]]
 
 # To exclude only the empty feature set from the matrix, you can either enable
 # `no_empty_feature_set = true` or explicitly list an empty set here:
 exclude_feature_sets = [[]]
 
 # Exclude features from the feature combination matrix
-exclude_features = ["default", "full"] # formerly "denylist"
+exclude_features = ["default", "full"]
 
 # Skip implicit features that correspond to optional dependencies from the
 # matrix.
@@ -180,7 +180,7 @@ only_features = ["default", "full"]
 # Non-existent features are ignored. Other configuration options are ignored.
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
-] # formerly "exact_combinations"
+]
 
 # Allow only the listed feature sets.
 #
@@ -213,22 +213,27 @@ isolated_feature_sets = [
     ["other-a", "other-b", "other-c"],
 ]
 
-# Optional: Additional metadata merged into `cargo fc matrix` output
+# Optional: Custom metadata for `cargo fc matrix` output.
+# It appears under the row's `metadata` key.
 # $ cargo fc matrix --pretty
 #   [
-#     { "name": "my-crate", "features": "", "kind": "ci" },
-#     { "name": "my-crate", "features": "a", "kind": "ci" },
-#     { "name": "my-crate", "features": "b", "kind": "ci" },
-#     { "name": "my-crate", "features": "a,b", "kind": "ci" },
+#     { "features": "", "metadata": { "kind": "ci" }, "name": "my-crate", "target": "x86_64-unknown-linux-gnu" },
+#     { "features": "a", "metadata": { "kind": "ci" }, "name": "my-crate", "target": "x86_64-unknown-linux-gnu" },
+#     { "features": "b", "metadata": { "kind": "ci" }, "name": "my-crate", "target": "x86_64-unknown-linux-gnu" },
+#     { "features": "a,b", "metadata": { "kind": "ci" }, "name": "my-crate", "target": "x86_64-unknown-linux-gnu" },
 #   ]
 matrix = { kind = "ci" }
 
-# Optional: The `matrix` metadata from before can also be its own section
+# Optional: Matrix metadata can also be configured in its own section.
 # $ cargo fc matrix --pretty
 #   [{
-#       "requires-gpu": false,
-#       "value-for-this-crate": "will show up in the feature matrix",
-#       ..
+#       "features": "",
+#       "metadata": {
+#         "requires-gpu": false,
+#         "value-for-this-crate": "will show up in the feature matrix"
+#       },
+#       "name": "my-crate",
+#       "target": "x86_64-unknown-linux-gnu"
 #    }, .. ]
 [package.metadata.cargo-fc.matrix]
 value-for-this-crate = "will show up in the feature matrix"
@@ -433,6 +438,9 @@ If a value appears in both `add` and `remove`, add wins.
 
 When multiple target override sections match (e.g. `cfg(unix)` and `cfg(target_os = "linux")`),
 their `add` and `remove` sets are unioned. Conflicting `override` values result in an error.
+
+Matrix metadata tables merge recursively. Other matrix metadata values,
+including arrays, replace the base value.
 
 ##### `replace = true`
 

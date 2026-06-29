@@ -1,8 +1,7 @@
 use crate::cfg_eval::CfgEvaluator;
 use crate::target::TargetTriple;
 use color_eyre::eyre::{self, WrapErr};
-use serde_json_merge::{iter::dfs::Dfs, merge::Merge};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use super::patch::{FeatureSetVecPatch, StringSetPatch};
 use super::{Config, DeprecatedConfig, TargetOverride};
@@ -235,7 +234,7 @@ fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyr
     // Matrix metadata: deep-merge in deterministic order (cfg key order).
     for (_expr, ov) in matched {
         if let Some(matrix) = &ov.matrix {
-            merge_matrix(&mut out.matrix, matrix)?;
+            merge_matrix(&mut out.matrix, matrix);
         }
     }
 
@@ -243,13 +242,19 @@ fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyr
 }
 
 fn merge_matrix(
-    base: &mut HashMap<String, serde_json::Value>,
-    patch: &HashMap<String, serde_json::Value>,
-) -> eyre::Result<()> {
-    let mut out = serde_json::json!(base);
-    out.merge::<Dfs>(&serde_json::json!(patch));
-    *base = serde_json::from_value(out)?;
-    Ok(())
+    base: &mut serde_json::Map<String, serde_json::Value>,
+    patch: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, value) in patch {
+        match (base.get_mut(key), value) {
+            (Some(serde_json::Value::Object(base_obj)), serde_json::Value::Object(patch_obj)) => {
+                merge_matrix(base_obj, patch_obj);
+            }
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -458,7 +463,7 @@ mod test {
     use crate::config::{Config, TargetOverride};
     use crate::target::TargetTriple;
     use color_eyre::eyre;
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, HashSet};
 
     #[derive(Default)]
     struct StubEval {
@@ -622,7 +627,7 @@ mod test {
                 replace: true,
                 exclude_features: Some(StringSetPatch::Override(hs(&["cuda"]))),
                 matrix: Some({
-                    let mut m = HashMap::new();
+                    let mut m = serde_json::Map::new();
                     m.insert("k".to_string(), serde_json::json!({"b": 2}));
                     m
                 }),
@@ -898,14 +903,31 @@ mod test {
         let mut base = Config::default();
         base.matrix
             .insert("existing".to_string(), serde_json::json!("keep"));
+        base.matrix.insert(
+            "nested".to_string(),
+            serde_json::json!({
+                "keep": true,
+                "replace": "base"
+            }),
+        );
+        base.matrix
+            .insert("tags".to_string(), serde_json::json!(["base"]));
 
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
             TargetOverride {
                 matrix: Some({
-                    let mut m = HashMap::new();
+                    let mut m = serde_json::Map::new();
                     m.insert("added".to_string(), serde_json::json!("new"));
+                    m.insert(
+                        "nested".to_string(),
+                        serde_json::json!({
+                            "replace": "override",
+                            "added": true
+                        }),
+                    );
+                    m.insert("tags".to_string(), serde_json::json!(["override"]));
                     m
                 }),
                 ..TargetOverride::default()
@@ -926,6 +948,20 @@ mod test {
             out.matrix.get("added"),
             Some(&serde_json::json!("new")),
             "new key added from patch"
+        );
+        assert_eq!(
+            out.matrix.get("nested"),
+            Some(&serde_json::json!({
+                "keep": true,
+                "replace": "override",
+                "added": true
+            })),
+            "nested objects are merged recursively"
+        );
+        assert_eq!(
+            out.matrix.get("tags"),
+            Some(&serde_json::json!(["override"])),
+            "arrays replace the base value"
         );
         Ok(())
     }

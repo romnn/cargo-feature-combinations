@@ -992,27 +992,28 @@ assignments are only valid for commands with the `targets` capability.
 
 ## Matrix Output
 
-Change `cargo fc matrix` so every row includes `target`:
+Change `cargo fc matrix` so every row includes `target` and nests user-defined
+matrix fields under `metadata`:
 
 ```json
 {
+  "features": "serde,cli",
+  "metadata": {
+    "kind": "ci"
+  },
   "name": "my-crate",
-  "target": "x86_64-pc-windows-msvc",
-  "features": "serde,cli"
+  "target": "x86_64-pc-windows-msvc"
 }
 ```
 
-Merge order should preserve user metadata behavior:
+cargo-fc owns top-level row fields: `name`, `target`, `features`, and
+`metadata`. Store `config.matrix` unchanged under `metadata`, so user keys such
+as `target`, `features`, or `name` can not collide with cargo-fc-owned fields.
+This is a schema change for existing `cargo fc matrix` consumers and must be
+called out in the release notes and final README docs.
 
-1. Start with `config.matrix`.
-2. Merge built-in fields: `name`, `target`, `features`.
-
-Built-in fields should win if the user supplies the same keys in
-`config.matrix`; otherwise matrix consumers can receive misleading rows.
-Because `target` becomes a reserved built-in matrix key, emit a compatibility
-warning if package matrix metadata already contains `target`. This is a schema
-change for existing `cargo fc matrix` consumers and must be called out in the
-release notes and final README docs.
+Target-specific `matrix` metadata merge semantics: JSON/TOML tables merge
+recursively; arrays and scalar values replace the base value.
 
 For `--packages-only`, emit one row per package-target pair with
 `features = "default"` as today.
@@ -1435,7 +1436,7 @@ are keyed; planning, config resolution, and feature generation are identical.
 - Build `ExecutionPlan`s for matrix output instead of recomputing target
   selection inside the matrix function.
 - Include `target` in every matrix row.
-- Warn if user matrix metadata already contains the reserved `target` key.
+- Include user matrix metadata under each row's `metadata` object.
 - Ensure target-specific overrides are resolved per package-target pair.
 - Add integration tests for:
   - workspace targets,
@@ -1512,8 +1513,8 @@ This milestone delivers the core serial feature.
 - Document rustup target prerequisites.
 - Document that configured target lists intentionally take precedence over
   `CARGO_BUILD_TARGET`; use explicit `--target` to select one target.
-- Document the `cargo fc matrix` `target` key schema change and reserved-key
-  warning.
+- Document the `cargo fc matrix` schema change: `target` is top-level and user
+  matrix metadata is nested under `metadata`.
 - Update GitHub Actions docs to show a single `cargo fc clippy` or
   `cargo fc check` invocation.
 
@@ -1554,9 +1555,9 @@ processes was measured and rejected, so no parallelism work remains.
     summaries,
   - per-combination diagnostics header includes the target when targets are
     configured, explicitly selected, or more than one is planned,
-  - matrix rows include target,
-  - matrix emits the reserved-`target`-key warning when package matrix metadata
-    already defines `target`,
+  - matrix rows include target and a `metadata` object,
+  - package matrix metadata keys that match cargo-fc-owned top-level row keys
+    are preserved under `metadata`,
   - aggregate mode batches targets sharing a combo into one invocation with a
     `--target` per target,
   - aggregate mode groups by canonical feature-combination key, not display

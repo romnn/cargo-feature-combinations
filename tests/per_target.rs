@@ -145,6 +145,11 @@ fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()>
         targets_in(&rows),
         HashSet::from(["host-triple".to_string()])
     );
+    assert!(rows.iter().all(|row| {
+        row.get("metadata")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
+    }));
     Ok(())
 }
 
@@ -294,7 +299,7 @@ fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
 }
 
 #[test]
-fn matrix_reserved_target_key_is_overwritten_by_builtin() -> eyre::Result<()> {
+fn matrix_user_fields_are_nested_under_metadata() -> eyre::Result<()> {
     let temp = single_crate(
         r#"
         [package]
@@ -305,6 +310,8 @@ fn matrix_reserved_target_key_is_overwritten_by_builtin() -> eyre::Result<()> {
         targets = ["t-linux"]
         [package.metadata.cargo-fc.matrix]
         target = "user-supplied"
+        features = "user-features"
+        kind = "ci"
         "#,
     )?;
     let meta = metadata(&temp)?;
@@ -312,8 +319,32 @@ fn matrix_reserved_target_key_is_overwritten_by_builtin() -> eyre::Result<()> {
     let mut eval = PairEval::default();
     let rows = matrix_rows(&meta, None, true, &env, &mut eval)?;
 
-    // The built-in target wins over the user-supplied matrix `target`.
+    // cargo-fc owns top-level fields; user fields live under `metadata`.
     assert_eq!(targets_in(&rows), HashSet::from(["t-linux".to_string()]));
+    let row = rows.first().ok_or_eyre("expected one matrix row")?;
+    assert_eq!(
+        row.get("metadata")
+            .and_then(|m| m.get("target"))
+            .and_then(serde_json::Value::as_str),
+        Some("user-supplied")
+    );
+    assert_eq!(
+        row.get("metadata")
+            .and_then(|m| m.get("features"))
+            .and_then(serde_json::Value::as_str),
+        Some("user-features")
+    );
+    assert_eq!(
+        row.get("metadata")
+            .and_then(|m| m.get("kind"))
+            .and_then(serde_json::Value::as_str),
+        Some("ci")
+    );
+    assert_eq!(
+        serde_json::to_string(row)?,
+        r#"{"features":"","metadata":{"features":"user-features","kind":"ci","target":"user-supplied"},"name":"solo","target":"t-linux"}"#,
+        "matrix rows are serialized with sorted keys"
+    );
     Ok(())
 }
 
