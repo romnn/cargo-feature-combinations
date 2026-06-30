@@ -350,11 +350,16 @@ flag. Built-in subcommands cargo-fc recognizes — `check`, `clippy`, `build`,
 `doc`, `test`, `run` (and `cargo fc matrix`) — get this capability
 automatically by default.
 
-Unknown aliases and custom subcommands do **not** receive configured targets
-unless you declare it:
+cargo-fc resolves cargo command aliases from your `.cargo/config.toml` before
+running, so an alias that expands to a built-in inherits the built-in's
+capability automatically. With `lint = "clippy --all-targets --no-deps"`,
+`cargo fc lint` behaves exactly like `cargo fc clippy` — no opt-in required.
+
+A custom subcommand that does **not** resolve to a built-in still needs an
+explicit declaration:
 
 ```toml
-[workspace.metadata.cargo-fc.subcommands.lint]
+[workspace.metadata.cargo-fc.subcommands.my-custom-cmd]
 targets = true
 ```
 
@@ -372,12 +377,33 @@ command lacks this capability by default, cargo-fc warns once and falls back to
 the single effective target. An explicit `targets = false` opt-out is quiet.
 
 > [!WARNING]
-> The `targets` list is shared by all target-capable commands. It is motivated
-> by `check`/`clippy` (which only need the target's `rustc`), but it also
-> applies to `build` (needs a linker), and to `test`/`run` (which execute and
-> therefore usually fail for foreign targets). Narrow a single run with an
-> explicit `--target <triple>` when needed, or pass `--no-targets` to ignore
-> the configured lists entirely and use Cargo's default single target.
+> The `targets` list is shared by all target-capable commands. `check`/`clippy`
+> only need the target's `rustc`, but `test`/`run` **execute** the binary and so
+> cannot run a foreign target — keep them host-only (narrow with `--target` or
+> `--no-targets`). `build` links and, like `clippy`, cross-compiles native-C
+> dependencies; see the build driver below.
+
+#### Build driver (cross-compiling native dependencies)
+
+Cross-compiling a crate with native-C build dependencies (e.g. `aws-lc-sys` via
+`rustls`) needs a cross C toolchain — the host `cc` can't target another OS. To
+make that transparent, **when any non-host target is planned cargo-fc invokes
+[`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) instead of plain
+`cargo`**, so zig supplies the cross C compiler and linker for every target. You
+must have `cargo-zigbuild` (and `zig`) installed; host-only runs use plain
+`cargo`.
+
+Override the driver with `--driver <bin>` or in config:
+
+```toml
+[workspace.metadata.cargo-fc]
+driver = "cargo-zigbuild"   # the cross-compile default; set "cargo" to opt out
+```
+
+`--driver` wins over the config, which wins over the automatic choice. Point it
+at any cargo wrapper (`cross`, `cargo-careful`, …), or set `cargo` to force plain
+cargo even when cross-compiling. If the selected driver is missing, cargo-fc
+warns with the install/override options before returning the spawn error.
 
 #### Installing missing Rust targets
 

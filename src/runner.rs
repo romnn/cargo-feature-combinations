@@ -65,6 +65,48 @@ fn force_color(cmd: &mut process::Command) {
     cmd.env("FORCE_COLOR", "1");
 }
 
+fn driver_label(driver: Option<&str>) -> &str {
+    driver.unwrap_or("cargo")
+}
+
+fn warn_missing_driver(driver: Option<&str>) {
+    match driver {
+        Some("cargo-zigbuild") => print_warning!(
+            "build driver `cargo-zigbuild` was not found; install cargo-zigbuild and zig to cross-compile, or set --driver <bin> / [workspace.metadata.cargo-fc].driver to another driver (use `cargo` to force plain Cargo)"
+        ),
+        Some(driver) => print_warning!(
+            "build driver `{driver}` was not found; install it, or set --driver <bin> / [workspace.metadata.cargo-fc].driver to another driver"
+        ),
+        None => print_warning!(
+            "could not find `cargo`; install Cargo or set the CARGO environment variable"
+        ),
+    }
+}
+
+fn spawn_cargo_command(
+    mut cmd: process::Command,
+    driver: Option<&str>,
+    capture_stdout: bool,
+) -> eyre::Result<process::Child> {
+    if capture_stdout {
+        cmd.stdout(process::Stdio::piped());
+    }
+    cmd.stderr(process::Stdio::piped());
+
+    match cmd.spawn() {
+        Ok(child) => Ok(child),
+        Err(err) => {
+            if err.kind() == io::ErrorKind::NotFound {
+                warn_missing_driver(driver);
+            }
+            Err(eyre::eyre!(
+                "failed to invoke build driver `{}`: {err}",
+                driver_label(driver),
+            ))
+        }
+    }
+}
+
 /// Target display context for a summary entry and command header.
 ///
 /// `Hidden` preserves implicit single-host output, `Single` prints
@@ -453,6 +495,7 @@ fn print_package_cmd(
     cargo_args: &[&str],
     all_args: &[&str],
     options: &Options,
+    driver: Option<&str>,
     progress: Progress,
     stdout: &mut StandardStream,
 ) {
@@ -508,7 +551,7 @@ fn print_package_cmd(
         inv.features.iter().join(", ")
     );
     if options.verbose {
-        print!(" [cargo {}]", all_args.join(" "));
+        print!(" [{} {}]", driver_label(driver), all_args.join(" "));
     }
     stdout.reset().ok();
     println!();
@@ -797,6 +840,8 @@ struct RunContext<'a> {
     missing_arguments: bool,
     use_diagnostics_only: bool,
     options: &'a Options,
+    /// Build driver to invoke instead of `$CARGO`/`cargo` (e.g. `cargo-zigbuild`).
+    driver: Option<&'a str>,
 }
 
 /// Result of [`run_single_combination`] for one feature combination.
@@ -817,8 +862,9 @@ struct FeatureSelectionNormalization<'a> {
 ///
 /// For known cargo subcommands, explicit feature-selection flags are removed
 /// because `cargo-fc` supplies `--no-default-features` and `--features=...`
-/// itself for each combination. For unknown aliases, the arguments are left
-/// unchanged because the alias may interpret those flags differently.
+/// itself for each combination. For unresolved aliases and custom subcommands,
+/// the arguments are left unchanged because they may interpret those flags
+/// differently.
 fn normalize_feature_selection_args(cargo_args: Vec<&str>) -> FeatureSelectionNormalization<'_> {
     fn feature_selection_span_length_at(args: &[&str], index: usize) -> Option<usize> {
         let arg = *args.get(index)?;
@@ -844,10 +890,10 @@ fn normalize_feature_selection_args(cargo_args: Vec<&str>) -> FeatureSelectionNo
 
     let subcommand = cargo_subcommand(&cargo_args);
     if subcommand == CargoSubcommand::Other {
-        // For unknown aliases like `cargo lint`, we cannot safely assume that
-        // `--all-features` or `--features` belong to Cargo itself. The alias may
-        // expand to some wrapper command with its own meaning for those flags, so
-        // the only correct behavior here is to leave the argv unchanged.
+        // For unresolved aliases and custom subcommands, we cannot safely
+        // assume that `--all-features` or `--features` belong to Cargo itself.
+        // They may have their own meaning for those flags, so the only correct
+        // behavior here is to leave the argv unchanged.
         let has_feature_selection_args = cargo_args.iter().enumerate().any(|(index, _arg)| {
             feature_selection_span_length_at(cargo_args.as_slice(), index).is_some()
         });
@@ -914,7 +960,10 @@ fn run_single_combination(
         )
     };
 
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let cargo: std::ffi::OsString = match ctx.driver {
+        Some(driver) => std::ffi::OsString::from(driver),
+        None => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
+    };
     let mut cmd = process::Command::new(&cargo);
     force_color(&mut cmd);
 
@@ -942,14 +991,18 @@ fn run_single_combination(
         args.push(&features_flag);
     }
     args.extend_from_slice(ctx.extra_args);
-    print_package_cmd(inv, ctx.cargo_args, &args, ctx.options, progress, stdout);
+    print_package_cmd(
+        inv,
+        ctx.cargo_args,
+        &args,
+        ctx.options,
+        ctx.driver,
+        progress,
+        stdout,
+    );
 
     cmd.args(&args).current_dir(working_dir);
-    if ctx.use_diagnostics_only {
-        cmd.stdout(process::Stdio::piped());
-    }
-    cmd.stderr(process::Stdio::piped());
-    let mut child = cmd.spawn()?;
+    let mut child = spawn_cargo_command(cmd, ctx.driver, ctx.use_diagnostics_only)?;
 
     let mut result = if ctx.use_diagnostics_only {
         crate::diagnostics_only::process_output(
@@ -1041,6 +1094,7 @@ pub fn run_cargo_command_for_target(
         cargo_args,
         options,
         TargetExecutionMode::SerialPerTarget,
+        None,
     )
 }
 
@@ -1071,6 +1125,7 @@ pub fn run_execution_plans(
     mut cargo_args: Vec<&str>,
     options: &Options,
     mode: TargetExecutionMode,
+    driver: Option<&str>,
 ) -> eyre::Result<ExitCode> {
     let start = Instant::now();
 
@@ -1100,7 +1155,7 @@ pub fn run_execution_plans(
         );
     } else if subcommand == CargoSubcommand::Other && has_feature_selection_args {
         print_warning!(
-            "leaving cargo feature-selection flags unchanged for unknown cargo alias/subcommand"
+            "leaving cargo feature-selection flags unchanged for unresolved cargo alias/custom subcommand"
         );
     }
 
@@ -1120,6 +1175,7 @@ pub fn run_execution_plans(
         missing_arguments,
         use_diagnostics_only,
         options,
+        driver,
     };
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);

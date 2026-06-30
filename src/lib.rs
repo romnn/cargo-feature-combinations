@@ -4,6 +4,8 @@
 //! The main entry point for consumers is [`run`], which parses CLI arguments
 //! and dispatches the requested command.
 
+/// Resolve cargo command aliases from the `.cargo/config.toml` hierarchy.
+mod cargo_alias;
 /// Evaluate Cargo-style `cfg(...)` expressions against a concrete target.
 pub mod cfg_eval;
 /// CLI argument parsing, options, and help text.
@@ -96,8 +98,8 @@ pub(crate) use print_note;
 
 /// Whether to warn when the cargo subcommand is not one of the known commands
 /// (`build`, `test`, `run`, `check`, `doc`, `clippy`). Disabled by default
-/// because cargo aliases (e.g. `cargo lint`) are common and the tool handles
-/// unknown subcommands gracefully via best-effort output parsing.
+/// because cargo aliases and custom subcommands are common and the tool handles
+/// unresolved commands gracefully via best-effort output parsing.
 const WARN_UNKNOWN_SUBCOMMAND: bool = false;
 
 /// Expands to the default metadata key literal.
@@ -206,8 +208,13 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         .map(|(package, config)| target_plan::SelectedPackage { package, config })
         .collect();
 
-    // Preserve the original String args for `--target` detection.
-    let cargo_args_owned = cargo_args;
+    let raw_subcommand_token = cli::cargo_subcommand_token(&cargo_args);
+    // Resolve cargo command aliases (e.g. `lint` → `clippy --all-targets --no-deps`) so the
+    // underlying built-in subcommand is visible to the target-capability registry and the build
+    // driver. Keep the resolved String args for `--target` detection.
+    let cargo_args_owned =
+        cargo_alias::expand_aliases(cargo_args, metadata.workspace_root.as_std_path());
+    let resolved_subcommand_token = cli::cargo_subcommand_token(&cargo_args_owned);
     let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
 
     // Parse an explicit `--target` only before `--`.
@@ -216,8 +223,14 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     // Echo the user's own metadata alias in capability hints/warnings.
     let ws_key = find_metadata_value(&metadata.workspace_metadata)
         .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
-    let capability_allowed =
-        resolve_capability_and_warn(&options, &cargo_args, &ws_config, ws_key, &selected);
+    let capability_allowed = resolve_capability_and_warn(
+        &options,
+        raw_subcommand_token.as_deref(),
+        resolved_subcommand_token.as_deref(),
+        &ws_config,
+        ws_key,
+        &selected,
+    );
 
     let env = RustcTargetEnvironment;
     let mut evaluator = RustcCfgEvaluator::default();
@@ -242,16 +255,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 options.packages_only,
                 &mut evaluator,
             )?;
-            if options.install_missing_targets {
-                print_note!(
-                    "--install-missing-targets has no effect for matrix output; matrix only prints planned targets"
-                );
-            }
-            if options.aggregate_targets {
-                print_note!(
-                    "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
-                );
-            }
+            note_matrix_noop_flags(&options);
             let matrix_opts = runner::MatrixOptions {
                 pretty,
                 packages_only: options.packages_only,
@@ -271,7 +275,8 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 runner::build_execution_plans(&target_plans, &options, false, &mut evaluator)?;
             maybe_install_missing_targets(&options, &ws_config, &plan_set, &env, &cargo_args)?;
             let mode = resolve_execution_mode(&options, &cargo_args, &plan_set);
-            runner::run_execution_plans(&plan_set, cargo_args, &options, mode)
+            let driver = resolve_driver(&options, &ws_config, &plan_set, &env)?;
+            runner::run_execution_plans(&plan_set, cargo_args, &options, mode, driver.as_deref())
         }
     };
 
@@ -352,7 +357,8 @@ fn maybe_install_missing_targets(
 /// targets after capability filtering.
 fn resolve_capability_and_warn(
     options: &Options,
-    cargo_args: &[&str],
+    raw_token: Option<&str>,
+    resolved_token: Option<&str>,
     ws_config: &config::WorkspaceConfig,
     ws_key: &str,
     selected: &[target_plan::SelectedPackage<'_>],
@@ -369,8 +375,15 @@ fn resolve_capability_and_warn(
         return true;
     }
 
-    let token = cli::cargo_subcommand_token(cargo_args);
-    let policy = cli::configured_target_policy(token.as_deref(), &ws_config.subcommand_overrides);
+    let raw_policy = cli::configured_target_policy(raw_token, &ws_config.subcommand_overrides);
+    let (policy, warning_token) = if raw_policy.explicit {
+        (raw_policy, raw_token)
+    } else {
+        (
+            cli::configured_target_policy(resolved_token, &ws_config.subcommand_overrides),
+            raw_token.or(resolved_token),
+        )
+    };
     if policy.enabled {
         return true;
     }
@@ -386,7 +399,7 @@ fn resolve_capability_and_warn(
         });
     if has_raw_configured_targets
         && !policy.explicit
-        && let Some(token) = token.as_deref().filter(|t| !t.is_empty())
+        && let Some(token) = warning_token.filter(|t| !t.is_empty())
     {
         print_warning!(
             "not passing configured targets to cargo command `{token}` because it has no targets capability"
@@ -398,6 +411,83 @@ fn resolve_capability_and_warn(
     }
 
     false
+}
+
+/// Emit one note per run-only flag that has no effect on `cargo fc matrix`
+/// output, so the silent no-op is visible to the user.
+fn note_matrix_noop_flags(options: &Options) {
+    if options.install_missing_targets {
+        print_note!(
+            "--install-missing-targets has no effect for matrix output; matrix only prints planned targets"
+        );
+    }
+    if options.aggregate_targets {
+        print_note!(
+            "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
+        );
+    }
+    if options.driver.is_some() {
+        print_note!("--driver has no effect for matrix output; matrix only prints planned targets");
+    }
+}
+
+/// Resolve the build driver used to spawn each combination.
+///
+/// An explicit `--driver` or `[workspace.metadata.cargo-fc].driver` always wins.
+/// Otherwise cargo-fc defaults to `cargo-zigbuild` when any non-host target is
+/// planned — so crates with native-C build dependencies cross-compile via zig —
+/// and to plain `cargo` (`None`, i.e. `$CARGO`) for host-only runs. Users who
+/// want a different wrapper, or plain `cargo` even when cross-compiling, set
+/// `driver` explicitly.
+fn resolve_driver(
+    options: &Options,
+    ws_config: &config::WorkspaceConfig,
+    plan_set: &runner::ExecutionPlanSet,
+    env: &impl target::TargetEnvironment,
+) -> eyre::Result<Option<String>> {
+    if let Some(driver) = &options.driver {
+        return normalize_driver(driver, "--driver");
+    }
+    if let Some(driver) = &ws_config.driver {
+        return normalize_driver(driver, "[workspace.metadata.cargo-fc].driver");
+    }
+    if plan_set.plans.is_empty() {
+        return Ok(None);
+    }
+    // Detecting the host is only needed to decide whether any planned target is a
+    // cross target. If that fails, fall back to plain `cargo` (the conservative
+    // default) instead of aborting the whole run, mirroring how missing-target
+    // installation degrades on the same failure.
+    let host = match env.host_target() {
+        Ok(host) => host,
+        Err(err) => {
+            print_warning!(
+                "could not detect host target to select a build driver: {err}; using plain cargo"
+            );
+            return Ok(None);
+        }
+    };
+    let cross = plan_set.plans.iter().any(|plan| plan.target != host);
+    if cross {
+        Ok(Some("cargo-zigbuild".to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn normalize_driver(driver: &str, source: &str) -> eyre::Result<Option<String>> {
+    let driver = driver.trim();
+    if driver.is_empty() {
+        eyre::bail!("{source} must not be empty");
+    }
+    // `driver = "cargo"` selects plain Cargo; resolve it to `None` so the spawn
+    // still honors `$CARGO` (e.g. a rustup or CI override), matching the default
+    // host-only path rather than forcing the literal `cargo` on `PATH`.
+    if driver == "cargo" {
+        Ok(None)
+    } else {
+        Ok(Some(driver.to_string()))
+    }
 }
 
 /// Resolve the effective target execution mode, emitting a note when an
@@ -457,6 +547,96 @@ mod test {
             show_pruned,
             show_target: targets.len() > 1,
         }
+    }
+
+    struct DriverTestEnv {
+        host: Option<&'static str>,
+    }
+
+    impl target::TargetEnvironment for DriverTestEnv {
+        fn cargo_build_target(&self) -> Option<String> {
+            None
+        }
+
+        fn host_target(&self) -> eyre::Result<target::TargetTriple> {
+            let Some(host) = self.host else {
+                eyre::bail!("host failed");
+            };
+            Ok(target::TargetTriple(host.to_string()))
+        }
+    }
+
+    #[test]
+    fn resolve_driver_defaults_to_plain_cargo_for_host_only_plan() -> eyre::Result<()> {
+        let driver = resolve_driver(
+            &Options::default(),
+            &config::WorkspaceConfig::default(),
+            &execution_plan_set(&["host"], false),
+            &DriverTestEnv { host: Some("host") },
+        )?;
+
+        assert_eq!(driver, None);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_driver_defaults_to_zigbuild_for_cross_plan() -> eyre::Result<()> {
+        let driver = resolve_driver(
+            &Options::default(),
+            &config::WorkspaceConfig::default(),
+            &execution_plan_set(&["host", "wasm"], false),
+            &DriverTestEnv { host: Some("host") },
+        )?;
+
+        assert_eq!(driver, Some("cargo-zigbuild".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_driver_treats_explicit_cargo_as_plain_cargo() -> eyre::Result<()> {
+        let options = Options {
+            driver: Some("cargo".to_string()),
+            ..Options::default()
+        };
+        let driver = resolve_driver(
+            &options,
+            &config::WorkspaceConfig::default(),
+            &execution_plan_set(&["host", "wasm"], false),
+            &DriverTestEnv { host: Some("host") },
+        )?;
+
+        assert_eq!(driver, None);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_driver_uses_explicit_custom_driver() -> eyre::Result<()> {
+        let options = Options {
+            driver: Some("cross".to_string()),
+            ..Options::default()
+        };
+        let driver = resolve_driver(
+            &options,
+            &config::WorkspaceConfig::default(),
+            &execution_plan_set(&["host"], false),
+            &DriverTestEnv { host: Some("host") },
+        )?;
+
+        assert_eq!(driver, Some("cross".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_driver_falls_back_to_plain_cargo_when_host_detection_fails() -> eyre::Result<()> {
+        let driver = resolve_driver(
+            &Options::default(),
+            &config::WorkspaceConfig::default(),
+            &execution_plan_set(&["wasm"], false),
+            &DriverTestEnv { host: None },
+        )?;
+
+        assert_eq!(driver, None);
+        Ok(())
     }
 
     #[test]
@@ -526,7 +706,8 @@ mod test {
         // when `--no-targets` is set.
         assert!(!resolve_capability_and_warn(
             &options,
-            &["check"],
+            Some("check"),
+            Some("check"),
             &ws,
             DEFAULT_METADATA_KEY,
             &[]
@@ -539,7 +720,8 @@ mod test {
         let ws = config::WorkspaceConfig::default();
         assert!(resolve_capability_and_warn(
             &options,
-            &["check"],
+            Some("check"),
+            Some("check"),
             &ws,
             DEFAULT_METADATA_KEY,
             &[]
@@ -557,7 +739,61 @@ mod test {
 
         assert!(!resolve_capability_and_warn(
             &options,
-            &["build"],
+            Some("build"),
+            Some("build"),
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn resolved_alias_inherits_builtin_capability_by_default() {
+        let options = Options::default();
+        let ws = config::WorkspaceConfig::default();
+
+        assert!(resolve_capability_and_warn(
+            &options,
+            Some("lint"),
+            Some("clippy"),
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn explicit_alias_policy_wins_over_resolved_builtin_policy() {
+        let options = Options::default();
+        let mut ws = config::WorkspaceConfig::default();
+        ws.subcommand_overrides.insert(
+            "lint".to_string(),
+            config::CommandTargetCapability { targets: false },
+        );
+
+        assert!(!resolve_capability_and_warn(
+            &options,
+            Some("lint"),
+            Some("clippy"),
+            &ws,
+            DEFAULT_METADATA_KEY,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn explicit_alias_policy_can_enable_unresolved_expanded_command() {
+        let options = Options::default();
+        let mut ws = config::WorkspaceConfig::default();
+        ws.subcommand_overrides.insert(
+            "lint".to_string(),
+            config::CommandTargetCapability { targets: true },
+        );
+
+        assert!(resolve_capability_and_warn(
+            &options,
+            Some("lint"),
+            Some("custom-wrapper"),
             &ws,
             DEFAULT_METADATA_KEY,
             &[]
@@ -572,10 +808,10 @@ mod test {
             ..Options::default()
         };
         let ws = config::WorkspaceConfig::default();
-        let empty: [&str; 0] = [];
         assert!(!resolve_capability_and_warn(
             &options,
-            &empty,
+            None,
+            None,
             &ws,
             DEFAULT_METADATA_KEY,
             &[]

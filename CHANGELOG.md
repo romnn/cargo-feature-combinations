@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.1]
+
+### Added
+
+- Added automatic `cargo-zigbuild` driver selection for planned non-host targets
+  so cross-compiling crates with native C dependencies can work through the same
+  `cargo fc` invocation.
+- Added `--driver <bin>` and `[workspace.metadata.cargo-fc] driver = "<bin>"`
+  to override the build driver, including forcing plain Cargo with
+  `driver = "cargo"`.
+- Added Cargo alias resolution from `.cargo/config.toml`, including nested
+  aliases, so aliases such as `lint = "clippy --all-targets --no-deps"` are
+  rewritten before invoking wrappers like `cargo-zigbuild`.
+
+### Changed
+
+- Missing build drivers now produce an actionable warning explaining how to
+  install `cargo-zigbuild`/zig or override the driver.
+
 ## [0.1.0]
 
 ### Breaking Changes

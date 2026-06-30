@@ -16,6 +16,7 @@ const WORKSPACE_ONLY_KEYS: &[&str] = &[
     "install_missing_targets",
     "target",
     "subcommands",
+    "driver",
 ];
 
 /// Abstraction over a Cargo workspace used by this crate.

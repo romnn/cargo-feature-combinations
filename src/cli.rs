@@ -95,6 +95,15 @@ pub struct Options {
     /// target triples, skips the host target, and invokes `rustup target add`
     /// once for targets that are not installed yet.
     pub install_missing_targets: bool,
+    /// Build driver to invoke in place of `cargo` for each combination.
+    ///
+    /// Set by `--driver <bin>`. Overrides both the `[workspace.metadata.cargo-fc]
+    /// .driver` config and cargo-fc's automatic driver selection. When unset,
+    /// cargo-fc uses plain `cargo` for host-only runs and defaults to
+    /// `cargo-zigbuild` when any non-host target is planned (so native-C deps
+    /// cross-compile). Set it to `cargo` to force plain cargo, or to any other
+    /// cargo wrapper (`cross`, `cargo-careful`, …).
+    pub driver: Option<String>,
 }
 
 /// Helper trait to provide simple argument parsing over `Vec<String>`.
@@ -183,6 +192,15 @@ fn subcommand_from_token(arg: &str) -> CargoSubcommand {
 /// Returns `None` when no subcommand token is present (e.g. an unknown leading
 /// flag or an early `--`).
 pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String> {
+    subcommand_token_index(args)
+        .and_then(|idx| args.get(idx))
+        .map(|arg| arg.as_ref().to_string())
+}
+
+/// Index of the subcommand token in `args`, using the same skip rules as
+/// [`cargo_subcommand_token`]. Used by alias expansion to replace the token in
+/// place.
+pub(crate) fn subcommand_token_index(args: &[impl AsRef<str>]) -> Option<usize> {
     fn is_no_value_flag(arg: &str) -> bool {
         matches!(
             arg,
@@ -212,7 +230,7 @@ pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String>
     }
 
     let mut skip_next = false;
-    for arg in args.iter().map(AsRef::as_ref) {
+    for (idx, arg) in args.iter().map(AsRef::as_ref).enumerate() {
         if skip_next {
             skip_next = false;
             continue;
@@ -242,7 +260,7 @@ pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String>
             return None;
         }
 
-        return Some(arg.to_string());
+        return Some(idx);
     }
 
     None
@@ -295,10 +313,12 @@ pub(crate) struct ConfiguredTargetPolicy {
 /// Whether the selected command may expand configured target lists and have
 /// `--target <triple>` injected.
 ///
-/// Built-in commands default to `targets = true`; unknown aliases default to
-/// `targets = false`. Workspace `subcommands.<token>.targets` overrides either
-/// default. For built-in short aliases, an exact alias entry wins; otherwise the
-/// long command's entry applies.
+/// Built-in commands default to `targets = true`; unresolved aliases and custom
+/// subcommands default to `targets = false`.
+///
+/// Workspace `subcommands.<token>.targets` overrides either default. For
+/// built-in short aliases, an exact alias entry wins; otherwise the long
+/// command's entry applies.
 #[must_use]
 pub(crate) fn configured_target_policy(
     token: Option<&str>,
@@ -382,6 +402,13 @@ OPTIONS:
                             Install missing Rust target components with rustup
                             before running Cargo. Explicit opt-in because this
                             may mutate the toolchain and use the network.
+    --driver <bin>          Program invoked in place of `cargo` for each build
+                            (e.g. `cargo-zigbuild`, `cross`). Defaults to plain
+                            `cargo` for host-only runs and to `cargo-zigbuild`
+                            when any non-host target is planned, so native-C
+                            dependencies cross-compile. Also settable via
+                            [workspace.metadata.cargo-fc].driver; pass `cargo` to
+                            force plain cargo.
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -525,6 +552,10 @@ pub(crate) fn print_help() {
 ///
 /// Returns an error if the manifest path passed via `--manifest-path` does
 /// not exist or can not be canonicalized.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear CLI argument parser; splitting it into fragments hurts readability more than its length"
+)]
 pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     let mut args: Vec<String> = std::env::args_os()
         // Skip executable name
@@ -567,6 +598,10 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
 
     for (span, package) in args.get_all("--exclude-package", true) {
         options.exclude_packages.insert(package.trim().to_string());
+        args.drain(span);
+    }
+    for (span, driver) in args.get_all("--driver", true) {
+        options.driver = Some(driver);
         args.drain(span);
     }
 

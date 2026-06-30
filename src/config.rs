@@ -207,10 +207,20 @@ pub struct WorkspaceConfig {
     /// Per-subcommand configured-target policy.
     ///
     /// Built-in Cargo subcommands default to their code-provided capability.
-    /// Unknown aliases (e.g. `lint`) default to denied. Entries in this table
-    /// override either default with `targets = true` or `targets = false`.
+    /// Unresolved aliases and custom subcommands default to denied. Entries in
+    /// this table override either default with `targets = true` or
+    /// `targets = false`.
     #[serde(default, rename = "subcommands")]
     pub subcommand_overrides: BTreeMap<String, CommandTargetCapability>,
+    /// Build driver to invoke in place of `cargo` for each combination.
+    ///
+    /// When unset, cargo-fc uses plain `cargo` for host-only runs and defaults
+    /// to `cargo-zigbuild` when any non-host target is planned (so native-C
+    /// dependencies cross-compile via zig). Set it to a wrapper such as
+    /// `cargo-zigbuild`, `cross`, or back to `cargo` to force plain cargo. The
+    /// `--driver` CLI flag overrides this.
+    #[serde(default)]
+    pub driver: Option<String>,
 }
 
 /// Target-specific workspace override.
@@ -226,9 +236,10 @@ pub struct WorkspaceTargetOverride {
 
 /// Workspace-level configured-target policy for a single command token.
 ///
-/// A plain `bool` is enough in v1. Unknown aliases default to deny, while
-/// built-ins default according to cargo-fc's registry. A present
-/// `targets = false` entry is therefore an explicit command-level opt-out.
+/// A plain `bool` is enough in v1. Unresolved aliases and custom subcommands
+/// default to deny, while built-ins default according to cargo-fc's registry.
+/// A present `targets = false` entry is therefore an explicit command-level
+/// opt-out.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct CommandTargetCapability {
     /// When `true`, cargo-fc may expand configured target lists and inject
