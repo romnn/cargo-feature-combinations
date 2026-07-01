@@ -12,7 +12,10 @@
 //! for one already-selected target.
 
 use crate::cfg_eval::CfgEvaluator;
-use crate::config::{Config, WorkspaceConfig, WorkspaceTargetOverride};
+use crate::config::patch::combine_string_set_patches;
+use crate::config::{
+    CommandCapabilities, Config, FlagConfig, WorkspaceConfig, WorkspaceTargetOverride,
+};
 use crate::target::{EffectiveTarget, TargetEnvironment, TargetSource, TargetTriple};
 use color_eyre::eyre::{self, WrapErr};
 use std::collections::{BTreeMap, HashSet};
@@ -27,6 +30,11 @@ pub struct SelectedPackage<'a> {
     pub package: &'a cargo_metadata::Package,
     /// The cached base cargo-fc config for this package.
     pub config: &'a Config,
+    /// Whether configured target lists should be ignored for this package.
+    pub ignore_configured_targets: bool,
+    /// Whether the target-selection decision came from an explicit cargo-fc
+    /// flag or subcommand override rather than the built-in command default.
+    pub target_decision_explicit: bool,
 }
 
 /// A package assigned to one concrete target.
@@ -37,12 +45,19 @@ pub struct PlannedPackage<'a> {
     pub config: &'a Config,
     /// The concrete target and where it came from.
     pub target: EffectiveTarget,
+    /// Whether surviving output for this package-target should show target
+    /// attribution.
+    pub show_target: bool,
 }
 
 /// All package assignments for one concrete target triple.
 pub struct TargetPlan<'a> {
     /// The concrete target triple this plan is for.
     pub target: TargetTriple,
+    /// Workspace flags from matching workspace target overrides.
+    pub workspace_target_flags: FlagConfig,
+    /// Workspace subcommand overrides from matching workspace target overrides.
+    pub workspace_target_subcommands: BTreeMap<String, CommandCapabilities>,
     /// The package assignments for this target, in selected-package order.
     pub packages: Vec<PlannedPackage<'a>>,
 }
@@ -57,9 +72,9 @@ pub struct TargetPlans<'a> {
     /// host/`CARGO_BUILD_TARGET` single-target fallback).
     ///
     /// Includes the package `targets = []` opt-out, even if the resulting
-    /// concrete source is `Host`/`CargoBuildTargetEnv`. Its only consumer is
-    /// output formatting: it gates whether per-entry summaries show the
-    /// `target = ...` column.
+    /// concrete source is `Host`/`CargoBuildTargetEnv`. Execution-plan output
+    /// display is decided from surviving [`PlannedPackage::show_target`]
+    /// values, after package-target filters run.
     pub contains_configured_assignments: bool,
 }
 
@@ -103,11 +118,29 @@ fn resolve_fallback(
     Ok(target)
 }
 
+fn fallback_assignment(
+    env: &impl TargetEnvironment,
+    cache: &mut Option<EffectiveTarget>,
+    show_target: bool,
+) -> eyre::Result<PackageTargetAssignment> {
+    Ok(PackageTargetAssignment {
+        target: resolve_fallback(env, cache)?,
+        show_target,
+    })
+}
+
 /// Per-package resolved effective target list.
 struct PackageTargets<'a> {
     package: &'a cargo_metadata::Package,
     config: &'a Config,
-    targets: Vec<EffectiveTarget>,
+    targets: Vec<PackageTargetAssignment>,
+}
+
+/// One selected target for one package before workspace exclusions run.
+#[derive(Clone)]
+struct PackageTargetAssignment {
+    target: EffectiveTarget,
+    show_target: bool,
 }
 
 /// Resolve one selected package's effective target list using the configured
@@ -117,7 +150,11 @@ fn package_target_list(
     workspace_targets: &[TargetTriple],
     env: &impl TargetEnvironment,
     fallback_cache: &mut Option<EffectiveTarget>,
-) -> eyre::Result<Vec<EffectiveTarget>> {
+) -> eyre::Result<Vec<PackageTargetAssignment>> {
+    if selected.ignore_configured_targets {
+        return Ok(vec![fallback_assignment(env, fallback_cache, false)?]);
+    }
+
     match &selected.config.package_targets {
         // Package-level list present.
         Some(list) if !list.is_empty() => {
@@ -128,14 +165,18 @@ fn package_target_list(
                     triple,
                     source: TargetSource::PackageConfig,
                 })
+                .map(|target| PackageTargetAssignment {
+                    target,
+                    show_target: true,
+                })
                 .collect())
         }
         // Package-level opt-out (`targets = []`): use the fallback single target.
-        Some(_) => Ok(vec![resolve_fallback(env, fallback_cache)?]),
+        Some(_) => Ok(vec![fallback_assignment(env, fallback_cache, true)?]),
         // No package-level list: inherit workspace targets, else fallback.
         None => {
             if workspace_targets.is_empty() {
-                Ok(vec![resolve_fallback(env, fallback_cache)?])
+                Ok(vec![fallback_assignment(env, fallback_cache, false)?])
             } else {
                 Ok(workspace_targets
                     .iter()
@@ -143,28 +184,125 @@ fn package_target_list(
                         triple: triple.clone(),
                         source: TargetSource::WorkspaceConfig,
                     })
+                    .map(|target| PackageTargetAssignment {
+                        target,
+                        show_target: true,
+                    })
                     .collect())
             }
         }
     }
 }
 
-/// Resolve the effective workspace `exclude_packages` set for one target.
-///
-/// Starts from the base (target-independent) exclude set and applies matching
-/// workspace `target.'cfg(...)'` `exclude_packages` patches deterministically
-/// (cfg key order). Uses the same patch semantics as package target overrides.
-fn resolve_target_excludes(
+fn cli_package_targets<'a>(
+    selected: &[SelectedPackage<'a>],
+    cli: &str,
+) -> eyre::Result<Vec<PackageTargets<'a>>> {
+    let triple = cli.trim();
+    if triple.is_empty() {
+        eyre::bail!("empty `--target` value");
+    }
+    let cli_target = EffectiveTarget {
+        triple: TargetTriple(triple.to_string()),
+        source: TargetSource::Cli,
+    };
+    let cli_assignment = PackageTargetAssignment {
+        target: cli_target,
+        show_target: true,
+    };
+    Ok(selected
+        .iter()
+        .map(|s| PackageTargets {
+            package: s.package,
+            config: s.config,
+            targets: vec![cli_assignment.clone()],
+        })
+        .collect())
+}
+
+fn configured_package_targets<'a>(
+    selected: &[SelectedPackage<'a>],
+    workspace_targets: &[TargetTriple],
+    env: &impl TargetEnvironment,
+    fallback_cache: &mut Option<EffectiveTarget>,
+) -> eyre::Result<Vec<PackageTargets<'a>>> {
+    let mut out = Vec::with_capacity(selected.len());
+    for s in selected {
+        let targets = package_target_list(s, workspace_targets, env, fallback_cache)?;
+        out.push(PackageTargets {
+            package: s.package,
+            config: s.config,
+            targets,
+        });
+    }
+    Ok(out)
+}
+
+fn fallback_package_targets<'a>(
+    selected: &[SelectedPackage<'a>],
+    env: &impl TargetEnvironment,
+    fallback_cache: &mut Option<EffectiveTarget>,
+) -> eyre::Result<Vec<PackageTargets<'a>>> {
+    let fallback = resolve_fallback(env, fallback_cache)?;
+    let fallback_assignment = PackageTargetAssignment {
+        target: fallback,
+        show_target: false,
+    };
+    Ok(selected
+        .iter()
+        .map(|s| PackageTargets {
+            package: s.package,
+            config: s.config,
+            targets: vec![fallback_assignment.clone()],
+        })
+        .collect())
+}
+
+fn target_order(
+    workspace_targets: &[TargetTriple],
+    package_targets: &[PackageTargets<'_>],
+) -> Vec<TargetTriple> {
+    let mut order = Vec::new();
+    let mut seen = HashSet::new();
+    let used: HashSet<TargetTriple> = package_targets
+        .iter()
+        .flat_map(|pt| {
+            pt.targets
+                .iter()
+                .map(|assignment| assignment.target.triple.clone())
+        })
+        .collect();
+
+    for triple in workspace_targets {
+        if used.contains(triple) && seen.insert(triple.clone()) {
+            order.push(triple.clone());
+        }
+    }
+    for pt in package_targets {
+        for assignment in &pt.targets {
+            if seen.insert(assignment.target.triple.clone()) {
+                order.push(assignment.target.triple.clone());
+            }
+        }
+    }
+
+    order
+}
+
+/// Resolve the effective workspace target override state for one target.
+struct WorkspaceTargetConfig {
+    exclude_packages: HashSet<String>,
+    flags: FlagConfig,
+    subcommands: BTreeMap<String, CommandCapabilities>,
+}
+
+fn resolve_workspace_target_config(
     base: &HashSet<String>,
     overrides: &BTreeMap<String, WorkspaceTargetOverride>,
     triple: &TargetTriple,
     evaluator: &mut impl CfgEvaluator,
-) -> eyre::Result<HashSet<String>> {
-    let mut any = false;
-    let mut override_value: Option<HashSet<String>> = None;
-    let mut add: HashSet<String> = HashSet::new();
-    let mut remove: HashSet<String> = HashSet::new();
-
+) -> eyre::Result<WorkspaceTargetConfig> {
+    let mut matched = Vec::new();
     for (expr, ov) in overrides {
         let is_match = evaluator
             .matches(expr, triple)
@@ -172,38 +310,32 @@ fn resolve_target_excludes(
         if !is_match {
             continue;
         }
-        let Some(patch) = &ov.exclude_packages else {
-            continue;
-        };
-        any = true;
-
-        if let Some(ovv) = patch.override_value() {
-            match &override_value {
-                None => override_value = Some(ovv.clone()),
-                Some(existing) => {
-                    if existing != ovv {
-                        eyre::bail!(
-                            "conflicting overrides for `exclude_packages` from workspace target override `{expr}`"
-                        );
-                    }
-                }
-            }
-        }
-        add.extend(patch.add_values().iter().cloned());
-        remove.extend(patch.remove_values().iter().cloned());
+        matched.push((expr.as_str(), ov));
     }
 
-    if !any {
-        return Ok(base.clone());
-    }
+    let exclude_packages = combine_string_set_patches(
+        "exclude_packages",
+        "workspace target override",
+        matched
+            .iter()
+            .filter_map(|(expr, ov)| ov.exclude_packages.as_ref().map(|patch| (*expr, patch))),
+    )?
+    .map_or_else(|| base.clone(), |ops| ops.apply_to(base));
 
-    // Order: start from override (or base), then remove, then add (add wins).
-    let mut out = override_value.unwrap_or_else(|| base.clone());
-    for r in &remove {
-        out.remove(r);
-    }
-    out.extend(add);
-    Ok(out)
+    Ok(WorkspaceTargetConfig {
+        exclude_packages,
+        flags: crate::config::combine_flag_configs(
+            None,
+            "workspace target override",
+            matched.iter().map(|(expr, ov)| (*expr, ov.flags)),
+        )?,
+        subcommands: crate::config::combine_command_capability_maps(
+            "workspace target override",
+            matched
+                .iter()
+                .map(|(expr, ov)| (*expr, &ov.subcommand_overrides)),
+        )?,
+    })
 }
 
 /// Build the target plans for an invocation.
@@ -218,7 +350,7 @@ fn resolve_target_excludes(
 ///
 /// Returns an error if a target list contains an empty triple, if workspace
 /// target overrides conflict, or if cfg evaluation fails.
-#[allow(
+#[expect(
     clippy::implicit_hasher,
     reason = "callers always pass the std default-hasher HashSet from base_workspace_exclude_packages"
 )]
@@ -231,6 +363,13 @@ pub fn build_target_plans<'a>(
     env: &impl TargetEnvironment,
     evaluator: &mut impl CfgEvaluator,
 ) -> eyre::Result<TargetPlans<'a>> {
+    if selected.is_empty() {
+        return Ok(TargetPlans {
+            plans: Vec::new(),
+            contains_configured_assignments: false,
+        });
+    }
+
     let mut fallback_cache: Option<EffectiveTarget> = None;
     let workspace_targets = if cli_target.is_none() && capability_allowed {
         normalize_targets(&workspace_config.workspace_targets)?
@@ -238,85 +377,33 @@ pub fn build_target_plans<'a>(
         Vec::new()
     };
 
-    let contains_configured_assignments = if cli_target.is_some() {
-        true
+    let package_targets = if let Some(cli) = cli_target {
+        // Explicit `--target` wins globally. Cargo already received the flag
+        // from the user, so the source is `Cli` (no injection).
+        cli_package_targets(selected, cli)?
     } else if capability_allowed {
-        !workspace_targets.is_empty() || selected.iter().any(|s| s.config.package_targets.is_some())
-    } else {
-        false
-    };
-
-    // Resolve each selected package's effective target list.
-    let package_targets: Vec<PackageTargets<'a>> = if let Some(cli) = cli_target {
-        // Explicit `--target` wins globally: every package runs the single CLI
-        // target and all configured lists are ignored. Cargo already received
-        // the flag from the user, so the source is `Cli` (no injection).
-        let triple = cli.trim();
-        if triple.is_empty() {
-            eyre::bail!("empty `--target` value");
-        }
-        let cli_target = EffectiveTarget {
-            triple: TargetTriple(triple.to_string()),
-            source: TargetSource::Cli,
-        };
-        selected
-            .iter()
-            .map(|s| PackageTargets {
-                package: s.package,
-                config: s.config,
-                targets: vec![cli_target.clone()],
-            })
-            .collect()
-    } else if capability_allowed {
-        let mut out = Vec::with_capacity(selected.len());
-        for s in selected {
-            let targets = package_target_list(s, &workspace_targets, env, &mut fallback_cache)?;
-            out.push(PackageTargets {
-                package: s.package,
-                config: s.config,
-                targets,
-            });
-        }
-        out
+        configured_package_targets(selected, &workspace_targets, env, &mut fallback_cache)?
     } else {
         // Capability denied: ignore configured lists, use the fallback single
         // target for every package.
-        let fallback = resolve_fallback(env, &mut fallback_cache)?;
-        selected
-            .iter()
-            .map(|s| PackageTargets {
-                package: s.package,
-                config: s.config,
-                targets: vec![fallback.clone()],
-            })
-            .collect()
+        fallback_package_targets(selected, env, &mut fallback_cache)?
     };
+    let contains_configured_assignments = package_targets
+        .iter()
+        .flat_map(|pt| &pt.targets)
+        .any(|assignment| assignment.show_target);
 
     // Build the global target order: workspace target order first, then
     // package-only targets in selected-package order, then the fallback target
     // (which appears via the packages that use it).
-    let mut order: Vec<TargetTriple> = Vec::new();
-    let mut seen: HashSet<TargetTriple> = HashSet::new();
-
-    for triple in workspace_targets {
-        if seen.insert(triple.clone()) {
-            order.push(triple);
-        }
-    }
-    for pt in &package_targets {
-        for et in &pt.targets {
-            if seen.insert(et.triple.clone()) {
-                order.push(et.triple.clone());
-            }
-        }
-    }
+    let order = target_order(&workspace_targets, &package_targets);
 
     // For each target in order, attach packages whose effective list contains
     // it (preserving each package's source), apply the effective workspace
     // exclude set for that target, and drop empty plans.
     let mut plans = Vec::new();
     for triple in &order {
-        let exclude = resolve_target_excludes(
+        let workspace_target_config = resolve_workspace_target_config(
             base_exclude,
             &workspace_config.target_overrides,
             triple,
@@ -324,20 +411,30 @@ pub fn build_target_plans<'a>(
         )?;
         let mut packages = Vec::new();
         for pt in &package_targets {
-            if exclude.contains(pt.package.name.as_str()) {
+            if workspace_target_config
+                .exclude_packages
+                .contains(pt.package.name.as_str())
+            {
                 continue;
             }
-            if let Some(et) = pt.targets.iter().find(|et| &et.triple == triple) {
+            if let Some(assignment) = pt
+                .targets
+                .iter()
+                .find(|assignment| &assignment.target.triple == triple)
+            {
                 packages.push(PlannedPackage {
                     package: pt.package,
                     config: pt.config,
-                    target: et.clone(),
+                    target: assignment.target.clone(),
+                    show_target: assignment.show_target,
                 });
             }
         }
         if !packages.is_empty() {
             plans.push(TargetPlan {
                 target: triple.clone(),
+                workspace_target_flags: workspace_target_config.flags,
+                workspace_target_subcommands: workspace_target_config.subcommands,
                 packages,
             });
         }
@@ -354,7 +451,10 @@ mod test {
     use super::{SelectedPackage, build_target_plans};
     use crate::cfg_eval::CfgEvaluator;
     use crate::config::patch::StringSetPatch;
-    use crate::config::{Config, WorkspaceConfig, WorkspaceTargetOverride};
+    use crate::config::{
+        CommandCapabilities, Config, FlagConfig, WorkspaceConfig, WorkspaceTargetOverride,
+    };
+    use crate::package::test::package;
     use crate::target::{TargetEnvironment, TargetSource, TargetTriple};
     use color_eyre::eyre;
     use std::collections::{BTreeMap, HashSet};
@@ -382,6 +482,17 @@ mod test {
         }
     }
 
+    struct FailIfUsedEnv;
+
+    impl TargetEnvironment for FailIfUsedEnv {
+        fn cargo_build_target(&self) -> Option<String> {
+            panic!("empty selection should not read CARGO_BUILD_TARGET");
+        }
+        fn host_target(&self) -> eyre::Result<TargetTriple> {
+            panic!("empty selection should not resolve the host target");
+        }
+    }
+
     #[derive(Default)]
     struct StubEval {
         matches: HashSet<String>,
@@ -390,6 +501,25 @@ mod test {
     impl CfgEvaluator for StubEval {
         fn matches(&mut self, cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
             Ok(self.matches.contains(cfg_expr))
+        }
+    }
+
+    struct FailIfUsedEval;
+
+    impl CfgEvaluator for FailIfUsedEval {
+        fn matches(&mut self, _cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
+            panic!("empty selection should not evaluate target overrides");
+        }
+    }
+
+    struct FailOnTargetEval(&'static str);
+
+    impl CfgEvaluator for FailOnTargetEval {
+        fn matches(&mut self, _cfg_expr: &str, target: &TargetTriple) -> eyre::Result<bool> {
+            if target.0 == self.0 {
+                eyre::bail!("unexpected cfg evaluation for {}", self.0);
+            }
+            Ok(false)
         }
     }
 
@@ -407,21 +537,6 @@ mod test {
         }
     }
 
-    fn package(name: &str) -> eyre::Result<cargo_metadata::Package> {
-        use cargo_metadata::{PackageBuilder, PackageId, PackageName};
-        use semver::Version;
-        use std::str::FromStr as _;
-        Ok(PackageBuilder::new(
-            PackageName::from_str(name)?,
-            Version::parse("0.1.0")?,
-            PackageId {
-                repr: name.to_string(),
-            },
-            "",
-        )
-        .build()?)
-    }
-
     fn config_with_targets(targets: Option<&[&str]>) -> Config {
         Config {
             package_targets: targets.map(|t| t.iter().map(|s| (*s).to_string()).collect()),
@@ -436,18 +551,47 @@ mod test {
         }
     }
 
+    fn selected<'a>(
+        package: &'a cargo_metadata::Package,
+        config: &'a Config,
+    ) -> SelectedPackage<'a> {
+        SelectedPackage {
+            package,
+            config,
+            ignore_configured_targets: false,
+            target_decision_explicit: false,
+        }
+    }
+
     fn triples(plan_targets: &[&super::TargetPlan<'_>]) -> Vec<String> {
         plan_targets.iter().map(|p| p.target.0.clone()).collect()
+    }
+
+    #[test]
+    fn empty_selection_skips_target_resolution() -> eyre::Result<()> {
+        let ws = WorkspaceConfig {
+            workspace_targets: vec!["linux".to_string()],
+            target_overrides: BTreeMap::from([(
+                "cfg(target_os = \"linux\")".to_string(),
+                WorkspaceTargetOverride::default(),
+            )]),
+            ..WorkspaceConfig::default()
+        };
+        let env = FailIfUsedEnv;
+        let mut eval = FailIfUsedEval;
+
+        let plans = build_target_plans(&[], &ws, &HashSet::new(), None, true, &env, &mut eval)?;
+
+        assert!(plans.plans.is_empty());
+        assert!(!plans.contains_configured_assignments);
+        Ok(())
     }
 
     #[test]
     fn no_config_falls_back_to_host_single_target() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = WorkspaceConfig::default();
         let env = TestEnv::host("host-triple");
         let mut eval = StubEval::default();
@@ -468,10 +612,7 @@ mod test {
     fn workspace_targets_expand_in_order() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -500,16 +641,7 @@ mod test {
         let core = package("core")?;
         let web_cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
         let core_cfg = config_with_targets(None);
-        let selected = vec![
-            SelectedPackage {
-                package: &web,
-                config: &web_cfg,
-            },
-            SelectedPackage {
-                package: &core,
-                config: &core_cfg,
-            },
-        ];
+        let selected = vec![selected(&web, &web_cfg), selected(&core, &core_cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -540,13 +672,33 @@ mod test {
     }
 
     #[test]
+    fn unused_workspace_target_does_not_evaluate_overrides() -> eyre::Result<()> {
+        let pkg = package("web")?;
+        let cfg = config_with_targets(Some(&["wasm"]));
+        let selected = vec![selected(&pkg, &cfg)];
+        let mut ws = workspace_targets(&["linux"]);
+        ws.target_overrides.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            WorkspaceTargetOverride::default(),
+        );
+        let env = TestEnv::host("host");
+        let mut eval = FailOnTargetEval("linux");
+
+        let plans =
+            build_target_plans(&selected, &ws, &HashSet::new(), None, true, &env, &mut eval)?;
+
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["wasm".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn package_opt_out_uses_fallback() -> eyre::Result<()> {
         let pkg = package("native")?;
         let cfg = config_with_targets(Some(&[]));
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux"]);
         let env = TestEnv::host("host-triple");
         let mut eval = StubEval::default();
@@ -572,10 +724,7 @@ mod test {
     fn explicit_cli_target_overrides_everything() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -603,10 +752,7 @@ mod test {
     fn duplicate_targets_deduped_preserving_order() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["linux", "windows", "linux"]));
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = WorkspaceConfig::default();
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -628,16 +774,7 @@ mod test {
         let b = package("b")?;
         let a_cfg = config_with_targets(None);
         let b_cfg = config_with_targets(Some(&["linux"]));
-        let selected = vec![
-            SelectedPackage {
-                package: &a,
-                config: &a_cfg,
-            },
-            SelectedPackage {
-                package: &b,
-                config: &b_cfg,
-            },
-        ];
+        let selected = vec![selected(&a, &a_cfg), selected(&b, &b_cfg)];
         let ws = workspace_targets(&["linux"]);
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -663,10 +800,7 @@ mod test {
     fn capability_denied_ignores_configured_lists() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host-triple");
         let mut eval = StubEval::default();
@@ -691,13 +825,36 @@ mod test {
     }
 
     #[test]
-    fn cargo_build_target_used_as_fallback_source() -> eyre::Result<()> {
+    fn ignored_configured_targets_do_not_mark_target_display() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
         let selected = vec![SelectedPackage {
             package: &pkg,
             config: &cfg,
+            ignore_configured_targets: true,
+            target_decision_explicit: true,
         }];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+        let mut eval = StubEval::default();
+
+        let plans =
+            build_target_plans(&selected, &ws, &HashSet::new(), None, true, &env, &mut eval)?;
+
+        assert!(!plans.contains_configured_assignments);
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["host-triple".to_string()]
+        );
+        assert_eq!(plans.plans[0].packages[0].target.source, TargetSource::Host);
+        Ok(())
+    }
+
+    #[test]
+    fn cargo_build_target_used_as_fallback_source() -> eyre::Result<()> {
+        let pkg = package("a")?;
+        let cfg = Config::default();
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = WorkspaceConfig::default();
         let env = TestEnv {
             build_target: Some("aarch64-unknown-linux-gnu".to_string()),
@@ -724,14 +881,8 @@ mod test {
         let native_cfg = Config::default();
         let wasm_cfg = Config::default();
         let selected = vec![
-            SelectedPackage {
-                package: &native,
-                config: &native_cfg,
-            },
-            SelectedPackage {
-                package: &wasm_app,
-                config: &wasm_cfg,
-            },
+            selected(&native, &native_cfg),
+            selected(&wasm_app, &wasm_cfg),
         ];
 
         let mut target = BTreeMap::new();
@@ -743,6 +894,7 @@ mod test {
                     add: HashSet::from(["native-cli".to_string()]),
                     remove: HashSet::new(),
                 }),
+                ..WorkspaceTargetOverride::default()
             },
         );
         target.insert(
@@ -753,6 +905,7 @@ mod test {
                     add: HashSet::from(["wasm-app".to_string()]),
                     remove: HashSet::new(),
                 }),
+                ..WorkspaceTargetOverride::default()
             },
         );
         let ws = WorkspaceConfig {
@@ -792,16 +945,7 @@ mod test {
         let drop = package("drop")?;
         let keep_cfg = Config::default();
         let drop_cfg = Config::default();
-        let selected = vec![
-            SelectedPackage {
-                package: &keep,
-                config: &keep_cfg,
-            },
-            SelectedPackage {
-                package: &drop,
-                config: &drop_cfg,
-            },
-        ];
+        let selected = vec![selected(&keep, &keep_cfg), selected(&drop, &drop_cfg)];
 
         let mut target = BTreeMap::new();
         target.insert(
@@ -810,6 +954,7 @@ mod test {
                 exclude_packages: Some(StringSetPatch::Override(HashSet::from([
                     "drop".to_string()
                 ]))),
+                ..WorkspaceTargetOverride::default()
             },
         );
         let ws = WorkspaceConfig {
@@ -836,21 +981,71 @@ mod test {
     }
 
     #[test]
+    fn conflicting_workspace_target_flags_error() -> eyre::Result<()> {
+        let pkg = package("a")?;
+        let cfg = Config::default();
+        let selected = vec![selected(&pkg, &cfg)];
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            WorkspaceTargetOverride {
+                subcommand_overrides: BTreeMap::from([(
+                    "check".to_string(),
+                    CommandCapabilities {
+                        flags: FlagConfig {
+                            pedantic: Some(true),
+                            ..FlagConfig::default()
+                        },
+                        ..CommandCapabilities::default()
+                    },
+                )]),
+                ..WorkspaceTargetOverride::default()
+            },
+        );
+        target.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            WorkspaceTargetOverride {
+                subcommand_overrides: BTreeMap::from([(
+                    "check".to_string(),
+                    CommandCapabilities {
+                        flags: FlagConfig {
+                            pedantic: Some(false),
+                            ..FlagConfig::default()
+                        },
+                        ..CommandCapabilities::default()
+                    },
+                )]),
+                ..WorkspaceTargetOverride::default()
+            },
+        );
+        let ws = WorkspaceConfig {
+            target_overrides: target,
+            ..WorkspaceConfig::default()
+        };
+        let env = TestEnv::host("host");
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+        eval.matches
+            .insert("cfg(target_os = \"linux\")".to_string());
+
+        let Err(err) =
+            build_target_plans(&selected, &ws, &HashSet::new(), None, true, &env, &mut eval)
+        else {
+            eyre::bail!("expected conflicting workspace target flags to fail");
+        };
+
+        assert!(err.to_string().contains("subcommands.check.pedantic"));
+        Ok(())
+    }
+
+    #[test]
     fn base_exclude_applies_to_all_targets() -> eyre::Result<()> {
         let keep = package("keep")?;
         let drop = package("drop")?;
         let keep_cfg = Config::default();
         let drop_cfg = Config::default();
-        let selected = vec![
-            SelectedPackage {
-                package: &keep,
-                config: &keep_cfg,
-            },
-            SelectedPackage {
-                package: &drop,
-                config: &drop_cfg,
-            },
-        ];
+        let selected = vec![selected(&keep, &keep_cfg), selected(&drop, &drop_cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();
@@ -873,10 +1068,7 @@ mod test {
     fn empty_triple_in_list_is_rejected() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["linux", "  "]));
-        let selected = vec![SelectedPackage {
-            package: &pkg,
-            config: &cfg,
-        }];
+        let selected = vec![selected(&pkg, &cfg)];
         let ws = WorkspaceConfig::default();
         let env = TestEnv::host("host");
         let mut eval = StubEval::default();

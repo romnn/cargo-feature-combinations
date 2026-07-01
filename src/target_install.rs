@@ -1,8 +1,8 @@
 //! Optional Rust target installation via rustup.
 
+use crate::plan::execution::ExecutionPlanSet;
 use crate::print_note;
 use crate::print_warning;
-use crate::runner::ExecutionPlanSet;
 use crate::target::{TargetEnvironment, TargetTriple};
 use color_eyre::eyre::{self, WrapErr};
 use std::collections::BTreeSet;
@@ -146,6 +146,9 @@ fn install_contexts(
             continue;
         }
         for package_plan in &plan.package_plans {
+            if !package_plan.flags.install_missing_targets {
+                continue;
+            }
             if package_plan.combinations.is_empty() {
                 continue;
             }
@@ -258,44 +261,26 @@ mod test {
     use super::{
         TargetInstaller, ensure_missing_targets_installed, install_contexts, missing_targets,
     };
-    use crate::runner::{ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan};
-    use crate::target::{EffectiveTarget, TargetEnvironment, TargetSource, TargetTriple};
+    use crate::package::test::{effective_target, package_with_manifest_path as package};
+    use crate::plan::execution::{ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan};
+    use crate::target::{TargetEnvironment, TargetTriple};
     use color_eyre::eyre;
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    fn package(name: &str, manifest_path: &str) -> eyre::Result<cargo_metadata::Package> {
-        use cargo_metadata::{PackageBuilder, PackageId, PackageName};
-        use semver::Version;
-        use std::str::FromStr as _;
-
-        Ok(PackageBuilder::new(
-            PackageName::from_str(name)?,
-            Version::parse("0.1.0")?,
-            PackageId {
-                repr: name.to_string(),
-            },
-            manifest_path,
-        )
-        .build()?)
-    }
-
     fn triples(targets: &[TargetTriple]) -> Vec<&str> {
         targets.iter().map(TargetTriple::as_str).collect()
-    }
-
-    fn effective_target(target: &str) -> EffectiveTarget {
-        EffectiveTarget {
-            triple: TargetTriple(target.to_string()),
-            source: TargetSource::WorkspaceConfig,
-        }
     }
 
     fn plan_set<'a>(
         targets: &[&str],
         packages: &[&'a cargo_metadata::Package],
     ) -> ExecutionPlanSet<'a> {
+        let flags = crate::config::ResolvedFlags {
+            install_missing_targets: true,
+            ..crate::config::ResolvedFlags::default()
+        };
         ExecutionPlanSet {
             plans: targets
                 .iter()
@@ -309,6 +294,8 @@ mod test {
                             combinations: vec![Vec::new()],
                             pruned: Vec::new(),
                             matrix: serde_json::Map::new(),
+                            flags,
+                            ignored_diagnostics_config: false,
                         })
                         .collect(),
                 })

@@ -2,7 +2,7 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::Package as _;
+use cargo_feature_combinations::{CfgEvaluator, Package as _, TargetTriple, resolve_config};
 use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 
@@ -62,12 +62,8 @@ struct StubEval {
     matches: HashSet<String>,
 }
 
-impl cargo_feature_combinations::cfg_eval::CfgEvaluator for StubEval {
-    fn matches(
-        &mut self,
-        cfg_expr: &str,
-        _target: &cargo_feature_combinations::target::TargetTriple,
-    ) -> eyre::Result<bool> {
+impl CfgEvaluator for StubEval {
+    fn matches(&mut self, cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
         Ok(self.matches.contains(cfg_expr))
     }
 }
@@ -101,11 +97,7 @@ fn target_override_additive_exclude_features_affects_matrix() -> eyre::Result<()
     eval.matches
         .insert("cfg(target_os = \"linux\")".to_string());
 
-    let resolved = cargo_feature_combinations::config::resolve::resolve_config(
-        &base,
-        &cargo_feature_combinations::target::TargetTriple("x".to_string()),
-        &mut eval,
-    )?;
+    let resolved = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     let matrix = pkg.feature_matrix(&resolved)?;
     let combos = as_sets(matrix);
@@ -150,11 +142,7 @@ fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
     eval.matches
         .insert("cfg(target_os = \"linux\")".to_string());
 
-    let resolved = cargo_feature_combinations::config::resolve::resolve_config(
-        &base,
-        &cargo_feature_combinations::target::TargetTriple("x".to_string()),
-        &mut eval,
-    )?;
+    let resolved = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     // Base excluded metal, but override should replace with only cuda.
     assert!(resolved.exclude_features.contains("cuda"));
@@ -193,11 +181,7 @@ fn replace_true_rejects_add_remove() -> eyre::Result<()> {
     eval.matches
         .insert("cfg(target_os = \"linux\")".to_string());
 
-    let Err(err) = cargo_feature_combinations::config::resolve::resolve_config(
-        &base,
-        &cargo_feature_combinations::target::TargetTriple("x".to_string()),
-        &mut eval,
-    ) else {
+    let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
         eyre::bail!("expected replace=true validation to fail");
     };
 

@@ -1,6 +1,35 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Combined patch operations for a set-like string field.
+#[derive(Debug, Clone)]
+pub(crate) struct StringSetPatchOps {
+    override_value: Option<HashSet<String>>,
+    add: HashSet<String>,
+    remove: HashSet<String>,
+}
+
+impl StringSetPatchOps {
+    /// Apply the combined patch to `base`.
+    ///
+    /// The order is: start from override (or base), then remove, then add.
+    /// This means if a value appears in both `add` and `remove`, add wins.
+    #[must_use]
+    pub(crate) fn apply_to(&self, base: &HashSet<String>) -> HashSet<String> {
+        let mut out = if let Some(value) = &self.override_value {
+            value.clone()
+        } else {
+            base.clone()
+        };
+
+        for value in &self.remove {
+            out.remove(value);
+        }
+        out.extend(self.add.iter().cloned());
+        out
+    }
+}
+
 /// Patch operations for a set-like configuration field.
 ///
 /// A patch can either be:
@@ -62,6 +91,46 @@ impl StringSetPatch {
     #[must_use]
     pub fn has_add_or_remove(&self) -> bool {
         !self.add_values().is_empty() || !self.remove_values().is_empty()
+    }
+}
+
+pub(crate) fn combine_string_set_patches<'a>(
+    name: &str,
+    source_kind: &str,
+    patches: impl IntoIterator<Item = (&'a str, &'a StringSetPatch)>,
+) -> color_eyre::eyre::Result<Option<StringSetPatchOps>> {
+    let mut any = false;
+    let mut override_value: Option<HashSet<String>> = None;
+    let mut add: HashSet<String> = HashSet::new();
+    let mut remove: HashSet<String> = HashSet::new();
+
+    for (expr, patch) in patches {
+        any = true;
+
+        if let Some(value) = patch.override_value() {
+            match &override_value {
+                None => override_value = Some(value.clone()),
+                Some(existing) if existing == value => {}
+                Some(_) => {
+                    color_eyre::eyre::bail!(
+                        "conflicting overrides for `{name}` from {source_kind} `{expr}`"
+                    );
+                }
+            }
+        }
+
+        add.extend(patch.add_values().iter().cloned());
+        remove.extend(patch.remove_values().iter().cloned());
+    }
+
+    if any {
+        Ok(Some(StringSetPatchOps {
+            override_value,
+            add,
+            remove,
+        }))
+    } else {
+        Ok(None)
     }
 }
 

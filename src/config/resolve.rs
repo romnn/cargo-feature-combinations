@@ -1,10 +1,26 @@
 use crate::cfg_eval::CfgEvaluator;
 use crate::target::TargetTriple;
 use color_eyre::eyre::{self, WrapErr};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use super::patch::{FeatureSetVecPatch, StringSetPatch};
-use super::{Config, DeprecatedConfig, TargetOverride};
+use super::patch::{FeatureSetVecPatch, StringSetPatch, combine_string_set_patches};
+use super::{CommandCapabilities, Config, FlagConfig, TargetOverride};
+
+/// A package's flag layers after target-specific config has been matched.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PackageFlagLayers {
+    pub(crate) package_flags: FlagConfig,
+    pub(crate) package_subcommands: BTreeMap<String, CommandCapabilities>,
+    pub(crate) target_flags: FlagConfig,
+    pub(crate) target_subcommands: BTreeMap<String, CommandCapabilities>,
+}
+
+/// Target-resolved package config plus the separate flag layers that produced it.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedTargetConfig {
+    pub(crate) config: Config,
+    pub(crate) flag_layers: PackageFlagLayers,
+}
 
 /// Resolve a target-specific effective [`Config`] for the given base config.
 ///
@@ -27,6 +43,14 @@ pub fn resolve_config<E: CfgEvaluator>(
     target: &TargetTriple,
     evaluator: &mut E,
 ) -> eyre::Result<Config> {
+    Ok(resolve_config_with_flag_layers(base, target, evaluator)?.config)
+}
+
+pub(crate) fn resolve_config_with_flag_layers<E: CfgEvaluator>(
+    base: &Config,
+    target: &TargetTriple,
+    evaluator: &mut E,
+) -> eyre::Result<ResolvedTargetConfig> {
     let matched = matching_overrides(base, target, evaluator)?;
 
     // Fast path: no matching overrides.
@@ -36,7 +60,14 @@ pub fn resolve_config<E: CfgEvaluator>(
         // `targets` is a selection field consumed before resolution; clear it so
         // the resolved (feature-matrix) config never carries it.
         out.package_targets = None;
-        return Ok(out);
+        return Ok(ResolvedTargetConfig {
+            config: out,
+            flag_layers: PackageFlagLayers {
+                package_flags: base.flags,
+                package_subcommands: base.subcommand_overrides.clone(),
+                ..PackageFlagLayers::default()
+            },
+        });
     }
 
     let replace_exprs: Vec<&str> = matched
@@ -67,18 +98,44 @@ pub fn resolve_config<E: CfgEvaluator>(
     } else {
         base.clone()
     };
+    let flag_layers = PackageFlagLayers {
+        package_flags: if replace_mode {
+            FlagConfig::default()
+        } else {
+            base.flags
+        },
+        package_subcommands: if replace_mode {
+            BTreeMap::new()
+        } else {
+            base.subcommand_overrides.clone()
+        },
+        target_flags: super::combine_flag_configs(
+            None,
+            "target override",
+            matched.iter().map(|(expr, ov)| (*expr, ov.flags)),
+        )?,
+        target_subcommands: super::combine_command_capability_maps(
+            "target override",
+            matched
+                .iter()
+                .map(|(expr, ov)| (*expr, &ov.subcommand_overrides)),
+        )?,
+    };
 
     // Apply matching overrides.
-    apply_overrides(&mut out, &matched)?;
+    apply_overrides(&mut out, &matched, &flag_layers)?;
 
     // Remove target metadata from the resolved config.
     out.target_overrides.clear();
-    out.deprecated = DeprecatedConfig::default();
+    out.deprecated = super::schema::DeprecatedTomlKeys::default();
     // `targets` is a selection field consumed before resolution; clear it so the
     // resolved (feature-matrix) config never carries it.
     out.package_targets = None;
 
-    Ok(out)
+    Ok(ResolvedTargetConfig {
+        config: out,
+        flag_layers,
+    })
 }
 
 fn matching_overrides<'a, E: CfgEvaluator>(
@@ -160,7 +217,11 @@ fn validate_replace_override(expr: &str, ov: &TargetOverride) -> eyre::Result<()
     Ok(())
 }
 
-fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyre::Result<()> {
+fn apply_overrides(
+    out: &mut Config,
+    matched: &[(&str, &TargetOverride)],
+    flag_layers: &PackageFlagLayers,
+) -> eyre::Result<()> {
     // Booleans
     if let Some(v) = combine_bool("skip_optional_dependencies", matched, |o| {
         o.skip_optional_dependencies
@@ -170,28 +231,41 @@ fn apply_overrides(out: &mut Config, matched: &[(&str, &TargetOverride)]) -> eyr
     if let Some(v) = combine_bool("no_empty_feature_set", matched, |o| o.no_empty_feature_set)? {
         out.no_empty_feature_set = v;
     }
-    if let Some(v) = combine_bool("prune_implied", matched, |o| o.prune_implied)? {
-        out.prune_implied = v;
-    }
-    if let Some(v) = combine_bool("show_pruned", matched, |o| o.show_pruned)? {
-        out.show_pruned = v;
+    out.flags.overlay(flag_layers.target_flags);
+    for (name, capability) in &flag_layers.target_subcommands {
+        out.subcommand_overrides
+            .entry(name.clone())
+            .or_default()
+            .merge(capability);
     }
 
     // Set-like fields
-    if let Some(ops) =
-        combine_string_set_patch("exclude_features", matched, |o| o.exclude_features.as_ref())?
-    {
-        apply_string_set_patch(&mut out.exclude_features, &ops);
+    if let Some(ops) = combine_string_set_patches(
+        "exclude_features",
+        "target override",
+        matched
+            .iter()
+            .filter_map(|(expr, ov)| ov.exclude_features.as_ref().map(|patch| (*expr, patch))),
+    )? {
+        out.exclude_features = ops.apply_to(&out.exclude_features);
     }
-    if let Some(ops) =
-        combine_string_set_patch("include_features", matched, |o| o.include_features.as_ref())?
-    {
-        apply_string_set_patch(&mut out.include_features, &ops);
+    if let Some(ops) = combine_string_set_patches(
+        "include_features",
+        "target override",
+        matched
+            .iter()
+            .filter_map(|(expr, ov)| ov.include_features.as_ref().map(|patch| (*expr, patch))),
+    )? {
+        out.include_features = ops.apply_to(&out.include_features);
     }
-    if let Some(ops) =
-        combine_string_set_patch("only_features", matched, |o| o.only_features.as_ref())?
-    {
-        apply_string_set_patch(&mut out.only_features, &ops);
+    if let Some(ops) = combine_string_set_patches(
+        "only_features",
+        "target override",
+        matched
+            .iter()
+            .filter_map(|(expr, ov)| ov.only_features.as_ref().map(|patch| (*expr, patch))),
+    )? {
+        out.only_features = ops.apply_to(&out.only_features);
     }
 
     // Feature-set list fields
@@ -255,75 +329,6 @@ fn merge_matrix(
             }
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct StringSetOps {
-    override_value: Option<HashSet<String>>,
-    add: HashSet<String>,
-    remove: HashSet<String>,
-}
-
-/// Apply combined patch operations to a string set.
-///
-/// The order is: start from override (or base), then remove, then add.
-/// This means if a value appears in both `add` and `remove`, **add wins**.
-fn apply_string_set_patch(target: &mut HashSet<String>, ops: &StringSetOps) {
-    let mut out = if let Some(v) = &ops.override_value {
-        v.clone()
-    } else {
-        target.clone()
-    };
-
-    for r in &ops.remove {
-        out.remove(r);
-    }
-    out.extend(ops.add.iter().cloned());
-
-    *target = out;
-}
-
-fn combine_string_set_patch<'a>(
-    name: &str,
-    matched: &[(&'a str, &'a TargetOverride)],
-    get: impl Fn(&'a TargetOverride) -> Option<&'a StringSetPatch>,
-) -> eyre::Result<Option<StringSetOps>> {
-    let mut any = false;
-    let mut override_value: Option<HashSet<String>> = None;
-    let mut add: HashSet<String> = HashSet::new();
-    let mut remove: HashSet<String> = HashSet::new();
-
-    for (expr, ov) in matched {
-        if let Some(patch) = get(ov) {
-            any = true;
-
-            if let Some(ovv) = patch.override_value() {
-                match &override_value {
-                    None => override_value = Some(ovv.clone()),
-                    Some(existing) => {
-                        if existing != ovv {
-                            eyre::bail!(
-                                "conflicting overrides for `{name}` from target override `{expr}`"
-                            );
-                        }
-                    }
-                }
-            }
-
-            add.extend(patch.add_values().iter().cloned());
-            remove.extend(patch.remove_values().iter().cloned());
-        }
-    }
-
-    if !any {
-        return Ok(None);
-    }
-
-    Ok(Some(StringSetOps {
-        override_value,
-        add,
-        remove,
-    }))
 }
 
 fn combine_bool<'a>(
@@ -457,10 +462,13 @@ fn normalize_feature_sets(sets: &[HashSet<String>]) -> BTreeSet<Vec<String>> {
 
 #[cfg(test)]
 mod test {
-    use super::resolve_config;
+    use super::{resolve_config, resolve_config_with_flag_layers};
     use crate::cfg_eval::CfgEvaluator;
     use crate::config::patch::{FeatureSetVecPatch, StringSetPatch};
-    use crate::config::{Config, TargetOverride};
+    use crate::config::{
+        CommandCapabilities, Config, FlagConfig, ResolveCommandConfigArgs, ResolvedFlags,
+        TargetOverride, WorkspaceConfig, resolve_command_config,
+    };
     use crate::target::TargetTriple;
     use color_eyre::eyre;
     use std::collections::{BTreeMap, HashSet};
@@ -816,13 +824,16 @@ mod test {
     #[test]
     fn boolean_override_prune_implied() -> eyre::Result<()> {
         let mut base = Config::default();
-        assert!(base.prune_implied, "prune_implied defaults to true");
+        assert_eq!(base.flags.prune_implied, None);
 
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
             TargetOverride {
-                prune_implied: Some(false),
+                flags: FlagConfig {
+                    prune_implied: Some(false),
+                    ..FlagConfig::default()
+                },
                 ..TargetOverride::default()
             },
         );
@@ -832,8 +843,169 @@ mod test {
         eval.matches.insert("cfg(unix)".to_string());
 
         let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
-        assert!(!out.prune_implied, "target override should disable pruning");
+        assert_eq!(out.flags.prune_implied, Some(false));
         Ok(())
+    }
+
+    #[test]
+    fn boolean_override_diagnostics_config() -> eyre::Result<()> {
+        let mut base = Config {
+            flags: FlagConfig {
+                diagnostics_only: Some(false),
+                dedupe: Some(false),
+                ..FlagConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                flags: FlagConfig {
+                    diagnostics_only: Some(true),
+                    dedupe: Some(true),
+                    ..FlagConfig::default()
+                },
+                ..TargetOverride::default()
+            },
+        );
+        base.target_overrides = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let out = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        assert_eq!(out.flags.diagnostics_only, Some(true));
+        assert_eq!(out.flags.dedupe, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn target_flag_layers_resolve_after_package_subcommand_layers() -> eyre::Result<()> {
+        let mut base = Config {
+            flags: FlagConfig {
+                pedantic: Some(false),
+                ..FlagConfig::default()
+            },
+            ..Config::default()
+        };
+        base.subcommand_overrides.insert(
+            "check".to_string(),
+            CommandCapabilities {
+                flags: FlagConfig {
+                    pedantic: Some(true),
+                    ..FlagConfig::default()
+                },
+                ..CommandCapabilities::default()
+            },
+        );
+
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                flags: FlagConfig {
+                    pedantic: Some(false),
+                    errors_only: Some(false),
+                    ..FlagConfig::default()
+                },
+                subcommand_overrides: BTreeMap::from([(
+                    "check".to_string(),
+                    CommandCapabilities {
+                        flags: FlagConfig {
+                            errors_only: Some(true),
+                            ..FlagConfig::default()
+                        },
+                        ..CommandCapabilities::default()
+                    },
+                )]),
+                ..TargetOverride::default()
+            },
+        );
+        base.target_overrides = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+
+        let resolved =
+            resolve_config_with_flag_layers(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        let workspace = WorkspaceConfig::default();
+        let empty_target_subcommands = BTreeMap::new();
+        let flags = resolve_command_config(ResolveCommandConfigArgs {
+            workspace: &workspace,
+            workspace_target_flags: FlagConfig::default(),
+            workspace_target_subcommands: &empty_target_subcommands,
+            package_flags: resolved.flag_layers.package_flags,
+            package_subcommands: &resolved.flag_layers.package_subcommands,
+            package_target_flags: resolved.flag_layers.target_flags,
+            package_target_subcommands: &resolved.flag_layers.target_subcommands,
+            raw_command: Some("check"),
+            resolved_command: Some("check"),
+            cli_flags: FlagConfig::default(),
+            default_diagnostics_allowed: true,
+            default_targets_enabled: true,
+        })?
+        .flags;
+
+        assert_eq!(
+            flags,
+            ResolvedFlags {
+                pedantic: false,
+                errors_only: true,
+                ..ResolvedFlags::default()
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_target_subcommand_flags_error() {
+        let mut base = Config::default();
+        let mut target = BTreeMap::new();
+        target.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                subcommand_overrides: BTreeMap::from([(
+                    "check".to_string(),
+                    CommandCapabilities {
+                        flags: FlagConfig {
+                            pedantic: Some(true),
+                            ..FlagConfig::default()
+                        },
+                        ..CommandCapabilities::default()
+                    },
+                )]),
+                ..TargetOverride::default()
+            },
+        );
+        target.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            TargetOverride {
+                subcommand_overrides: BTreeMap::from([(
+                    "check".to_string(),
+                    CommandCapabilities {
+                        flags: FlagConfig {
+                            pedantic: Some(false),
+                            ..FlagConfig::default()
+                        },
+                        ..CommandCapabilities::default()
+                    },
+                )]),
+                ..TargetOverride::default()
+            },
+        );
+        base.target_overrides = target;
+
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+        eval.matches
+            .insert("cfg(target_os = \"linux\")".to_string());
+
+        let err = resolve_config_with_flag_layers(&base, &TargetTriple("x".to_string()), &mut eval)
+            .expect_err("conflicting target subcommand flags should fail");
+
+        assert!(err.to_string().contains("subcommands.check.pedantic"));
     }
 
     #[test]
@@ -999,6 +1171,42 @@ mod test {
             eyre::bail!("expected allow_feature_sets singleton conflict");
         };
         assert!(err.to_string().contains("allow_feature_sets"));
+        Ok(())
+    }
+
+    #[test]
+    fn target_override_prune_spelling_conflict_errors() -> eyre::Result<()> {
+        let mut base = Config::default();
+        base.target_overrides.insert(
+            "cfg(unix)".to_string(),
+            TargetOverride {
+                flags: FlagConfig {
+                    prune_implied: Some(true),
+                    ..FlagConfig::default()
+                },
+                ..TargetOverride::default()
+            },
+        );
+        base.target_overrides.insert(
+            "cfg(target_os = \"linux\")".to_string(),
+            TargetOverride {
+                flags: FlagConfig {
+                    no_prune_implied: Some(false),
+                    ..FlagConfig::default()
+                },
+                ..TargetOverride::default()
+            },
+        );
+        let mut eval = StubEval::default();
+        eval.matches.insert("cfg(unix)".to_string());
+        eval.matches
+            .insert("cfg(target_os = \"linux\")".to_string());
+
+        let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
+            eyre::bail!("expected prune spelling conflict");
+        };
+
+        assert!(err.to_string().contains("no_prune_implied"));
         Ok(())
     }
 }

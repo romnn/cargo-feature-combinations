@@ -1,6 +1,6 @@
 //! Package-level configuration, feature combination generation, and error types.
 
-use crate::config::Config;
+use crate::config::{Config, validate_package_metadata};
 use crate::print_warning;
 use crate::{DEFAULT_METADATA_KEY, find_metadata_value, pkg_metadata_section};
 use color_eyre::eyre;
@@ -49,6 +49,14 @@ impl fmt::Display for FeatureCombinationError {
 
 impl std::error::Error for FeatureCombinationError {}
 
+#[must_use]
+pub(crate) fn has_lib_target(package: &cargo_metadata::Package) -> bool {
+    package
+        .targets
+        .iter()
+        .any(|target| target.kind.contains(&cargo_metadata::TargetKind::Lib))
+}
+
 /// Extension trait for [`cargo_metadata::Package`] used by this crate.
 pub trait Package {
     /// Parse the configuration for this package if present.
@@ -84,7 +92,10 @@ pub trait Package {
 impl Package for cargo_metadata::Package {
     fn config(&self) -> eyre::Result<Config> {
         let (mut config, key) = match find_metadata_value(&self.metadata) {
-            Some((value, key)) => (serde_json::from_value(value.clone())?, key),
+            Some((value, key)) => {
+                validate_package_metadata(value, &pkg_metadata_section(key))?;
+                (serde_json::from_value(value.clone())?, key)
+            }
             None => (Config::default(), DEFAULT_METADATA_KEY),
         };
 
@@ -445,22 +456,40 @@ pub(crate) mod test {
         });
     }
 
-    pub(crate) fn package_with_features(
-        features: &[&str],
+    pub(crate) fn package(name: &str) -> eyre::Result<cargo_metadata::Package> {
+        package_with_manifest_path(name, "")
+    }
+
+    pub(crate) fn package_with_manifest_path(
+        name: &str,
+        manifest_path: &str,
     ) -> eyre::Result<cargo_metadata::Package> {
         use cargo_metadata::{PackageBuilder, PackageId, PackageName};
         use semver::Version;
         use std::str::FromStr as _;
 
-        let mut package = PackageBuilder::new(
-            PackageName::from_str("test")?,
+        Ok(PackageBuilder::new(
+            PackageName::from_str(name)?,
             Version::parse("0.1.0")?,
             PackageId {
-                repr: "test".to_string(),
+                repr: name.to_string(),
             },
-            "",
+            manifest_path,
         )
-        .build()?;
+        .build()?)
+    }
+
+    pub(crate) fn effective_target(triple: &str) -> crate::target::EffectiveTarget {
+        crate::target::EffectiveTarget {
+            triple: crate::target::TargetTriple(triple.to_string()),
+            source: crate::target::TargetSource::WorkspaceConfig,
+        }
+    }
+
+    pub(crate) fn package_with_features(
+        features: &[&str],
+    ) -> eyre::Result<cargo_metadata::Package> {
+        let mut package = package("test")?;
         package.features = features
             .iter()
             .map(|feature| ((*feature).to_string(), vec![]))

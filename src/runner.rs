@@ -1,14 +1,13 @@
 //! Cargo command execution, output parsing, summary printing, and matrix output.
 
 use crate::DEFAULT_PKG_METADATA_SECTION;
-use crate::cfg_eval::CfgEvaluator;
-use crate::cli::{CargoSubcommand, Options, cargo_subcommand};
-use crate::config::Config;
+use crate::cli::{CargoSubcommand, cargo_subcommand};
+use crate::config::ResolvedFlags;
 use crate::implication::PrunedCombination;
-use crate::package::{FeatureCombinationError, Package};
+use crate::package::FeatureCombinationError;
+use crate::plan::execution::ExecutionPlanSet;
 use crate::print_warning;
-use crate::target::{EffectiveTarget, TargetSource, TargetTriple};
-use crate::target_plan::{PlannedPackage, TargetPlan, TargetPlans};
+use crate::target::{EffectiveTarget, TargetTriple};
 
 use color_eyre::eyre;
 use itertools::Itertools;
@@ -38,7 +37,7 @@ pub type ExitCode = Option<i32>;
 
 /// Build a [`ColorSpec`] with the given foreground color and bold setting.
 #[must_use]
-pub fn color_spec(color: Color, bold: bool) -> ColorSpec {
+fn color_spec(color: Color, bold: bool) -> ColorSpec {
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(color));
     spec.set_bold(bold);
@@ -113,7 +112,7 @@ fn spawn_cargo_command(
 /// `target = ...` (exact per-target attribution), and `Group` prints
 /// `targets = [...]` for an aggregate multi-target invocation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SummaryTarget {
+enum SummaryTarget {
     /// Implicit single-host run: no target field is shown.
     Hidden,
     /// A single concrete target with exact attribution.
@@ -137,7 +136,7 @@ impl SummaryTarget {
 
 /// Summary of the outcome for running (or pruning) a single feature set.
 #[derive(Debug, Clone)]
-pub struct Summary {
+struct Summary {
     package_name: String,
     target: SummaryTarget,
     features: Vec<String>,
@@ -160,7 +159,7 @@ impl Summary {
 ///
 /// The iterator yields the number of warnings for each compiled crate that
 /// matches the summary line produced by cargo.
-pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static WARNING_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         #[allow(
             clippy::expect_used,
@@ -178,7 +177,7 @@ pub fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 ///
 /// The iterator yields the number of errors for each compiled crate that
 /// matches the summary line produced by cargo.
-pub fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static ERROR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         #[allow(
             clippy::expect_used,
@@ -301,10 +300,8 @@ pub(crate) fn print_feature_combination_error(err: &FeatureCombinationError) {
 /// Returns the [`ExitCode`] of the first failing feature combination, or
 /// `None` if all combinations succeeded.
 ///
-/// This function is used by [`run_cargo_command_for_target`] after all packages and
-/// feature sets have been processed.
 #[must_use]
-pub fn print_summary(
+fn print_summary(
     summary: &[Summary],
     show_pruned: bool,
     stdout: &mut termcolor::StandardStream,
@@ -476,6 +473,8 @@ struct Progress {
 struct Invocation<'a> {
     package: &'a cargo_metadata::Package,
     features: &'a [String],
+    /// Fully resolved cargo-fc flags for this package-target invocation.
+    flags: ResolvedFlags,
     /// Target triples cargo-fc must inject as `--target` (configured sources).
     inject_targets: &'a [String],
     /// Display/attribution context for the header and summary entry.
@@ -487,23 +486,23 @@ struct Invocation<'a> {
 struct AggregateInvocationPlan<'a> {
     package: &'a cargo_metadata::Package,
     combo: Vec<String>,
+    flags: ResolvedFlags,
     targets: Vec<EffectiveTarget>,
 }
 
 fn print_package_cmd(
     inv: &Invocation<'_>,
-    cargo_args: &[&str],
     all_args: &[&str],
-    options: &Options,
+    diagnostics_only: bool,
     driver: Option<&str>,
     progress: Progress,
     stdout: &mut StandardStream,
 ) {
-    let compact = options.summary_only || options.diagnostics_only;
+    let compact = inv.flags.summary_only || diagnostics_only;
     if !compact {
         println!();
     }
-    let subcommand = cargo_subcommand(cargo_args);
+    let subcommand = cargo_subcommand(all_args);
     stdout.set_color(&CYAN).ok();
     match subcommand {
         CargoSubcommand::Test => {
@@ -550,7 +549,7 @@ fn print_package_cmd(
         inv.summary_target.field_prefix(),
         inv.features.iter().join(", ")
     );
-    if options.verbose {
+    if inv.flags.verbose {
         print!(" [{} {}]", driver_label(driver), all_args.join(" "));
     }
     stdout.reset().ok();
@@ -560,286 +559,12 @@ fn print_package_cmd(
     }
 }
 
-/// Options for [`print_feature_matrix_for_target`].
-#[derive(Debug, Default)]
-pub struct MatrixOptions {
-    /// Whether to pretty-print the JSON output.
-    pub pretty: bool,
-    /// Whether to emit only one `"default"` entry per package instead of the
-    /// full feature combination matrix.
-    pub packages_only: bool,
-    /// Whether to disable automatic pruning of implied feature combinations.
-    pub no_prune_implied: bool,
-}
-
-fn load_configs_for_packages(packages: &[&cargo_metadata::Package]) -> eyre::Result<Vec<Config>> {
-    packages
-        .iter()
-        .map(|package| package.config())
-        .collect::<eyre::Result<Vec<_>>>()
-}
-
-fn single_target_plans<'a>(
-    packages: &[&'a cargo_metadata::Package],
-    configs: &'a [Config],
-    target: &TargetTriple,
-) -> TargetPlans<'a> {
-    let effective_target = EffectiveTarget {
-        triple: target.clone(),
-        source: TargetSource::Cli,
-    };
-
-    TargetPlans {
-        plans: vec![TargetPlan {
-            target: target.clone(),
-            packages: packages
-                .iter()
-                .zip(configs)
-                .map(|(package, config)| PlannedPackage {
-                    package,
-                    config,
-                    target: effective_target.clone(),
-                })
-                .collect(),
-        }],
-        contains_configured_assignments: false,
-    }
-}
-
-/// Print a JSON feature matrix for the given packages to stdout.
-///
-/// The matrix is a JSON array of objects produced from each package's resolved
-/// target-specific configuration and feature combinations.
-///
-/// # Errors
-///
-/// Returns an error if any configuration can not be parsed or serialization
-/// of the JSON matrix fails.
-pub fn print_feature_matrix_for_target(
-    packages: &[&cargo_metadata::Package],
-    target: &TargetTriple,
-    evaluator: &mut impl crate::cfg_eval::CfgEvaluator,
-    options: &MatrixOptions,
-) -> eyre::Result<ExitCode> {
-    let configs = load_configs_for_packages(packages)?;
-    let target_plans = single_target_plans(packages, &configs, target);
-    let build_options = Options {
-        no_prune_implied: options.no_prune_implied,
-        ..Options::default()
-    };
-    let plan_set = build_execution_plans(
-        &target_plans,
-        &build_options,
-        options.packages_only,
-        evaluator,
-    )?;
-    print_matrix_for_execution_plans(&plan_set, options)
-}
-
-/// A resolved, owned execution plan for one concrete target.
-///
-/// After [`build_execution_plans`], execution owns a deterministic sequence of
-/// resolved `(package, target, combinations, pruned)` units and needs neither a
-/// [`CfgEvaluator`] nor package configs.
-pub struct ExecutionPlan<'a> {
-    /// The concrete target triple this plan is for.
-    pub target: TargetTriple,
-    /// The per-package execution plans for this target, in plan order.
-    pub package_plans: Vec<PackageExecutionPlan<'a>>,
-}
-
-/// A resolved, owned execution plan for one package on one target.
-pub struct PackageExecutionPlan<'a> {
-    /// The package.
-    pub package: &'a cargo_metadata::Package,
-    /// The concrete target and where it came from.
-    pub target: EffectiveTarget,
-    /// Feature combinations to execute, in deterministic (sorted) order.
-    pub combinations: Vec<Vec<String>>,
-    /// Combinations pruned as implied by another combination.
-    pub pruned: Vec<PrunedCombination>,
-    /// Resolved user matrix metadata for this package-target (matrix output
-    /// only; the executor ignores it).
-    pub matrix: serde_json::Map<String, serde_json::Value>,
-}
-
-/// The full set of execution plans plus display flags.
-pub struct ExecutionPlanSet<'a> {
-    /// Execution plans in deterministic target-plan order.
-    pub plans: Vec<ExecutionPlan<'a>>,
-    /// Whether pruned combinations should be shown in the summary.
-    pub show_pruned: bool,
-    /// Whether the `target = ...` field should be shown (not the implicit
-    /// single-host default).
-    pub show_target: bool,
-}
-
-/// Build owned execution plans from target plans.
-///
-/// Resolves each package assignment's target-specific config from the cached
-/// `PlannedPackage::config` (never re-reading the manifest), generates and
-/// prunes feature combinations, and stores owned feature strings so execution
-/// borrows nothing from temporary configs.
-///
-/// When `packages_only` is set, feature generation is skipped (matrix
-/// `--packages-only` only needs one `"default"` row per package-target).
-///
-/// # Errors
-///
-/// Returns an error if a package's config can not be resolved or its feature
-/// combinations can not be generated.
-pub fn build_execution_plans<'a>(
-    target_plans: &TargetPlans<'a>,
-    options: &Options,
-    packages_only: bool,
-    evaluator: &mut impl CfgEvaluator,
-) -> eyre::Result<ExecutionPlanSet<'a>> {
-    let mut plans = Vec::with_capacity(target_plans.plans.len());
-    let mut config_show_pruned = false;
-
-    for target_plan in &target_plans.plans {
-        let mut package_plans = Vec::with_capacity(target_plan.packages.len());
-        for planned in &target_plan.packages {
-            let config = crate::config::resolve::resolve_config(
-                planned.config,
-                &target_plan.target,
-                evaluator,
-            )?;
-            config_show_pruned = config_show_pruned || config.show_pruned;
-
-            let (combinations, pruned) = if packages_only {
-                (Vec::new(), Vec::new())
-            } else {
-                let all_combos = planned.package.feature_combinations(&config)?;
-                let prune_result = crate::implication::maybe_prune(
-                    all_combos,
-                    &planned.package.features,
-                    &config,
-                    options.no_prune_implied,
-                );
-                // Own the feature strings before the resolved config is dropped.
-                let combinations: Vec<Vec<String>> = prune_result
-                    .keep
-                    .into_iter()
-                    .map(|combo| combo.into_iter().cloned().collect())
-                    .collect();
-                (combinations, prune_result.pruned)
-            };
-
-            package_plans.push(PackageExecutionPlan {
-                package: planned.package,
-                target: planned.target.clone(),
-                combinations,
-                pruned,
-                matrix: config.matrix,
-            });
-        }
-        plans.push(ExecutionPlan {
-            target: target_plan.target.clone(),
-            package_plans,
-        });
-    }
-
-    let show_pruned = options.show_pruned || config_show_pruned;
-    let show_target = target_plans.contains_configured_assignments || plans.len() > 1;
-
-    Ok(ExecutionPlanSet {
-        plans,
-        show_pruned,
-        show_target,
-    })
-}
-
-/// Build the JSON feature-matrix rows for the given execution plans.
-///
-/// Every row carries cargo-fc-owned top-level fields (`name`, `target`,
-/// `features`) plus `metadata`, which contains the package's user-defined
-/// matrix metadata.
-#[must_use]
-pub fn build_matrix_rows(
-    plan_set: &ExecutionPlanSet,
-    packages_only: bool,
-) -> Vec<serde_json::Value> {
-    let mut rows = Vec::new();
-
-    for plan in &plan_set.plans {
-        for pp in &plan.package_plans {
-            let name = pp.package.name.to_string();
-
-            let features_list: Vec<String> = if packages_only {
-                vec!["default".to_string()]
-            } else {
-                pp.combinations
-                    .iter()
-                    .map(|combo| combo.iter().join(","))
-                    .collect()
-            };
-
-            for ft in features_list {
-                let mut row = serde_json::Map::new();
-                row.insert("features".to_string(), serde_json::json!(ft));
-                row.insert("metadata".to_string(), sorted_json_object(&pp.matrix));
-                row.insert("name".to_string(), serde_json::json!(name.as_str()));
-                row.insert(
-                    "target".to_string(),
-                    serde_json::json!(pp.target.triple.as_str()),
-                );
-                rows.push(serde_json::Value::Object(row));
-            }
-        }
-    }
-
-    rows
-}
-
-fn sorted_json_object(object: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    let mut entries: Vec<_> = object.iter().collect();
-    entries.sort_by_key(|(key, _)| *key);
-
-    let mut out = serde_json::Map::new();
-    for (key, value) in entries {
-        out.insert(key.clone(), sorted_json_value(value));
-    }
-    serde_json::Value::Object(out)
-}
-
-fn sorted_json_value(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Array(values) => {
-            serde_json::Value::Array(values.iter().map(sorted_json_value).collect())
-        }
-        serde_json::Value::Object(object) => sorted_json_object(object),
-        _ => value.clone(),
-    }
-}
-
-/// Print a JSON feature matrix built from execution plans to stdout.
-///
-/// # Errors
-///
-/// Returns an error if serialization of the JSON matrix fails.
-pub fn print_matrix_for_execution_plans(
-    plan_set: &ExecutionPlanSet,
-    options: &MatrixOptions,
-) -> eyre::Result<ExitCode> {
-    let rows = build_matrix_rows(plan_set, options.packages_only);
-    let matrix = if options.pretty {
-        serde_json::to_string_pretty(&rows)
-    } else {
-        serde_json::to_string(&rows)
-    }?;
-    println!("{matrix}");
-    Ok(None)
-}
-
-/// Pre-computed state shared across all feature combinations in a single
-/// [`run_cargo_command_for_target`] invocation.
+/// Pre-computed state shared across all feature combinations in one execution.
 struct RunContext<'a> {
     cargo_args: &'a [&'a str],
     extra_args: &'a [&'a str],
     missing_arguments: bool,
-    use_diagnostics_only: bool,
-    options: &'a Options,
+    user_has_message_format: bool,
     /// Build driver to invoke instead of `$CARGO`/`cargo` (e.g. `cargo-zigbuild`).
     driver: Option<&'a str>,
 }
@@ -849,6 +574,7 @@ struct CombinationResult {
     summary: Summary,
     /// Raw (colored) output buffer for potential `--fail-fast` dumping.
     colored_output: Vec<u8>,
+    flags: ResolvedFlags,
 }
 
 struct FeatureSelectionNormalization<'a> {
@@ -951,6 +677,15 @@ fn run_single_combination(
 ) -> eyre::Result<CombinationResult> {
     let package = inv.package;
     let features = inv.features;
+    let mut diagnostics_only = inv.flags.diagnostics_only;
+    let mut dedupe = inv.flags.dedupe;
+    if ctx.user_has_message_format {
+        // `--message-format` is a forwarded Cargo argument, so it wins at
+        // execution time instead of becoming part of cargo-fc config
+        // resolution.
+        diagnostics_only = false;
+        dedupe = false;
+    }
     // We set the command working dir to the package manifest parent dir.
     // This works well for now, but one could also consider `--manifest-path` or `-p`
     let Some(working_dir) = package.manifest_path.parent() else {
@@ -967,7 +702,7 @@ fn run_single_combination(
     let mut cmd = process::Command::new(&cargo);
     force_color(&mut cmd);
 
-    if ctx.options.errors_only {
+    if inv.flags.errors_only {
         cmd.env(
             "RUSTFLAGS",
             format!(
@@ -978,7 +713,7 @@ fn run_single_combination(
     }
 
     let mut args = ctx.cargo_args.to_vec();
-    if ctx.use_diagnostics_only {
+    if diagnostics_only {
         args.push(crate::diagnostics_only::MESSAGE_FORMAT);
     }
     for triple in inv.inject_targets {
@@ -991,35 +726,27 @@ fn run_single_combination(
         args.push(&features_flag);
     }
     args.extend_from_slice(ctx.extra_args);
-    print_package_cmd(
-        inv,
-        ctx.cargo_args,
-        &args,
-        ctx.options,
-        ctx.driver,
-        progress,
-        stdout,
-    );
+    print_package_cmd(inv, &args, diagnostics_only, ctx.driver, progress, stdout);
 
     cmd.args(&args).current_dir(working_dir);
-    let mut child = spawn_cargo_command(cmd, ctx.driver, ctx.use_diagnostics_only)?;
+    let mut child = spawn_cargo_command(cmd, ctx.driver, diagnostics_only)?;
 
-    let mut result = if ctx.use_diagnostics_only {
+    let mut result = if diagnostics_only {
         crate::diagnostics_only::process_output(
             &mut child,
-            ctx.options.summary_only,
-            ctx.options.dedupe,
+            inv.flags.summary_only,
+            dedupe,
             seen_diagnostics,
             stdout,
         )?
     } else {
-        capture_stderr(&mut child, ctx.options.summary_only, stdout)?
+        capture_stderr(&mut child, inv.flags.summary_only, stdout)?
     };
 
     let exit_status = child.wait()?;
 
     // Print per-combination dedup note after diagnostics
-    if result.num_suppressed > 0 && !ctx.options.summary_only {
+    if result.num_suppressed > 0 && !inv.flags.summary_only {
         stdout.set_color(&CYAN).ok();
         print!("       Note ");
         stdout.reset().ok();
@@ -1038,7 +765,7 @@ fn run_single_combination(
     // When that happens the output buffer holds the captured stderr which is
     // the only clue about what went wrong. Print it unconditionally (even in
     // --summary-only mode) so the failure is never silent.
-    if ctx.use_diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
+    if diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
         stdout.write_all(&result.output)?;
         stdout.flush().ok();
         // Clear the buffer so the --fail-fast dump does not print it a
@@ -1046,7 +773,7 @@ fn run_single_combination(
         result.output.clear();
     }
 
-    let pedantic_fail = ctx.options.pedantic && (result.num_errors > 0 || result.num_warnings > 0);
+    let pedantic_fail = inv.flags.pedantic && (result.num_errors > 0 || result.num_warnings > 0);
 
     let summary = Summary {
         features: features.to_vec(),
@@ -1063,39 +790,8 @@ fn run_single_combination(
     Ok(CombinationResult {
         summary,
         colored_output: result.output,
+        flags: inv.flags,
     })
-}
-
-/// Run a cargo command for all requested packages and feature combinations on
-/// one concrete target.
-///
-/// This is the backward-compatible single-target entry point for library
-/// consumers that control target resolution themselves. Internally it wraps a
-/// one-item [`TargetPlans`] (source [`TargetSource::Cli`], so no `--target` is
-/// injected and the implicit single-host output is preserved) and runs it
-/// through the serial executor.
-///
-/// # Errors
-///
-/// Returns an error if a cargo process can not be spawned or if IO operations
-/// fail while reading cargo's output.
-pub fn run_cargo_command_for_target(
-    packages: &[&cargo_metadata::Package],
-    cargo_args: Vec<&str>,
-    options: &Options,
-    target: &TargetTriple,
-    evaluator: &mut impl CfgEvaluator,
-) -> eyre::Result<ExitCode> {
-    let configs = load_configs_for_packages(packages)?;
-    let target_plans = single_target_plans(packages, &configs, target);
-    let plan_set = build_execution_plans(&target_plans, options, false, evaluator)?;
-    run_execution_plans(
-        &plan_set,
-        cargo_args,
-        options,
-        TargetExecutionMode::SerialPerTarget,
-        None,
-    )
 }
 
 /// Execution mode over the same execution plans.
@@ -1123,7 +819,6 @@ pub enum TargetExecutionMode {
 pub fn run_execution_plans(
     plan_set: &ExecutionPlanSet,
     mut cargo_args: Vec<&str>,
-    options: &Options,
     mode: TargetExecutionMode,
     driver: Option<&str>,
 ) -> eyre::Result<ExitCode> {
@@ -1161,11 +856,13 @@ pub fn run_execution_plans(
 
     let missing_arguments = cargo_args.is_empty() && extra_args.is_empty();
 
-    // Determine whether we can use diagnostics-only (JSON) mode.
     let user_has_message_format = cargo_args.iter().any(|a| a.starts_with("--message-format"));
-    let use_diagnostics_only = options.diagnostics_only && !user_has_message_format;
-
-    if options.diagnostics_only && user_has_message_format {
+    let wants_diagnostics = plan_set.plans.iter().any(|plan| {
+        plan.package_plans
+            .iter()
+            .any(|package_plan| package_plan.flags.diagnostics_only)
+    });
+    if wants_diagnostics && user_has_message_format {
         print_warning!("--diagnostics-only is ignored when --message-format is already specified");
     }
 
@@ -1173,8 +870,7 @@ pub fn run_execution_plans(
         cargo_args: &cargo_args,
         extra_args: &extra_args,
         missing_arguments,
-        use_diagnostics_only,
-        options,
+        user_has_message_format,
         driver,
     };
 
@@ -1230,6 +926,7 @@ fn execute_serial(
                     &Invocation {
                         package: pp.package,
                         features: combo,
+                        flags: pp.flags,
                         inject_targets: &inject,
                         summary_target: &summary_target,
                     },
@@ -1305,6 +1002,7 @@ fn execute_aggregate(
             &Invocation {
                 package: inv_plan.package,
                 features: &inv_plan.combo,
+                flags: inv_plan.flags,
                 inject_targets: &inject,
                 summary_target: &summary_target,
             },
@@ -1341,15 +1039,16 @@ fn record_result_and_maybe_stop(
     summary: &mut Vec<Summary>,
     result: CombinationResult,
     show_pruned: bool,
-    ctx: &RunContext<'_>,
+    _ctx: &RunContext<'_>,
     stdout: &mut StandardStream,
     start: Instant,
 ) -> eyre::Result<ExitCode> {
     let CombinationResult {
         summary: result_summary,
         colored_output,
+        flags,
     } = result;
-    let should_stop = ctx.options.fail_fast && !result_summary.pedantic_success;
+    let should_stop = flags.fail_fast && !result_summary.pedantic_success;
     let exit_code = result_summary.exit_code;
     summary.push(result_summary);
 
@@ -1357,7 +1056,7 @@ fn record_result_and_maybe_stop(
         return Ok(None);
     }
 
-    if ctx.options.summary_only {
+    if flags.summary_only {
         io::copy(&mut io::Cursor::new(colored_output), stdout)?;
         stdout.flush().ok();
     }
@@ -1377,7 +1076,7 @@ fn aggregate_invocation_plans<'a>(
 ) -> Vec<AggregateInvocationPlan<'a>> {
     let mut package_order: Vec<&cargo_metadata::Package> = Vec::new();
     let mut seen_packages: HashSet<String> = HashSet::new();
-    let mut grouped: HashMap<String, BTreeMap<Vec<String>, Vec<EffectiveTarget>>> = HashMap::new();
+    let mut grouped: HashMap<String, BTreeMap<AggregateKey, Vec<EffectiveTarget>>> = HashMap::new();
 
     for plan in &plan_set.plans {
         for pp in &plan.package_plans {
@@ -1388,7 +1087,10 @@ fn aggregate_invocation_plans<'a>(
             let entry = grouped.entry(id).or_default();
             for combo in &pp.combinations {
                 entry
-                    .entry(combo.clone())
+                    .entry(AggregateKey {
+                        combo: combo.clone(),
+                        flags: pp.flags,
+                    })
                     .or_default()
                     .push(pp.target.clone());
             }
@@ -1400,16 +1102,23 @@ fn aggregate_invocation_plans<'a>(
         let Some(combos) = grouped.remove(&package.id.repr) else {
             continue;
         };
-        for (combo, targets) in combos {
+        for (key, targets) in combos {
             invocations.push(AggregateInvocationPlan {
                 package,
-                combo,
+                combo: key.combo,
+                flags: key.flags,
                 targets,
             });
         }
     }
 
     invocations
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AggregateKey {
+    combo: Vec<String>,
+    flags: ResolvedFlags,
 }
 
 /// Append pruned summaries for a single `(package, target)` block, looking up
@@ -1456,52 +1165,19 @@ fn append_pruned_summaries(
 #[cfg(test)]
 mod test {
     use super::{
-        ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan, Summary, SummaryTarget,
-        aggregate_invocation_plans, build_execution_plans, error_counts,
+        Summary, SummaryTarget, aggregate_invocation_plans, error_counts,
         normalize_feature_selection_args, print_summary, warning_counts,
     };
-    use crate::cfg_eval::CfgEvaluator;
-    use crate::cli::{CargoSubcommand, Options};
-    use crate::package::Package as _;
-    use crate::target::{EffectiveTarget, TargetSource, TargetTriple};
-    use crate::target_plan::{PlannedPackage, TargetPlan, TargetPlans};
+    use crate::cli::CargoSubcommand;
+    use crate::config::ResolvedFlags;
+    use crate::package::test::{effective_target, package};
+    use crate::plan::execution::{ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan};
+    use crate::target::TargetTriple;
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
 
-    #[derive(Default)]
-    struct StubEval;
-
-    impl CfgEvaluator for StubEval {
-        fn matches(&mut self, _cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
-            Ok(false)
-        }
-    }
-
     fn string_vec(values: &[&str]) -> Vec<String> {
         values.iter().copied().map(String::from).collect()
-    }
-
-    fn package(name: &str) -> eyre::Result<cargo_metadata::Package> {
-        use cargo_metadata::{PackageBuilder, PackageId, PackageName};
-        use semver::Version;
-        use std::str::FromStr as _;
-
-        Ok(PackageBuilder::new(
-            PackageName::from_str(name)?,
-            Version::parse("0.1.0")?,
-            PackageId {
-                repr: name.to_string(),
-            },
-            "",
-        )
-        .build()?)
-    }
-
-    fn effective_target(triple: &str) -> EffectiveTarget {
-        EffectiveTarget {
-            triple: TargetTriple(triple.to_string()),
-            source: TargetSource::WorkspaceConfig,
-        }
     }
 
     fn summary_with_failure(exit_code: Option<i32>, pedantic_success: bool) -> Summary {
@@ -1515,6 +1191,23 @@ mod test {
             num_errors: 0,
             num_suppressed: 0,
             equivalent_to: None,
+        }
+    }
+
+    fn package_plan<'a>(
+        package: &'a cargo_metadata::Package,
+        target: &str,
+        combinations: Vec<Vec<String>>,
+        flags: ResolvedFlags,
+    ) -> PackageExecutionPlan<'a> {
+        PackageExecutionPlan {
+            package,
+            target: effective_target(target),
+            combinations,
+            pruned: Vec::new(),
+            matrix: serde_json::Map::new(),
+            flags,
+            ignored_diagnostics_config: false,
         }
     }
 
@@ -1574,39 +1267,35 @@ mod test {
                 ExecutionPlan {
                     target: TargetTriple("t1".to_string()),
                     package_plans: vec![
-                        PackageExecutionPlan {
-                            package: &package_a,
-                            target: effective_target("t1"),
-                            combinations: vec![string_vec(&["b"]), string_vec(&[])],
-                            pruned: Vec::new(),
-                            matrix: serde_json::Map::new(),
-                        },
-                        PackageExecutionPlan {
-                            package: &package_b,
-                            target: effective_target("t1"),
-                            combinations: vec![string_vec(&["z"])],
-                            pruned: Vec::new(),
-                            matrix: serde_json::Map::new(),
-                        },
+                        package_plan(
+                            &package_a,
+                            "t1",
+                            vec![string_vec(&["b"]), string_vec(&[])],
+                            ResolvedFlags::default(),
+                        ),
+                        package_plan(
+                            &package_b,
+                            "t1",
+                            vec![string_vec(&["z"])],
+                            ResolvedFlags::default(),
+                        ),
                     ],
                 },
                 ExecutionPlan {
                     target: TargetTriple("t2".to_string()),
                     package_plans: vec![
-                        PackageExecutionPlan {
-                            package: &package_a,
-                            target: effective_target("t2"),
-                            combinations: vec![string_vec(&[]), string_vec(&["a"])],
-                            pruned: Vec::new(),
-                            matrix: serde_json::Map::new(),
-                        },
-                        PackageExecutionPlan {
-                            package: &package_b,
-                            target: effective_target("t2"),
-                            combinations: vec![string_vec(&["z"])],
-                            pruned: Vec::new(),
-                            matrix: serde_json::Map::new(),
-                        },
+                        package_plan(
+                            &package_a,
+                            "t2",
+                            vec![string_vec(&[]), string_vec(&["a"])],
+                            ResolvedFlags::default(),
+                        ),
+                        package_plan(
+                            &package_b,
+                            "t2",
+                            vec![string_vec(&["z"])],
+                            ResolvedFlags::default(),
+                        ),
                     ],
                 },
             ],
@@ -1649,6 +1338,67 @@ mod test {
     }
 
     #[test]
+    fn aggregate_invocation_plans_split_by_resolved_flags() -> eyre::Result<()> {
+        let package = package("a")?;
+        let dedupe_flags = ResolvedFlags {
+            diagnostics_only: true,
+            dedupe: true,
+            ..ResolvedFlags::default()
+        };
+        let plan_set = ExecutionPlanSet {
+            plans: vec![
+                ExecutionPlan {
+                    target: TargetTriple("t1".to_string()),
+                    package_plans: vec![package_plan(
+                        &package,
+                        "t1",
+                        vec![string_vec(&[])],
+                        ResolvedFlags::default(),
+                    )],
+                },
+                ExecutionPlan {
+                    target: TargetTriple("t2".to_string()),
+                    package_plans: vec![package_plan(
+                        &package,
+                        "t2",
+                        vec![string_vec(&[])],
+                        dedupe_flags,
+                    )],
+                },
+            ],
+            show_pruned: false,
+            show_target: true,
+        };
+
+        let simplified: Vec<_> = aggregate_invocation_plans(&plan_set)
+            .into_iter()
+            .map(|inv| {
+                (
+                    inv.combo,
+                    inv.flags,
+                    inv.targets
+                        .into_iter()
+                        .map(|target| target.triple.0)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        sim_assert_eq!(
+            simplified,
+            vec![
+                (
+                    string_vec(&[]),
+                    ResolvedFlags::default(),
+                    vec!["t1".to_string()]
+                ),
+                (string_vec(&[]), dedupe_flags, vec!["t2".to_string()]),
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
     fn error_regex_single_mod_multiple_errors() {
         let stderr = include_str!("../test-data/single_mod_multiple_errors_stderr.txt");
         let errors: Vec<_> = error_counts(stderr).collect();
@@ -1676,75 +1426,6 @@ mod test {
         let stderr = include_str!("../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
-    }
-
-    #[test]
-    fn build_execution_plans_keeps_pruned_entries_for_summary() -> eyre::Result<()> {
-        let mut package = crate::package::test::package_with_metadata(
-            &["A", "B", "C"],
-            "cargo-fc",
-            &serde_json::json!({ "show_pruned": true }),
-        )?;
-        let Some(implied_features) = package.features.get_mut("B") else {
-            eyre::bail!("test package should contain feature B");
-        };
-        implied_features.push("A".to_string());
-
-        let config = package.config()?;
-        let target_plans = TargetPlans {
-            plans: vec![TargetPlan {
-                target: TargetTriple("test-target".to_string()),
-                packages: vec![PlannedPackage {
-                    package: &package,
-                    config: &config,
-                    target: EffectiveTarget {
-                        triple: TargetTriple("test-target".to_string()),
-                        source: TargetSource::Cli,
-                    },
-                }],
-            }],
-            contains_configured_assignments: false,
-        };
-
-        let mut evaluator = StubEval;
-        let plan_set =
-            build_execution_plans(&target_plans, &Options::default(), false, &mut evaluator)?;
-
-        assert!(plan_set.show_pruned);
-        let [plan] = plan_set.plans.as_slice() else {
-            eyre::bail!("expected one execution plan, got {}", plan_set.plans.len());
-        };
-        let [pp] = plan.package_plans.as_slice() else {
-            eyre::bail!(
-                "expected one package execution plan, got {}",
-                plan.package_plans.len()
-            );
-        };
-        sim_assert_eq!(
-            &pp.combinations,
-            &vec![
-                string_vec(&[]),
-                string_vec(&["A"]),
-                string_vec(&["A", "C"]),
-                string_vec(&["B"]),
-                string_vec(&["B", "C"]),
-                string_vec(&["C"]),
-            ],
-        );
-
-        let pruned: Vec<_> = pp
-            .pruned
-            .iter()
-            .map(|p| (p.features.clone(), p.equivalent_to.clone()))
-            .collect();
-        sim_assert_eq!(
-            pruned,
-            vec![
-                (string_vec(&["A", "B"]), string_vec(&["B"])),
-                (string_vec(&["A", "B", "C"]), string_vec(&["B", "C"])),
-            ],
-        );
-        Ok(())
     }
 
     #[test]

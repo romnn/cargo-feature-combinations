@@ -96,7 +96,35 @@ pub fn maybe_prune<'a>(
     // allow_feature_sets is an explicit allowlist where the user declared the
     // exact sets they care about — pruning would silently drop entries they
     // asked for.
-    let active = config.prune_implied && !no_prune && config.allow_feature_sets.is_empty();
+    let no_prune_implied = config
+        .flags
+        .no_prune_implied
+        .or_else(|| config.flags.prune_implied.map(|enabled| !enabled))
+        .unwrap_or(false);
+    let active = !no_prune_implied && !no_prune && config.allow_feature_sets.is_empty();
+    maybe_prune_active(combos, features, active)
+}
+
+/// Apply pruning when the caller already resolved the pruning flags.
+///
+/// Execution-plan construction uses this variant so one fully merged flag view
+/// controls pruning. The public [`maybe_prune`] keeps its standalone contract
+/// for callers that pass an unresolved package config directly.
+pub(crate) fn maybe_prune_with_resolved_flag<'a>(
+    combos: Vec<Vec<&'a String>>,
+    features: &'a BTreeMap<String, Vec<String>>,
+    config: &crate::config::Config,
+    no_prune: bool,
+) -> PruneResult<'a> {
+    let active = !no_prune && config.allow_feature_sets.is_empty();
+    maybe_prune_active(combos, features, active)
+}
+
+fn maybe_prune_active<'a>(
+    combos: Vec<Vec<&'a String>>,
+    features: &'a BTreeMap<String, Vec<String>>,
+    active: bool,
+) -> PruneResult<'a> {
     if active {
         prune_implied_combinations(combos, features)
     } else {
@@ -183,14 +211,17 @@ mod test {
     type Pruned = Vec<(Vec<String>, Vec<String>)>;
 
     fn run_prune(feat: &BTreeMap<String, Vec<String>>) -> eyre::Result<(Kept, Pruned)> {
-        use crate::config::Config;
+        use crate::config::{Config, FlagConfig};
         use crate::package::Package;
 
         let mut pkg = crate::package::test::package_with_features(&[])?;
         pkg.features = feat.clone();
 
         let config = Config {
-            prune_implied: true,
+            flags: FlagConfig {
+                prune_implied: Some(true),
+                ..FlagConfig::default()
+            },
             ..Config::default()
         };
         let combos = pkg.feature_combinations(&config)?;
@@ -226,6 +257,28 @@ mod test {
         // [A, B] has the same resolved set as [B]: {A, B}
         sim_assert_eq!(kept, vec![vs(&[]), vs(&["A"]), vs(&["B"])]);
         sim_assert_eq!(pruned, vec![(vs(&["A", "B"]), vs(&["B"]))]);
+        Ok(())
+    }
+
+    #[test]
+    fn maybe_prune_uses_resolved_no_prune_flag_only() -> eyre::Result<()> {
+        use crate::config::{Config, FlagConfig};
+        use crate::package::Package;
+
+        let mut pkg = crate::package::test::package_with_features(&[])?;
+        pkg.features = features(&[("A", &[]), ("B", &["A"])]);
+        let config = Config {
+            flags: FlagConfig {
+                prune_implied: Some(false),
+                ..FlagConfig::default()
+            },
+            ..Config::default()
+        };
+        let combos = pkg.feature_combinations(&config)?;
+        let result = maybe_prune_with_resolved_flag(combos, &pkg.features, &config, false);
+
+        sim_assert_eq!(result.keep.len(), 3);
+        sim_assert_eq!(result.pruned.len(), 1);
         Ok(())
     }
 

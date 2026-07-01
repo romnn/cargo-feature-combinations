@@ -7,14 +7,13 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::Package as _;
-use cargo_feature_combinations::cfg_eval::CfgEvaluator;
-use cargo_feature_combinations::cli::Options;
-use cargo_feature_combinations::config::Config;
-use cargo_feature_combinations::runner::{build_execution_plans, build_matrix_rows};
+use cargo_feature_combinations::plan::targets::{SelectedPackage, build_target_plans};
 use cargo_feature_combinations::target::{TargetEnvironment, TargetTriple};
-use cargo_feature_combinations::target_plan::{SelectedPackage, build_target_plans};
 use cargo_feature_combinations::workspace::Workspace as _;
+use cargo_feature_combinations::{
+    CfgEvaluator, Config, FlagConfig, Package as _, PlanBuildContext, WorkspaceConfig,
+    build_execution_plans, build_matrix_rows,
+};
 use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 
@@ -26,6 +25,16 @@ impl TargetEnvironment for HostEnv {
     }
     fn host_target(&self) -> eyre::Result<TargetTriple> {
         Ok(TargetTriple(self.0.to_string()))
+    }
+}
+
+fn matrix_context(workspace_config: &WorkspaceConfig) -> PlanBuildContext<'_> {
+    PlanBuildContext {
+        workspace_config,
+        raw_command: None,
+        resolved_command: None,
+        default_diagnostics_allowed: false,
+        matrix: true,
     }
 }
 
@@ -83,7 +92,12 @@ fn matrix_rows(
     let selected: Vec<SelectedPackage<'_>> = packages
         .iter()
         .zip(&configs)
-        .map(|(package, config)| SelectedPackage { package, config })
+        .map(|(package, config)| SelectedPackage {
+            package,
+            config,
+            ignore_configured_targets: false,
+            target_decision_explicit: false,
+        })
         .collect();
     let base_exclude = meta.base_workspace_exclude_packages()?;
 
@@ -96,8 +110,10 @@ fn matrix_rows(
         env,
         evaluator,
     )?;
-    let plan_set = build_execution_plans(&target_plans, &Options::default(), false, evaluator)?;
-    Ok(build_matrix_rows(&plan_set, false))
+    let context = matrix_context(&ws_config);
+    let plan_set =
+        build_execution_plans(&target_plans, FlagConfig::default(), &context, evaluator)?;
+    Ok(build_matrix_rows(&plan_set))
 }
 
 /// Reduce matrix rows to a comparable `(name, target, features)` set.
@@ -502,7 +518,12 @@ fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
     let selected: Vec<SelectedPackage<'_>> = packages
         .iter()
         .zip(&configs)
-        .map(|(package, config)| SelectedPackage { package, config })
+        .map(|(package, config)| SelectedPackage {
+            package,
+            config,
+            ignore_configured_targets: false,
+            target_decision_explicit: false,
+        })
         .collect();
     let base_exclude = meta.base_workspace_exclude_packages()?;
     let env = HostEnv("host-triple");
@@ -517,7 +538,8 @@ fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
         &env,
         &mut eval,
     )?;
-    let err = build_execution_plans(&target_plans, &Options::default(), false, &mut eval)
+    let context = matrix_context(&ws_config);
+    let err = build_execution_plans(&target_plans, FlagConfig::default(), &context, &mut eval)
         .err()
         .ok_or_eyre("expected unavailable target to fail")?;
     assert!(

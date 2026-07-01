@@ -104,7 +104,10 @@ SUBCOMMAND:
 OPTIONS:
     --help                  Print help information
     --diagnostics-only      Show only diagnostics (warnings/errors) per
-                            feature combination, suppressing build noise
+                            feature combination. Subcommand must accept
+                            --message-format=... and emit rustc JSON
+                            diagnostics (e.g. build, check, clippy, doc,
+                            or any alias/wrapper that does the same)
     --dedupe                Like --diagnostics-only, but also deduplicate
                             identical diagnostics across feature combinations
     --summary-only          Hide cargo output and only show the final summary
@@ -115,17 +118,29 @@ OPTIONS:
     --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
-    --no-prune-implied      Disable pruning of redundant feature combinations
+    --no-prune-implied      Disable automatic pruning of redundant feature
+                            combinations implied by other features
     --show-pruned           Show pruned feature combinations in the summary
-    --aggregate-targets     Batch a combination's configured targets into one
-                            Cargo invocation (faster on many cores; group-level
-                            attribution). See "Configured targets" below.
-    --no-targets            Ignore configured target lists and use Cargo's
-                            default single target. See "Configured targets".
+    --aggregate-targets     Batch each combination's configured targets into a
+                            single Cargo invocation (one `--target` per target)
+                            instead of one invocation per target. Faster on
+                            many cores; reports results per target group. Falls
+                            back to serial for `run` and pruned summaries.
+    --no-targets            Ignore configured target lists for this invocation
+                            and use Cargo's default single target (--target,
+                            then CARGO_BUILD_TARGET, then host). An alternative
+                            to passing an explicit --target <triple>.
     --install-missing-targets
                             Install missing Rust target components with rustup
                             before running Cargo. Explicit opt-in because this
                             may mutate the toolchain and use the network.
+    --driver <bin>          Program invoked in place of `cargo` for each build
+                            (e.g. `cargo-zigbuild`, `cross`). Defaults to plain
+                            `cargo` for host-only runs and to `cargo-zigbuild`
+                            when any non-host target is planned, so native-C
+                            dependencies cross-compile. Also settable via
+                            [workspace.metadata.cargo-fc].driver; pass `cargo` to
+                            force plain cargo.
 ```
 
 ### Configuration
@@ -376,6 +391,88 @@ short alias has its own entry. If configured targets exist but the selected
 command lacks this capability by default, cargo-fc warns once and falls back to
 the single effective target. An explicit `targets = false` opt-out is quiet.
 
+#### Configurable cargo-fc flags
+
+Cargo-fc boolean flags can be configured in `Cargo.toml` with the same name as
+the CLI flag, using `_` instead of `-`. CLI flags still win for one invocation.
+
+```toml
+[workspace.metadata.cargo-fc]
+dedupe = true
+fail_fast = true
+
+[package.metadata.cargo-fc]
+pedantic = false
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "windows")']
+errors_only = true
+
+[package.metadata.cargo-fc.target.'cfg(target_os = "windows")'.subcommands.clippy]
+dedupe = false
+
+[workspace.metadata.cargo-fc.subcommands.my-custom-cmd]
+dedupe = true
+```
+
+The configurable flag keys are:
+
+```toml
+summary_only = true
+diagnostics_only = true
+dedupe = true
+verbose = true
+pedantic = true
+errors_only = true
+packages_only = true
+fail_fast = true
+no_prune_implied = true
+prune_implied = true
+show_pruned = true
+aggregate_targets = true
+no_targets = true
+install_missing_targets = true
+only_packages_with_lib_target = true
+```
+
+`dedupe = true` implies diagnostics-only output. `prune_implied` is the positive
+config spelling for `no_prune_implied`; configure only one spelling in a given
+scope.
+
+Flag precedence is broad-to-narrow:
+
+1. workspace config,
+2. matching workspace target config,
+3. package config,
+4. matching package target config,
+5. explicit CLI flags.
+
+At each config level, a matching `subcommands.<name>` table is applied after
+that level's plain flags, so command-specific defaults override broader
+defaults. Alias config for the raw command token wins; otherwise cargo-fc uses
+the resolved alias target when one is known.
+
+Broad config-driven diagnostics apply only to commands where diagnostics-only
+mode is safe by default. Built-in `build`, `check`, `clippy`, and `doc` get
+broad `diagnostics_only = true` and `dedupe = true` settings. Built-in `test`,
+`run`, and unresolved custom commands do not, because they are not reliable
+JSON-diagnostics-only commands. Aliases that resolve to a safe built-in inherit
+that behavior.
+
+For a custom command, unresolved alias, or a built-in such as `test`, opt in by
+setting the behavior in that command's own table:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.my-custom-cmd]
+dedupe = true
+```
+
+Subcommand-local diagnostics flags are explicit and are applied even for
+commands that are not safe by default. `dedupe = true` implies
+`diagnostics_only = true`; setting `dedupe = true` together with
+`diagnostics_only = false` is rejected as contradictory. Use
+`diagnostics_only = false` or `dedupe = false` in a narrower scope to override a
+broader default. Explicit CLI flags are always forwarded.
+
 > [!WARNING]
 > The `targets` list is shared by all target-capable commands. `check`/`clippy`
 > only need the target's `rustc`, but `test`/`run` **execute** the binary and so
@@ -436,11 +533,13 @@ exclude_packages = { add = ["native-cli"] }
 
 [workspace.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_packages = { add = ["wasm-app"] }
+fail_fast = false
 ```
 
-Workspace target overrides may patch `exclude_packages` only, and they apply to
-every concrete effective target — including single-target runs selected by
-`--target`, `CARGO_BUILD_TARGET`, or the host.
+Workspace target overrides may patch `exclude_packages` and set cargo-fc flag
+defaults for matching targets. They apply to every concrete effective target —
+including single-target runs selected by `--target`, `CARGO_BUILD_TARGET`, or
+the host.
 
 ### Target-specific configuration
 

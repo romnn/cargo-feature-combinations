@@ -1,28 +1,23 @@
 # Changelog
 
-## [0.1.1]
-
-### Added
-
-- Added automatic `cargo-zigbuild` driver selection for planned non-host targets
-  so cross-compiling crates with native C dependencies can work through the same
-  `cargo fc` invocation.
-- Added `--driver <bin>` and `[workspace.metadata.cargo-fc] driver = "<bin>"`
-  to override the build driver, including forcing plain Cargo with
-  `driver = "cargo"`.
-- Added Cargo alias resolution from `.cargo/config.toml`, including nested
-  aliases, so aliases such as `lint = "clippy --all-targets --no-deps"` are
-  rewritten before invoking wrappers like `cargo-zigbuild`.
-
-### Changed
-
-- Missing build drivers now produce an actionable warning explaining how to
-  install `cargo-zigbuild`/zig or override the driver.
-
-## [0.1.0]
+## [0.2.0]
 
 ### Breaking Changes
 
+- Simplified the Rust library API while keeping CLI, TOML, and matrix JSON
+  behavior unchanged. Implementation modules such as `cli`, `runner`,
+  `diagnostics_only`, and `tee` are no longer public modules.
+- Replaced nested implementation paths with root-level library exports for the
+  supported core API, including config types, target planning, execution
+  planning, matrix row generation, and execution.
+- Removed legacy Rust API helpers and shims, including `MatrixOptions`,
+  `print_feature_matrix_for_target`, `run_cargo_command_for_target`,
+  `ArgumentParser`, and public summary/output parsing helpers.
+- Changed `build_execution_plans` to require an explicit `PlanBuildContext` and
+  `FlagConfig` instead of constructing hidden defaults or accepting CLI `Options`.
+- Unknown keys in cargo-fc metadata tables now fail fast instead of being
+  silently ignored. This catches misspelled config such as `fail-fast` with a
+  hint to use underscore-separated keys.
 - Changed `cargo fc matrix` row shape. cargo-fc now owns the top-level
   `name`, `target`, `features`, and `metadata` fields. Custom package matrix
   fields from `[package.metadata.cargo-fc].matrix` or
@@ -47,6 +42,29 @@
 
 ### Added
 
+- Added automatic `cargo-zigbuild` driver selection for planned non-host targets
+  so cross-compiling crates with native C dependencies can work through the same
+  `cargo fc` invocation.
+- Added `--driver <bin>` and `[workspace.metadata.cargo-fc] driver = "<bin>"`
+  to override the build driver, including forcing plain Cargo with
+  `driver = "cargo"`.
+- Added Cargo alias resolution from `.cargo/config.toml`, including nested
+  aliases, so aliases such as `lint = "clippy --all-targets --no-deps"` are
+  rewritten before invoking wrappers like `cargo-zigbuild`.
+- Added config defaults for cargo-fc boolean flags, including `summary_only`,
+  `diagnostics_only`, `dedupe`, `pedantic`, `errors_only`, `packages_only`,
+  `fail_fast`, `no_prune_implied`, `show_pruned`, `aggregate_targets`,
+  `no_targets`, `install_missing_targets`, and
+  `only_packages_with_lib_target`.
+- Added resolved flag precedence across workspace, matching workspace target,
+  package, matching package target, and explicit CLI scopes, with matching
+  `subcommands.<name>` tables applied immediately after each config scope.
+- Added package-level and target-specific `subcommands.<name>` flag defaults,
+  including target+subcommand tables such as
+  `[package.metadata.cargo-fc.target.'cfg(...)'.subcommands.clippy]`.
+- Added per-subcommand diagnostics flag overrides so custom commands and
+  diagnostics-unsafe built-ins can opt into diagnostics mode with the same
+  `diagnostics_only = true` or `dedupe = true` keys used elsewhere.
 - Added workspace-level configured targets:
   `[workspace.metadata.cargo-fc] targets = ["<triple>", ...]`.
 - Added package-level configured targets:
@@ -74,6 +92,12 @@
 
 ### Changed
 
+- Missing build drivers now produce an actionable warning explaining how to
+  install `cargo-zigbuild`/zig or override the driver.
+- Explicit cargo-fc CLI flags now overlay config defaults last. Broad
+  config-driven diagnostics apply only to built-in diagnostics-safe commands,
+  while subcommand-local diagnostics flags and explicit diagnostics CLI flags
+  always win.
 - Explicit Cargo `--target <triple>` wins globally over configured target
   lists. Without an explicit CLI target, configured package/workspace targets
   take precedence over `CARGO_BUILD_TARGET`, then fall back to

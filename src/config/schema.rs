@@ -1,15 +1,7 @@
-/// Patch types for set-like configuration fields.
-pub mod patch;
-/// Configuration resolution logic (merge base config with target overrides).
-pub mod resolve;
-
-use self::patch::{FeatureSetVecPatch, StringSetPatch};
+use super::flags::FlagConfig;
+use super::patch::{FeatureSetVecPatch, StringSetPatch};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
-
-fn default_true() -> bool {
-    true
-}
 
 /// Per-package configuration for `cargo-fc`.
 ///
@@ -61,10 +53,10 @@ pub struct Config {
     /// user-defined features that happen to enable optional dependencies via
     /// `dep:NAME` remain part of the matrix.
     ///
-    /// By default this is `false` to preserve backwards-compatible behavior.
+    /// By default this is `false` to preserve the existing feature matrix.
     #[serde(default)]
     pub skip_optional_dependencies: bool,
-    /// Deprecated: kept for backwards compatibility. Prefer
+    /// Deprecated TOML key. Prefer
     /// [`WorkspaceConfig::exclude_packages`] via
     /// `[workspace.metadata.cargo-fc].exclude_packages`.
     #[serde(default)]
@@ -81,29 +73,24 @@ pub struct Config {
     /// When enabled, disallow generating the empty feature set.
     #[serde(default)]
     pub no_empty_feature_set: bool,
-    /// When enabled, automatically detect and skip redundant feature
-    /// combinations whose resolved feature set (after Cargo's feature
-    /// unification) is identical to a smaller combination.
-    ///
-    /// Defaults to `true`.
-    #[serde(default = "default_true")]
-    pub prune_implied: bool,
-    /// When enabled, include pruned feature combinations in the summary
-    /// output. Pruned combinations are hidden by default.
-    #[serde(default)]
-    pub show_pruned: bool,
     /// Arbitrary user-defined matrix values forwarded to the runner.
     #[serde(default)]
     pub matrix: serde_json::Map<String, serde_json::Value>,
+    /// Package-level cargo-fc flag defaults.
+    #[serde(default, flatten)]
+    pub flags: FlagConfig,
+    /// Per-subcommand package-level cargo-fc flag defaults.
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
 
     /// Target-specific package configuration overrides.
     ///
     /// This is read from `[package.metadata.cargo-fc.target.'cfg(...)']`.
     #[serde(default, rename = "target")]
     pub target_overrides: BTreeMap<String, TargetOverride>,
-    /// Deprecated configuration keys (kept for backwards compatibility).
+    /// Deprecated TOML keys accepted during config parsing.
     #[serde(flatten)]
-    pub deprecated: DeprecatedConfig,
+    pub(crate) deprecated: DeprecatedTomlKeys,
 }
 
 impl Default for Config {
@@ -120,11 +107,11 @@ impl Default for Config {
             include_feature_sets: Vec::new(),
             allow_feature_sets: Vec::new(),
             no_empty_feature_set: false,
-            prune_implied: true,
-            show_pruned: false,
             matrix: serde_json::Map::new(),
+            flags: FlagConfig::default(),
+            subcommand_overrides: BTreeMap::new(),
             target_overrides: BTreeMap::new(),
-            deprecated: DeprecatedConfig::default(),
+            deprecated: DeprecatedTomlKeys::default(),
         }
     }
 }
@@ -167,15 +154,15 @@ pub struct TargetOverride {
     /// Override for [`Config::no_empty_feature_set`].
     #[serde(default)]
     pub no_empty_feature_set: Option<bool>,
-    /// Override for [`Config::prune_implied`].
-    #[serde(default)]
-    pub prune_implied: Option<bool>,
-    /// Override for [`Config::show_pruned`].
-    #[serde(default)]
-    pub show_pruned: Option<bool>,
     /// Merge override for [`Config::matrix`].
     #[serde(default)]
     pub matrix: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Target-specific cargo-fc flag defaults.
+    #[serde(default, flatten)]
+    pub flags: FlagConfig,
+    /// Per-subcommand target-specific cargo-fc flag defaults.
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
 }
 
 /// Workspace-wide configuration for `cargo-fc`.
@@ -191,27 +178,19 @@ pub struct WorkspaceConfig {
     /// `targets` override (do not merge with) this list.
     #[serde(default, rename = "targets")]
     pub workspace_targets: Vec<String>,
-    /// Whether to install missing Rust target components before execution.
-    ///
-    /// This is workspace-wide because it mutates the active Rust toolchain for
-    /// the whole invocation. `cargo fc matrix` ignores it because matrix output
-    /// is introspection-only and does not run Cargo.
-    #[serde(default)]
-    pub install_missing_targets: bool,
     /// Target-specific workspace overrides keyed by Cargo-style cfg expressions.
     ///
-    /// These may patch `exclude_packages` only; they select which workspace
-    /// packages participate for one already-selected target.
+    /// These select workspace packages and cargo-fc flags for one
+    /// already-selected target.
     #[serde(default, rename = "target")]
     pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
-    /// Per-subcommand configured-target policy.
+    /// Per-subcommand capability and flag overrides.
     ///
-    /// Built-in Cargo subcommands default to their code-provided capability.
+    /// Built-in Cargo subcommands default to their code-provided capabilities.
     /// Unresolved aliases and custom subcommands default to denied. Entries in
-    /// this table override either default with `targets = true` or
-    /// `targets = false`.
+    /// this table override target capability and command-local cargo-fc flags.
     #[serde(default, rename = "subcommands")]
-    pub subcommand_overrides: BTreeMap<String, CommandTargetCapability>,
+    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
     /// Build driver to invoke in place of `cargo` for each combination.
     ///
     /// When unset, cargo-fc uses plain `cargo` for host-only runs and defaults
@@ -221,36 +200,45 @@ pub struct WorkspaceConfig {
     /// `--driver` CLI flag overrides this.
     #[serde(default)]
     pub driver: Option<String>,
+    /// Workspace cargo-fc flag defaults.
+    #[serde(default, flatten)]
+    pub flags: FlagConfig,
 }
 
 /// Target-specific workspace override.
 ///
 /// Keyed by Cargo-style cfg expressions, e.g. `cfg(target_arch = "wasm32")`.
-/// Workspace target overrides may patch `exclude_packages` only.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct WorkspaceTargetOverride {
     /// Patch operations for [`WorkspaceConfig::exclude_packages`].
     #[serde(default)]
     pub exclude_packages: Option<StringSetPatch>,
+    /// Target-specific workspace cargo-fc flag defaults.
+    #[serde(default, flatten)]
+    pub flags: FlagConfig,
+    /// Per-subcommand target-specific workspace cargo-fc flag defaults.
+    #[serde(default, rename = "subcommands")]
+    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
 }
 
-/// Workspace-level configured-target policy for a single command token.
+/// Workspace-level capability and flag overrides for a single command token.
 ///
-/// A plain `bool` is enough in v1. Unresolved aliases and custom subcommands
-/// default to deny, while built-ins default according to cargo-fc's registry.
-/// A present `targets = false` entry is therefore an explicit command-level
-/// opt-out.
+/// Unresolved aliases and custom subcommands default to deny capabilities,
+/// while built-ins default according to cargo-fc's registry.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct CommandTargetCapability {
+pub struct CommandCapabilities {
     /// When `true`, cargo-fc may expand configured target lists and inject
     /// `--target <triple>` for this command.
     #[serde(default)]
-    pub targets: bool,
+    pub targets: Option<bool>,
+    /// Per-command cargo-fc flag defaults.
+    #[serde(default, flatten)]
+    pub flags: FlagConfig,
 }
 
-/// Deprecated configuration keys kept for backwards compatibility.
+/// Deprecated TOML keys kept as accepted input spellings.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct DeprecatedConfig {
+pub(crate) struct DeprecatedTomlKeys {
     /// Former name of [`Config::exclude_feature_sets`].
     #[serde(default)]
     pub skip_feature_sets: Vec<HashSet<String>>,

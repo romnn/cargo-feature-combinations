@@ -1,6 +1,6 @@
 //! Workspace-level configuration and package discovery.
 
-use crate::config::{Config, WorkspaceConfig};
+use crate::config::{Config, WorkspaceConfig, validate_workspace_metadata};
 use crate::print_warning;
 use crate::{
     DEFAULT_METADATA_KEY, METADATA_KEYS, find_metadata_value, pkg_metadata_section,
@@ -9,11 +9,10 @@ use crate::{
 use color_eyre::eyre;
 use std::collections::HashSet;
 
-/// Workspace-only metadata keys read solely from the workspace root.
+/// Workspace-only non-flag metadata keys read solely from the workspace root.
 const WORKSPACE_ONLY_KEYS: &[&str] = &[
     "exclude_packages",
     "targets",
-    "install_missing_targets",
     "target",
     "subcommands",
     "driver",
@@ -55,8 +54,8 @@ pub trait Workspace {
 
     /// Return the packages that should be considered for feature combinations.
     ///
-    /// This is the backward-compatible single path: candidate discovery plus
-    /// the base (target-independent) workspace exclude set.
+    /// This combines candidate discovery with the base target-independent
+    /// workspace exclude set.
     ///
     /// # Errors
     ///
@@ -67,7 +66,10 @@ pub trait Workspace {
 impl Workspace for cargo_metadata::Metadata {
     fn workspace_config(&self) -> eyre::Result<WorkspaceConfig> {
         let config: WorkspaceConfig = match find_metadata_value(&self.workspace_metadata) {
-            Some((value, _key)) => serde_json::from_value(value.clone())?,
+            Some((value, key)) => {
+                validate_workspace_metadata(value, &ws_metadata_section(key))?;
+                serde_json::from_value(value.clone())?
+            }
             None => WorkspaceConfig::default(),
         };
         Ok(config)
@@ -151,8 +153,12 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
                 .iter()
                 .find_map(|&key| workspace.get(key).map(|tool| (key, tool)))
         {
-            for ws_key in WORKSPACE_ONLY_KEYS {
-                if json_has_values(tool.get(*ws_key)) {
+            for ws_key in WORKSPACE_ONLY_KEYS
+                .iter()
+                .chain(crate::config::FLAG_KEYS)
+                .copied()
+            {
+                if json_has_values(tool.get(ws_key)) {
                     print_warning!(
                         "[{}].{} in package `{}` has no effect; workspace metadata is only read from the workspace root Cargo.toml",
                         ws_metadata_section(key),
@@ -311,7 +317,31 @@ mod test {
 
         let config = metadata.workspace_config()?;
 
-        assert!(config.install_missing_targets);
+        assert_eq!(config.flags.install_missing_targets, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_metadata_rejects_unknown_flag_keys() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "cargo-fc": {
+                    "fail-fast": true
+                }
+            }))
+            .build()?;
+
+        let err = metadata
+            .workspace_config()
+            .expect_err("hyphenated cargo-fc flag should be rejected");
+
+        assert!(err.to_string().contains("unknown cargo-fc config key"));
+        assert!(err.to_string().contains("use `_`, not `-`"));
         Ok(())
     }
 

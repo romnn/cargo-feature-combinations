@@ -2,7 +2,9 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::Package as _;
+use cargo_feature_combinations::{
+    CfgEvaluator, Package as _, TargetTriple, maybe_prune, resolve_config,
+};
 use color_eyre::eyre::{self, OptionExt};
 use similar_asserts::assert_eq as sim_assert_eq;
 
@@ -92,8 +94,7 @@ fn run_prune_in_dir(temp: &TempDir) -> eyre::Result<PruneTestResult> {
 
     let config = pkg.config()?;
     let combos = pkg.feature_combinations(&config)?;
-    let result =
-        cargo_feature_combinations::implication::maybe_prune(combos, &pkg.features, &config, false);
+    let result = maybe_prune(combos, &pkg.features, &config, false);
 
     let mut kept: Vec<Vec<String>> = result
         .keep
@@ -217,6 +218,26 @@ fn disabled_via_config() -> eyre::Result<()> {
     )?;
 
     // All 4 combos preserved when pruning is disabled
+    sim_assert_eq!(result.kept.len(), 4);
+    sim_assert_eq!(result.pruned.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn disabled_via_no_prune_implied_config() -> eyre::Result<()> {
+    let result = run_prune_test(
+        indoc::indoc! {r#"
+            [features]
+            A = []
+            B = ["A"]
+        "#},
+        indoc::indoc! {r#"
+            exclude_features = ["default"]
+            no_prune_implied = true
+        "#},
+    )?;
+
     sim_assert_eq!(result.kept.len(), 4);
     sim_assert_eq!(result.pruned.len(), 0);
 
@@ -403,12 +424,8 @@ struct StubEval {
     matches: std::collections::HashSet<String>,
 }
 
-impl cargo_feature_combinations::cfg_eval::CfgEvaluator for StubEval {
-    fn matches(
-        &mut self,
-        cfg_expr: &str,
-        _target: &cargo_feature_combinations::target::TargetTriple,
-    ) -> eyre::Result<bool> {
+impl CfgEvaluator for StubEval {
+    fn matches(&mut self, cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
         Ok(self.matches.contains(cfg_expr))
     }
 }
@@ -431,15 +448,10 @@ fn resolve_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
         eval.matches.insert(cfg.to_string());
     }
 
-    let config = cargo_feature_combinations::config::resolve::resolve_config(
-        &base,
-        &cargo_feature_combinations::target::TargetTriple("x".to_string()),
-        &mut eval,
-    )?;
+    let config = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     let combos = pkg.feature_combinations(&config)?;
-    let result =
-        cargo_feature_combinations::implication::maybe_prune(combos, &pkg.features, &config, false);
+    let result = maybe_prune(combos, &pkg.features, &config, false);
 
     let mut kept: Vec<Vec<String>> = result
         .keep

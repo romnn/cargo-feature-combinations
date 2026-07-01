@@ -9,37 +9,51 @@ mod cargo_alias;
 /// Evaluate Cargo-style `cfg(...)` expressions against a concrete target.
 pub mod cfg_eval;
 /// CLI argument parsing, options, and help text.
-pub mod cli;
+mod cli;
 /// Configuration types and resolution logic for feature combination generation.
 pub mod config;
 /// Diagnostics-only output mode (JSON parsing and deduplication).
-pub mod diagnostics_only;
+mod diagnostics_only;
 /// Feature implication graph and redundant-combination pruning.
 pub mod implication;
+/// JSON matrix output from resolved execution plans.
+mod matrix;
 /// Package-level configuration, feature combination generation, and error types.
 pub mod package;
+/// Planning stages that prepare target and execution plans before Cargo runs.
+pub mod plan;
 /// Cargo command execution, output parsing, summary printing, and matrix output.
-pub mod runner;
+mod runner;
 /// Target triple handling and host/flag based detection.
 pub mod target;
 /// Optional Rust target installation.
 mod target_install;
-/// Target selection and target-plan construction.
-pub mod target_plan;
 /// IO utilities.
-pub mod tee;
+mod tee;
 /// Workspace-level configuration and package discovery.
 pub mod workspace;
 
-pub use cli::{ArgumentParser, Command, Options, parse_arguments};
-pub use package::{FeatureCombinationError, Package};
-pub use runner::{
-    ExitCode, MatrixOptions, color_spec, error_counts, print_feature_matrix_for_target,
-    print_summary, run_cargo_command_for_target, warning_counts,
+pub use cfg_eval::{CfgEvaluator, RustcCfgEvaluator};
+pub use cli::{Command, Options, parse_arguments};
+pub use config::patch::{FeatureSetVecPatch, StringSetPatch};
+pub use config::resolve::resolve_config;
+pub use config::{
+    CommandCapabilities, Config, FlagConfig, ResolvedFlags, TargetOverride, WorkspaceConfig,
+    WorkspaceTargetOverride,
 };
+pub use implication::{PruneResult, PrunedCombination, maybe_prune};
+pub use matrix::build_matrix_rows;
+pub use package::{FeatureCombinationError, Package};
+pub use plan::execution::{
+    ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan, PlanBuildContext, build_execution_plans,
+};
+pub use plan::targets::{
+    PlannedPackage, SelectedPackage, TargetPlan, TargetPlans, build_target_plans,
+};
+pub use runner::{ExitCode, TargetExecutionMode, run_execution_plans};
+pub use target::{EffectiveTarget, TargetEnvironment, TargetSource, TargetTriple};
 pub use workspace::Workspace;
 
-use cfg_eval::RustcCfgEvaluator;
 use cli::cargo_subcommand;
 use color_eyre::eyre;
 use runner::print_feature_combination_error;
@@ -129,6 +143,38 @@ pub(crate) const DEFAULT_METADATA_KEY: &str = default_metadata_key!();
 pub(crate) const DEFAULT_PKG_METADATA_SECTION: &str =
     concat!("package.metadata.", default_metadata_key!());
 
+#[derive(Clone, Copy)]
+struct CommandTokens<'a> {
+    raw: Option<&'a str>,
+    resolved: Option<&'a str>,
+}
+
+struct PreparedCargoCommand {
+    args: Vec<String>,
+    raw_token: Option<String>,
+    resolved_token: Option<String>,
+    cli_target: Option<String>,
+}
+
+impl PreparedCargoCommand {
+    fn tokens(&self) -> CommandTokens<'_> {
+        CommandTokens {
+            raw: self.raw_token.as_deref(),
+            resolved: self.resolved_token.as_deref(),
+        }
+    }
+}
+
+struct CargoCommandDispatch<'a> {
+    bin_name: &'a str,
+    target_plans: &'a plan::targets::TargetPlans<'a>,
+    options: &'a Options,
+    cargo_args: Vec<&'a str>,
+    tokens: CommandTokens<'a>,
+    workspace_config: &'a config::WorkspaceConfig,
+    workspace_key: &'a str,
+}
+
 /// Look up configuration from any recognized metadata key alias.
 ///
 /// Returns the first matching value and the alias that matched, or
@@ -202,31 +248,19 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         .iter()
         .map(|package| package.config())
         .collect::<eyre::Result<Vec<_>>>()?;
-    let selected: Vec<target_plan::SelectedPackage<'_>> = packages
-        .iter()
-        .zip(&configs)
-        .map(|(package, config)| target_plan::SelectedPackage { package, config })
-        .collect();
 
-    let raw_subcommand_token = cli::cargo_subcommand_token(&cargo_args);
-    // Resolve cargo command aliases (e.g. `lint` → `clippy --all-targets --no-deps`) so the
-    // underlying built-in subcommand is visible to the target-capability registry and the build
-    // driver. Keep the resolved String args for `--target` detection.
-    let cargo_args_owned =
-        cargo_alias::expand_aliases(cargo_args, metadata.workspace_root.as_std_path());
-    let resolved_subcommand_token = cli::cargo_subcommand_token(&cargo_args_owned);
-    let cargo_args: Vec<&str> = cargo_args_owned.iter().map(String::as_str).collect();
-
-    // Parse an explicit `--target` only before `--`.
-    let cli_target = target::parse_cli_target(&cargo_args_owned);
+    let prepared = prepare_cargo_command(cargo_args, metadata.workspace_root.as_std_path());
+    let tokens = prepared.tokens();
+    let selected =
+        selected_packages_for_target_planning(&packages, &configs, &options, &ws_config, tokens)?;
 
     // Echo the user's own metadata alias in capability hints/warnings.
     let ws_key = find_metadata_value(&metadata.workspace_metadata)
         .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
-    let capability_allowed = resolve_capability_and_warn(
+    warn_if_configured_targets_ignored(
         &options,
-        raw_subcommand_token.as_deref(),
-        resolved_subcommand_token.as_deref(),
+        tokens.raw,
+        tokens.resolved,
         &ws_config,
         ws_key,
         &selected,
@@ -236,48 +270,41 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let mut evaluator = RustcCfgEvaluator::default();
     let base_exclude = metadata.base_workspace_exclude_packages()?;
 
-    let target_plans = target_plan::build_target_plans(
+    let target_plans = plan::targets::build_target_plans(
         &selected,
         &ws_config,
         &base_exclude,
-        cli_target.as_deref(),
-        capability_allowed,
+        prepared.cli_target.as_deref(),
+        selected
+            .iter()
+            .any(|package| !package.ignore_configured_targets),
         &env,
         &mut evaluator,
     )?;
 
     let result = match options.command {
         Some(Command::Help | Command::Version) => Ok(None),
-        Some(Command::FeatureMatrix { pretty }) => {
-            let plan_set = runner::build_execution_plans(
-                &target_plans,
-                &options,
-                options.packages_only,
-                &mut evaluator,
-            )?;
-            note_matrix_noop_flags(&options);
-            let matrix_opts = runner::MatrixOptions {
-                pretty,
-                packages_only: options.packages_only,
-                no_prune_implied: options.no_prune_implied,
-            };
-            runner::print_matrix_for_execution_plans(&plan_set, &matrix_opts)
-        }
-        None => {
-            if WARN_UNKNOWN_SUBCOMMAND
-                && cargo_subcommand(cargo_args.as_slice()) == cli::CargoSubcommand::Other
-            {
-                print_warning!(
-                    "`cargo {bin_name}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands"
-                );
-            }
-            let plan_set =
-                runner::build_execution_plans(&target_plans, &options, false, &mut evaluator)?;
-            maybe_install_missing_targets(&options, &ws_config, &plan_set, &env, &cargo_args)?;
-            let mode = resolve_execution_mode(&options, &cargo_args, &plan_set);
-            let driver = resolve_driver(&options, &ws_config, &plan_set, &env)?;
-            runner::run_execution_plans(&plan_set, cargo_args, &options, mode, driver.as_deref())
-        }
+        Some(Command::FeatureMatrix { pretty }) => print_matrix_command(
+            &target_plans,
+            &options,
+            &ws_config,
+            tokens,
+            pretty,
+            &mut evaluator,
+        ),
+        None => run_cargo_command(
+            CargoCommandDispatch {
+                bin_name,
+                target_plans: &target_plans,
+                options: &options,
+                cargo_args: prepared.args.iter().map(String::as_str).collect(),
+                tokens,
+                workspace_config: &ws_config,
+                workspace_key: ws_key,
+            },
+            &env,
+            &mut evaluator,
+        ),
     };
 
     match result {
@@ -291,6 +318,131 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             Err(err)
         }
     }
+}
+
+fn prepare_cargo_command(
+    args: Vec<String>,
+    workspace_root: &std::path::Path,
+) -> PreparedCargoCommand {
+    let raw_token = cli::cargo_subcommand_token(&args);
+    // Resolve cargo command aliases so target policy and build-driver dispatch
+    // see the underlying built-in subcommand when one is configured.
+    let expanded_args = cargo_alias::expand_aliases(args, workspace_root);
+    let resolved_token = cli::cargo_subcommand_token(&expanded_args);
+    let cli_target = target::parse_cli_target(&expanded_args);
+
+    PreparedCargoCommand {
+        args: expanded_args,
+        raw_token,
+        resolved_token,
+        cli_target,
+    }
+}
+
+fn selected_packages_for_target_planning<'a>(
+    packages: &[&'a cargo_metadata::Package],
+    configs: &'a [config::Config],
+    options: &Options,
+    ws_config: &config::WorkspaceConfig,
+    tokens: CommandTokens<'_>,
+) -> eyre::Result<Vec<plan::targets::SelectedPackage<'a>>> {
+    let command_token = tokens.resolved.or(tokens.raw);
+    let default_target_capability = matches!(options.command, Some(Command::FeatureMatrix { .. }))
+        || cli::builtin_target_capability(command_token);
+    let default_diagnostics_allowed = cli::builtin_diagnostics_safe(command_token);
+
+    let mut selected = Vec::new();
+    let empty_target_subcommands = std::collections::BTreeMap::new();
+    for (package, package_config) in packages.iter().zip(configs) {
+        let command_config = config::resolve_command_config(config::ResolveCommandConfigArgs {
+            workspace: ws_config,
+            workspace_target_flags: config::FlagConfig::default(),
+            workspace_target_subcommands: &empty_target_subcommands,
+            package_flags: package_config.flags,
+            package_subcommands: &package_config.subcommand_overrides,
+            package_target_flags: config::FlagConfig::default(),
+            package_target_subcommands: &empty_target_subcommands,
+            raw_command: tokens.raw,
+            resolved_command: tokens.resolved,
+            cli_flags: options.flags,
+            default_diagnostics_allowed,
+            default_targets_enabled: default_target_capability,
+        })?;
+        selected.push(plan::targets::SelectedPackage {
+            package,
+            config: package_config,
+            ignore_configured_targets: command_config.flags.no_targets
+                || !command_config.targets_enabled,
+            target_decision_explicit: command_config.flags.no_targets
+                || command_config.targets_explicit,
+        });
+    }
+    Ok(selected)
+}
+
+fn print_matrix_command(
+    target_plans: &plan::targets::TargetPlans<'_>,
+    options: &Options,
+    workspace: &config::WorkspaceConfig,
+    tokens: CommandTokens<'_>,
+    pretty: bool,
+    evaluator: &mut impl cfg_eval::CfgEvaluator,
+) -> eyre::Result<ExitCode> {
+    let context = plan::execution::PlanBuildContext {
+        workspace_config: workspace,
+        raw_command: tokens.raw,
+        resolved_command: tokens.resolved,
+        default_diagnostics_allowed: false,
+        matrix: true,
+    };
+    let plan_set =
+        plan::execution::build_execution_plans(target_plans, options.flags, &context, evaluator)?;
+    note_matrix_noop_flags(options);
+    matrix::print_matrix_for_execution_plans(&plan_set, pretty)?;
+    Ok(None)
+}
+
+fn run_cargo_command(
+    dispatch: CargoCommandDispatch<'_>,
+    env: &impl target::TargetEnvironment,
+    evaluator: &mut impl cfg_eval::CfgEvaluator,
+) -> eyre::Result<ExitCode> {
+    if WARN_UNKNOWN_SUBCOMMAND
+        && cargo_subcommand(dispatch.cargo_args.as_slice()) == cli::CargoSubcommand::Other
+    {
+        print_warning!(
+            "`cargo {}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
+            dispatch.bin_name,
+        );
+    }
+
+    let options = dispatch.options;
+    let default_diagnostics_allowed =
+        cli::builtin_diagnostics_safe(dispatch.tokens.resolved.or(dispatch.tokens.raw));
+    let context = plan::execution::PlanBuildContext {
+        workspace_config: dispatch.workspace_config,
+        raw_command: dispatch.tokens.raw,
+        resolved_command: dispatch.tokens.resolved,
+        default_diagnostics_allowed,
+        matrix: false,
+    };
+    let plan_set = plan::execution::build_execution_plans(
+        dispatch.target_plans,
+        options.flags,
+        &context,
+        evaluator,
+    )?;
+    maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
+    let mode = resolve_execution_mode(&dispatch.cargo_args, &plan_set);
+    let driver = resolve_driver(options, dispatch.workspace_config, &plan_set, env)?;
+    warn_ignored_diagnostics_config(
+        options,
+        dispatch.tokens.raw,
+        dispatch.tokens.resolved,
+        dispatch.workspace_key,
+        &plan_set,
+    );
+    runner::run_execution_plans(&plan_set, dispatch.cargo_args, mode, driver.as_deref())
 }
 
 /// Discover candidate workspace packages and apply CLI-level package filters.
@@ -317,15 +469,6 @@ fn select_candidate_packages<'a>(
     // Filter excluded packages via CLI arguments
     packages.retain(|p| !options.exclude_packages.contains(p.name.as_str()));
 
-    if options.only_packages_with_lib_target {
-        // Filter only packages with a library target
-        packages.retain(|p| {
-            p.targets
-                .iter()
-                .any(|t| t.kind.contains(&cargo_metadata::TargetKind::Lib))
-        });
-    }
-
     // Filter packages based on CLI options
     if !options.packages.is_empty() {
         packages.retain(|p| options.packages.contains(p.name.as_str()));
@@ -335,13 +478,15 @@ fn select_candidate_packages<'a>(
 }
 
 fn maybe_install_missing_targets(
-    options: &Options,
-    ws_config: &config::WorkspaceConfig,
-    plan_set: &runner::ExecutionPlanSet<'_>,
+    plan_set: &plan::execution::ExecutionPlanSet<'_>,
     env: &impl target::TargetEnvironment,
     cargo_args: &[&str],
 ) -> eyre::Result<()> {
-    if options.install_missing_targets || ws_config.install_missing_targets {
+    if plan_set.plans.iter().any(|plan| {
+        plan.package_plans
+            .iter()
+            .any(|package_plan| package_plan.flags.install_missing_targets)
+    }) {
         let installer =
             target_install::RustupTargetInstaller::new(cli::rustup_toolchain(cargo_args));
         target_install::ensure_missing_targets_installed(plan_set, env, &installer)?;
@@ -349,56 +494,49 @@ fn maybe_install_missing_targets(
     Ok(())
 }
 
-/// Resolve the selected command's target capability and warn (once) if
-/// configured targets exist but the command can not accept them.
+/// Warn once when configured targets were skipped only because of the built-in
+/// unknown-command default.
 ///
 /// `matrix` is not a forwarded cargo command: it always uses configured target
-/// planning. The warning is driven from raw config state, not from the planned
-/// targets after capability filtering.
-fn resolve_capability_and_warn(
+/// planning.
+fn warn_if_configured_targets_ignored(
     options: &Options,
     raw_token: Option<&str>,
     resolved_token: Option<&str>,
     ws_config: &config::WorkspaceConfig,
     ws_key: &str,
-    selected: &[target_plan::SelectedPackage<'_>],
-) -> bool {
+    selected: &[plan::targets::SelectedPackage<'_>],
+) {
     // `--no-targets` deliberately ignores configured target lists and falls back
-    // to Cargo's default single target, so deny without warning.
-    if options.no_targets {
-        return false;
+    // to Cargo's default single target, so it should not also warn.
+    if options.flags.no_targets == Some(true) {
+        return;
+    }
+
+    if selected
+        .iter()
+        .any(|package| !package.ignore_configured_targets)
+    {
+        return;
     }
 
     // `matrix` is not a forwarded cargo command: it always uses configured
     // target planning.
     if matches!(options.command, Some(Command::FeatureMatrix { .. })) {
-        return true;
+        return;
     }
 
-    let raw_policy = cli::configured_target_policy(raw_token, &ws_config.subcommand_overrides);
-    let (policy, warning_token) = if raw_policy.explicit {
-        (raw_policy, raw_token)
-    } else {
-        (
-            cli::configured_target_policy(resolved_token, &ws_config.subcommand_overrides),
-            raw_token.or(resolved_token),
-        )
-    };
-    if policy.enabled {
-        return true;
-    }
-
-    // Capability denied: warn (once) only when the user actually configured
-    // targets that we are now skipping.
-    let has_raw_configured_targets = !ws_config.workspace_targets.is_empty()
-        || selected.iter().any(|s| {
-            s.config
-                .package_targets
-                .as_ref()
-                .is_some_and(|t| !t.is_empty())
-        });
-    if has_raw_configured_targets
-        && !policy.explicit
+    let has_implicitly_skipped_configured_targets = selected.iter().any(|package| {
+        !package.target_decision_explicit
+            && (!ws_config.workspace_targets.is_empty()
+                || package
+                    .config
+                    .package_targets
+                    .as_ref()
+                    .is_some_and(|targets| !targets.is_empty()))
+    });
+    let warning_token = raw_token.or(resolved_token);
+    if has_implicitly_skipped_configured_targets
         && let Some(token) = warning_token.filter(|t| !t.is_empty())
     {
         print_warning!(
@@ -409,19 +547,45 @@ fn resolve_capability_and_warn(
             ws_metadata_section(ws_key),
         );
     }
+}
 
-    false
+fn warn_ignored_diagnostics_config(
+    options: &Options,
+    raw_token: Option<&str>,
+    resolved_token: Option<&str>,
+    ws_key: &str,
+    plan_set: &plan::execution::ExecutionPlanSet<'_>,
+) {
+    let cli_flags = options.flags;
+    if cli_flags.diagnostics_only != Some(true)
+        && cli_flags.dedupe != Some(true)
+        && plan_set.plans.iter().any(|plan| {
+            plan.package_plans.iter().any(|package_plan| {
+                package_plan.ignored_diagnostics_config && !package_plan.flags.diagnostics_only
+            })
+        })
+        && let Some(token) = raw_token.or(resolved_token).filter(|t| !t.is_empty())
+    {
+        print_warning!(
+            "not enabling configured diagnostics-only/dedupe for cargo command `{token}` because it is not diagnostics-safe by default"
+        );
+        eprintln!(
+            "hint: set [{}.subcommands.{token}] diagnostics_only = true or dedupe = true to force diagnostics mode for this command",
+            ws_metadata_section(ws_key),
+        );
+    }
 }
 
 /// Emit one note per run-only flag that has no effect on `cargo fc matrix`
 /// output, so the silent no-op is visible to the user.
 fn note_matrix_noop_flags(options: &Options) {
-    if options.install_missing_targets {
+    let flags = options.flags;
+    if flags.install_missing_targets == Some(true) {
         print_note!(
             "--install-missing-targets has no effect for matrix output; matrix only prints planned targets"
         );
     }
-    if options.aggregate_targets {
+    if flags.aggregate_targets == Some(true) {
         print_note!(
             "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
         );
@@ -442,7 +606,7 @@ fn note_matrix_noop_flags(options: &Options) {
 fn resolve_driver(
     options: &Options,
     ws_config: &config::WorkspaceConfig,
-    plan_set: &runner::ExecutionPlanSet,
+    plan_set: &plan::execution::ExecutionPlanSet,
     env: &impl target::TargetEnvironment,
 ) -> eyre::Result<Option<String>> {
     if let Some(driver) = &options.driver {
@@ -494,13 +658,28 @@ fn normalize_driver(driver: &str, source: &str) -> eyre::Result<Option<String>> 
 /// explicitly requested `--aggregate-targets` falls back to serial or is a
 /// no-op.
 fn resolve_execution_mode(
-    options: &Options,
     cargo_args: &[&str],
-    plan_set: &runner::ExecutionPlanSet<'_>,
+    plan_set: &plan::execution::ExecutionPlanSet<'_>,
 ) -> runner::TargetExecutionMode {
     use runner::TargetExecutionMode;
 
-    if !options.aggregate_targets {
+    let mut requested = 0usize;
+    let mut total = 0usize;
+    for plan in &plan_set.plans {
+        for package_plan in &plan.package_plans {
+            total += 1;
+            requested += usize::from(package_plan.flags.aggregate_targets);
+        }
+    }
+
+    if requested == 0 {
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if requested != total {
+        print_note!(
+            "aggregate target execution is disabled because it resolves differently across package-targets; running targets serially"
+        );
         return TargetExecutionMode::SerialPerTarget;
     }
 
@@ -529,19 +708,53 @@ fn resolve_execution_mode(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::package::test::package as test_package;
     use color_eyre::eyre;
     use serde_json::json;
 
     fn execution_plan_set(
         targets: &[&str],
         show_pruned: bool,
-    ) -> runner::ExecutionPlanSet<'static> {
-        runner::ExecutionPlanSet {
+    ) -> plan::execution::ExecutionPlanSet<'static> {
+        plan::execution::ExecutionPlanSet {
             plans: targets
                 .iter()
-                .map(|target| runner::ExecutionPlan {
+                .map(|target| plan::execution::ExecutionPlan {
                     target: target::TargetTriple((*target).to_string()),
                     package_plans: Vec::new(),
+                })
+                .collect(),
+            show_pruned,
+            show_target: targets.len() > 1,
+        }
+    }
+
+    fn execution_plan_set_with_flags<'a>(
+        targets: &[&str],
+        show_pruned: bool,
+        package: &'a cargo_metadata::Package,
+        flags: config::ResolvedFlags,
+    ) -> plan::execution::ExecutionPlanSet<'a> {
+        plan::execution::ExecutionPlanSet {
+            plans: targets
+                .iter()
+                .map(|target| {
+                    let target = target::TargetTriple((*target).to_string());
+                    plan::execution::ExecutionPlan {
+                        target: target.clone(),
+                        package_plans: vec![plan::execution::PackageExecutionPlan {
+                            package,
+                            target: target::EffectiveTarget {
+                                triple: target,
+                                source: target::TargetSource::WorkspaceConfig,
+                            },
+                            combinations: Vec::new(),
+                            pruned: Vec::new(),
+                            matrix: serde_json::Map::new(),
+                            flags,
+                            ignored_diagnostics_config: false,
+                        }],
+                    }
                 })
                 .collect(),
             show_pruned,
@@ -564,6 +777,32 @@ mod test {
             };
             Ok(target::TargetTriple(host.to_string()))
         }
+    }
+
+    fn target_selection_state(
+        options: &Options,
+        ws: &config::WorkspaceConfig,
+        raw: Option<&str>,
+        resolved: Option<&str>,
+    ) -> eyre::Result<(bool, bool)> {
+        let package = test_package("a")?;
+        let config = config::Config::default();
+        let packages = [&package];
+        let configs = [config];
+        let selected = selected_packages_for_target_planning(
+            &packages,
+            &configs,
+            options,
+            ws,
+            CommandTokens { raw, resolved },
+        )?;
+        let [selected] = selected.as_slice() else {
+            eyre::bail!("expected one selected package, got {}", selected.len());
+        };
+        Ok((
+            selected.ignore_configured_targets,
+            selected.target_decision_explicit,
+        ))
     }
 
     #[test]
@@ -640,182 +879,185 @@ mod test {
     }
 
     #[test]
-    fn aggregate_execution_mode_selected_for_supported_multi_target_command() {
-        let options = Options {
+    fn aggregate_execution_mode_selected_for_supported_multi_target_command() -> eyre::Result<()> {
+        let package = test_package("a")?;
+        let flags = config::ResolvedFlags {
             aggregate_targets: true,
-            ..Options::default()
+            ..config::ResolvedFlags::default()
         };
-        let plan_set = execution_plan_set(&["t1", "t2"], false);
+        let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&options, &["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set),
             runner::TargetExecutionMode::Aggregate
         );
+        Ok(())
     }
 
     #[test]
-    fn aggregate_execution_mode_falls_back_for_run() {
-        let options = Options {
+    fn aggregate_execution_mode_falls_back_for_run() -> eyre::Result<()> {
+        let package = test_package("a")?;
+        let flags = config::ResolvedFlags {
             aggregate_targets: true,
-            ..Options::default()
+            ..config::ResolvedFlags::default()
         };
-        let plan_set = execution_plan_set(&["t1", "t2"], false);
+        let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&options, &["run"], &plan_set),
+            resolve_execution_mode(&["run"], &plan_set),
             runner::TargetExecutionMode::SerialPerTarget
         );
+        Ok(())
     }
 
     #[test]
-    fn aggregate_execution_mode_falls_back_for_pruned_summaries() {
-        let options = Options {
+    fn aggregate_execution_mode_falls_back_for_pruned_summaries() -> eyre::Result<()> {
+        let package = test_package("a")?;
+        let flags = config::ResolvedFlags {
             aggregate_targets: true,
-            ..Options::default()
+            ..config::ResolvedFlags::default()
         };
-        let plan_set = execution_plan_set(&["t1", "t2"], true);
+        let plan_set = execution_plan_set_with_flags(&["t1", "t2"], true, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&options, &["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set),
             runner::TargetExecutionMode::SerialPerTarget
         );
+        Ok(())
     }
 
     #[test]
-    fn aggregate_execution_mode_is_noop_for_single_target() {
-        let options = Options {
+    fn aggregate_execution_mode_is_noop_for_single_target() -> eyre::Result<()> {
+        let package = test_package("a")?;
+        let flags = config::ResolvedFlags {
             aggregate_targets: true,
-            ..Options::default()
+            ..config::ResolvedFlags::default()
         };
-        let plan_set = execution_plan_set(&["t1"], false);
+        let plan_set = execution_plan_set_with_flags(&["t1"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&options, &["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set),
             runner::TargetExecutionMode::SerialPerTarget
         );
+        Ok(())
     }
 
     #[test]
-    fn no_targets_flag_denies_capability() {
+    fn no_targets_flag_disables_configured_targets() -> eyre::Result<()> {
         let options = Options {
-            no_targets: true,
+            flags: config::FlagConfig {
+                no_targets: Some(true),
+                ..config::FlagConfig::default()
+            },
             ..Options::default()
         };
         let ws = config::WorkspaceConfig::default();
-        // Even a target-capable built-in command is denied configured targets
-        // when `--no-targets` is set.
-        assert!(!resolve_capability_and_warn(
-            &options,
-            Some("check"),
-            Some("check"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("check"), Some("check"))?;
+
+        assert!(ignore_configured_targets);
+        assert!(target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn builtin_command_allows_capability_without_no_targets() {
+    fn builtin_command_allows_capability_without_no_targets() -> eyre::Result<()> {
         let options = Options::default();
         let ws = config::WorkspaceConfig::default();
-        assert!(resolve_capability_and_warn(
-            &options,
-            Some("check"),
-            Some("check"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("check"), Some("check"))?;
+
+        assert!(!ignore_configured_targets);
+        assert!(!target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn builtin_command_can_be_disabled_by_workspace_policy() {
+    fn builtin_command_can_be_disabled_by_workspace_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
         ws.subcommand_overrides.insert(
             "build".to_string(),
-            config::CommandTargetCapability { targets: false },
+            config::CommandCapabilities {
+                targets: Some(false),
+                ..config::CommandCapabilities::default()
+            },
         );
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("build"), Some("build"))?;
 
-        assert!(!resolve_capability_and_warn(
-            &options,
-            Some("build"),
-            Some("build"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        assert!(ignore_configured_targets);
+        assert!(target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn resolved_alias_inherits_builtin_capability_by_default() {
+    fn resolved_alias_inherits_builtin_capability_by_default() -> eyre::Result<()> {
         let options = Options::default();
         let ws = config::WorkspaceConfig::default();
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("lint"), Some("clippy"))?;
 
-        assert!(resolve_capability_and_warn(
-            &options,
-            Some("lint"),
-            Some("clippy"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        assert!(!ignore_configured_targets);
+        assert!(!target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn explicit_alias_policy_wins_over_resolved_builtin_policy() {
+    fn explicit_alias_policy_wins_over_resolved_builtin_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
         ws.subcommand_overrides.insert(
             "lint".to_string(),
-            config::CommandTargetCapability { targets: false },
+            config::CommandCapabilities {
+                targets: Some(false),
+                ..config::CommandCapabilities::default()
+            },
         );
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("lint"), Some("clippy"))?;
 
-        assert!(!resolve_capability_and_warn(
-            &options,
-            Some("lint"),
-            Some("clippy"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        assert!(ignore_configured_targets);
+        assert!(target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn explicit_alias_policy_can_enable_unresolved_expanded_command() {
+    fn explicit_alias_policy_can_enable_unresolved_expanded_command() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
         ws.subcommand_overrides.insert(
             "lint".to_string(),
-            config::CommandTargetCapability { targets: true },
+            config::CommandCapabilities {
+                targets: Some(true),
+                ..config::CommandCapabilities::default()
+            },
         );
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, Some("lint"), Some("custom-wrapper"))?;
 
-        assert!(resolve_capability_and_warn(
-            &options,
-            Some("lint"),
-            Some("custom-wrapper"),
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        assert!(!ignore_configured_targets);
+        assert!(target_decision_explicit);
+        Ok(())
     }
 
     #[test]
-    fn no_targets_flag_denies_capability_for_matrix() {
+    fn no_targets_flag_disables_configured_targets_for_matrix() -> eyre::Result<()> {
         let options = Options {
-            no_targets: true,
             command: Some(Command::FeatureMatrix { pretty: false }),
+            flags: config::FlagConfig {
+                no_targets: Some(true),
+                ..config::FlagConfig::default()
+            },
             ..Options::default()
         };
         let ws = config::WorkspaceConfig::default();
-        assert!(!resolve_capability_and_warn(
-            &options,
-            None,
-            None,
-            &ws,
-            DEFAULT_METADATA_KEY,
-            &[]
-        ));
+        let (ignore_configured_targets, target_decision_explicit) =
+            target_selection_state(&options, &ws, None, None)?;
+
+        assert!(ignore_configured_targets);
+        assert!(target_decision_explicit);
+        Ok(())
     }
 
     #[test]
