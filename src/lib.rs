@@ -154,6 +154,9 @@ struct PreparedCargoCommand {
     raw_token: Option<String>,
     resolved_token: Option<String>,
     cli_target: Option<String>,
+    /// Aliases expanded through `cargo run ... --` keep Cargo's alias argument
+    /// placement: generated matrix args are appended after the expansion.
+    matrix_args_after_extra_args: bool,
 }
 
 impl PreparedCargoCommand {
@@ -171,6 +174,7 @@ struct CargoCommandDispatch<'a> {
     options: &'a Options,
     cargo_args: Vec<&'a str>,
     tokens: CommandTokens<'a>,
+    matrix_args_after_extra_args: bool,
     workspace_config: &'a config::WorkspaceConfig,
     workspace_key: &'a str,
 }
@@ -299,6 +303,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 options: &options,
                 cargo_args: prepared.args.iter().map(String::as_str).collect(),
                 tokens,
+                matrix_args_after_extra_args: prepared.matrix_args_after_extra_args,
                 workspace_config: &ws_config,
                 workspace_key: ws_key,
             },
@@ -327,15 +332,23 @@ fn prepare_cargo_command(
     let raw_token = cli::cargo_subcommand_token(&args);
     // Resolve cargo command aliases so target policy and build-driver dispatch
     // see the underlying built-in subcommand when one is configured.
-    let expanded_args = cargo_alias::expand_aliases(args, workspace_root);
+    let alias_expansion = cargo_alias::expand_aliases_with_info(args, workspace_root);
+    let expanded_args = alias_expansion.args;
     let resolved_token = cli::cargo_subcommand_token(&expanded_args);
     let cli_target = target::parse_cli_target(&expanded_args);
+    let matrix_args_after_extra_args = alias_expansion.expanded
+        && matches!(
+            cargo_subcommand(expanded_args.as_slice()),
+            cli::CargoSubcommand::Run
+        )
+        && expanded_args.iter().any(|arg| arg == "--");
 
     PreparedCargoCommand {
         args: expanded_args,
         raw_token,
         resolved_token,
         cli_target,
+        matrix_args_after_extra_args,
     }
 }
 
@@ -442,7 +455,13 @@ fn run_cargo_command(
         dispatch.workspace_key,
         &plan_set,
     );
-    runner::run_execution_plans(&plan_set, dispatch.cargo_args, mode, driver.as_deref())
+    runner::run_execution_plans(
+        &plan_set,
+        dispatch.cargo_args,
+        mode,
+        driver.as_deref(),
+        dispatch.matrix_args_after_extra_args,
+    )
 }
 
 /// Discover candidate workspace packages and apply CLI-level package filters.
@@ -722,8 +741,17 @@ fn resolve_execution_mode(
 mod test {
     use super::*;
     use crate::package::test::package as test_package;
+    use assert_fs::TempDir;
+    use assert_fs::prelude::*;
     use color_eyre::eyre;
     use serde_json::json;
+
+    fn workspace_with_aliases(body: &str) -> eyre::Result<TempDir> {
+        let tmp = TempDir::new()?;
+        tmp.child(".cargo").create_dir_all()?;
+        tmp.child(".cargo/config.toml").write_str(body)?;
+        Ok(tmp)
+    }
 
     fn execution_plan_set(
         targets: &[&str],
@@ -816,6 +844,64 @@ mod test {
             selected.ignore_configured_targets,
             selected.target_decision_explicit,
         ))
+    }
+
+    #[test]
+    fn prepare_cargo_command_marks_nested_run_wrapper_aliases() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            clippy-wrapper = "run --package clippy-wrapper --"
+            lint = "clippy-wrapper lint"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path());
+
+        assert_eq!(prepared.raw_token.as_deref(), Some("lint"));
+        assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
+        assert!(prepared.matrix_args_after_extra_args);
+        assert_eq!(
+            prepared.args,
+            vec!["run", "--package", "clippy-wrapper", "--", "lint"],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_keeps_direct_run_args_on_cargo_side() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases("[alias]\n")?;
+
+        let prepared = prepare_cargo_command(
+            vec!["run".to_string(), "--".to_string(), "lint".to_string()],
+            workspace.path(),
+        );
+
+        assert_eq!(prepared.raw_token.as_deref(), Some("run"));
+        assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
+        assert!(!prepared.matrix_args_after_extra_args);
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_preserves_run_alias_argument_position() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            serve = "run --package app -- serve"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path());
+
+        assert_eq!(prepared.raw_token.as_deref(), Some("serve"));
+        assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
+        assert!(prepared.matrix_args_after_extra_args);
+        assert_eq!(
+            prepared.args,
+            vec!["run", "--package", "app", "--", "serve"],
+        );
+        Ok(())
     }
 
     #[test]

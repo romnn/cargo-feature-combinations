@@ -9,6 +9,13 @@
   capability hints by default. They still do not receive target or diagnostics
   capability unless configured explicitly.
 
+### Fixed
+
+- Fixed cargo aliases that expand through `cargo run --package <wrapper>
+  -- ...`, including nested aliases, so cargo-fc now passes generated
+  `--package`, `--target`, and `--features` arguments to the wrapper after `--`
+  instead of applying them to the wrapper package itself.
+
 ## [0.2.0]
 
 ### Breaking Changes

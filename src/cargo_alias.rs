@@ -17,6 +17,11 @@ use std::path::{Path, PathBuf};
 
 const MAX_ALIAS_EXPANSIONS: usize = 50;
 
+pub(crate) struct AliasExpansion {
+    pub(crate) args: Vec<String>,
+    pub(crate) expanded: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct CargoConfig {
     #[serde(default)]
@@ -95,20 +100,31 @@ fn is_builtin(token: &str) -> bool {
 /// Expand a leading cargo command alias in `args` using the `[alias]` tables in
 /// the cargo config hierarchy rooted at `workspace_root`.
 ///
-/// Returns `args` unchanged when the subcommand token is a built-in, is not an
-/// alias, or no config is found. Expansion is iterative (an alias may reference
-/// another alias) and capped to avoid infinite loops.
-pub(crate) fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<String> {
+/// Reports whether the argv changed so callers can preserve Cargo's alias
+/// argument placement for generated cargo-fc arguments. Expansion is iterative
+/// (an alias may reference another alias) and capped to avoid infinite loops.
+pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path) -> AliasExpansion {
     let Some(idx) = crate::cli::subcommand_token_index(&args) else {
-        return args;
+        return AliasExpansion {
+            args,
+            expanded: false,
+        };
     };
     match args.get(idx) {
         Some(token) if !is_builtin(token) => {}
-        _ => return args,
+        _ => {
+            return AliasExpansion {
+                args,
+                expanded: false,
+            };
+        }
     }
     let aliases = load_aliases(workspace_root);
     if aliases.is_empty() {
-        return args;
+        return AliasExpansion {
+            args,
+            expanded: false,
+        };
     }
 
     // Args before the subcommand token (e.g. `+toolchain`) are preserved.
@@ -116,6 +132,7 @@ pub(crate) fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<St
     let original_rest: Vec<String> = args.get(idx..).unwrap_or_default().to_vec();
     let mut rest: Vec<String> = args.get(idx..).unwrap_or_default().to_vec();
     let mut expansions = 0;
+    let mut changed = false;
     for _ in 0..MAX_ALIAS_EXPANSIONS {
         let Some(token) = rest.first().cloned() else {
             break;
@@ -135,6 +152,7 @@ pub(crate) fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<St
         expanded.extend_from_slice(rest.get(1..).unwrap_or_default());
         rest = expanded;
         expansions += 1;
+        changed = true;
     }
 
     // Only a run that exhausted the iteration cap is a suspected cycle; breaking
@@ -148,10 +166,14 @@ pub(crate) fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<St
             "stopped expanding cargo aliases after {MAX_ALIAS_EXPANSIONS} expansions; possible alias cycle involving `{token}`"
         );
         rest = original_rest;
+        changed = false;
     }
 
     head.extend(rest);
-    head
+    AliasExpansion {
+        args: head,
+        expanded: changed,
+    }
 }
 
 /// Merge the `[alias]` tables across the cargo config hierarchy. Configs nearer
@@ -211,6 +233,10 @@ mod tests {
         dir.child(".cargo").create_dir_all()?;
         dir.child(".cargo/config.toml").write_str(body)?;
         Ok(())
+    }
+
+    fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<String> {
+        expand_aliases_with_info(args, workspace_root).args
     }
 
     #[test]

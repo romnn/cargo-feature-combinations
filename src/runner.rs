@@ -565,6 +565,7 @@ struct RunContext<'a> {
     extra_args: &'a [&'a str],
     missing_arguments: bool,
     user_has_message_format: bool,
+    matrix_args_after_extra_args: bool,
     /// Build driver to invoke instead of `$CARGO`/`cargo` (e.g. `cargo-zigbuild`).
     driver: Option<&'a str>,
 }
@@ -716,16 +717,22 @@ fn run_single_combination(
     if diagnostics_only {
         args.push(crate::diagnostics_only::MESSAGE_FORMAT);
     }
-    for triple in inv.inject_targets {
-        args.push("--target");
-        args.push(triple.as_str());
-    }
     let features_flag = format!("--features={}", features.iter().join(","));
-    if !ctx.missing_arguments {
-        args.push("--no-default-features");
-        args.push(&features_flag);
+    let mut matrix_args = Vec::new();
+    for triple in inv.inject_targets {
+        matrix_args.push("--target");
+        matrix_args.push(triple.as_str());
     }
-    args.extend_from_slice(ctx.extra_args);
+    if !ctx.missing_arguments {
+        matrix_args.push("--no-default-features");
+        matrix_args.push(&features_flag);
+    }
+    append_matrix_args(
+        &mut args,
+        ctx.extra_args,
+        matrix_args,
+        ctx.matrix_args_after_extra_args,
+    );
     print_package_cmd(inv, &args, diagnostics_only, ctx.driver, progress, stdout);
 
     cmd.args(&args).current_dir(working_dir);
@@ -794,6 +801,21 @@ fn run_single_combination(
     })
 }
 
+fn append_matrix_args<'a>(
+    args: &mut Vec<&'a str>,
+    extra_args: &[&'a str],
+    matrix_args: Vec<&'a str>,
+    matrix_args_after_extra_args: bool,
+) {
+    if matrix_args_after_extra_args {
+        args.extend_from_slice(extra_args);
+        args.extend(matrix_args);
+    } else {
+        args.extend(matrix_args);
+        args.extend_from_slice(extra_args);
+    }
+}
+
 /// Execution mode over the same execution plans.
 ///
 /// Both modes are single-threaded and stream live output; they differ only in
@@ -821,6 +843,7 @@ pub fn run_execution_plans(
     mut cargo_args: Vec<&str>,
     mode: TargetExecutionMode,
     driver: Option<&str>,
+    matrix_args_after_extra_args: bool,
 ) -> eyre::Result<ExitCode> {
     let start = Instant::now();
 
@@ -871,6 +894,7 @@ pub fn run_execution_plans(
         extra_args: &extra_args,
         missing_arguments,
         user_has_message_format,
+        matrix_args_after_extra_args,
         driver,
     };
 
@@ -1165,7 +1189,7 @@ fn append_pruned_summaries(
 #[cfg(test)]
 mod test {
     use super::{
-        Summary, SummaryTarget, aggregate_invocation_plans, error_counts,
+        Summary, SummaryTarget, aggregate_invocation_plans, append_matrix_args, error_counts,
         normalize_feature_selection_args, print_summary, warning_counts,
     };
     use crate::cli::CargoSubcommand;
@@ -1396,6 +1420,61 @@ mod test {
             ],
         );
         Ok(())
+    }
+
+    #[test]
+    fn appends_matrix_args_before_double_dash_for_cargo_run() {
+        let mut args = vec!["run", "--package", "app"];
+        append_matrix_args(
+            &mut args,
+            &["--", "arg"],
+            vec!["--no-default-features", "--features=default"],
+            false,
+        );
+
+        sim_assert_eq!(
+            args,
+            vec![
+                "run",
+                "--package",
+                "app",
+                "--no-default-features",
+                "--features=default",
+                "--",
+                "arg",
+            ],
+        );
+    }
+
+    #[test]
+    fn appends_matrix_args_after_double_dash_for_run_wrapper_aliases() {
+        let mut args = vec!["run", "--package", "clippy-wrapper"];
+        append_matrix_args(
+            &mut args,
+            &["--", "lint"],
+            vec![
+                "--package",
+                "micromux-cli",
+                "--no-default-features",
+                "--features=default",
+            ],
+            true,
+        );
+
+        sim_assert_eq!(
+            args,
+            vec![
+                "run",
+                "--package",
+                "clippy-wrapper",
+                "--",
+                "lint",
+                "--package",
+                "micromux-cli",
+                "--no-default-features",
+                "--features=default",
+            ],
+        );
     }
 
     #[test]
