@@ -253,6 +253,101 @@ pub(crate) fn builtin_diagnostics_safe(token: Option<&str>) -> bool {
         .is_some_and(|command| command.diagnostics_safe)
 }
 
+/// Whether cargo-fc should avoid capability hints for a known cargo command.
+///
+/// This is intentionally only a warning policy. These commands do not gain
+/// target or diagnostics capability unless a user configures it explicitly.
+#[must_use]
+pub(crate) fn known_quiet_cargo_subcommand(token: Option<&str>) -> bool {
+    let Some(token) = token else {
+        return false;
+    };
+    matches!(
+        token,
+        "about"
+            | "add"
+            | "apk"
+            | "asm"
+            | "audit"
+            | "binstall"
+            | "bloat"
+            | "bundle"
+            | "cache"
+            | "careful"
+            | "chef"
+            | "component"
+            | "contract"
+            | "cov"
+            | "crev"
+            | "criterion"
+            | "deb"
+            | "deny"
+            | "dist"
+            | "dylint"
+            | "edit"
+            | "espflash"
+            | "expand"
+            | "flamegraph"
+            | "fuzz"
+            | "geiger"
+            | "generate"
+            | "generate-rpm"
+            | "hack"
+            | "insta"
+            | "info"
+            | "install-update"
+            | "lambda"
+            | "leptos"
+            | "license"
+            | "llvm-cov"
+            | "llvm-lines"
+            | "machete"
+            | "make"
+            | "miri"
+            | "modules"
+            | "msrv"
+            | "mutants"
+            | "ndk"
+            | "nextest"
+            | "nm"
+            | "objcopy"
+            | "objdump"
+            | "outdated"
+            | "pgrx"
+            | "profdata"
+            | "public-api"
+            | "public-items"
+            | "quickinstall"
+            | "readelf"
+            | "readme"
+            | "readobj"
+            | "release"
+            | "remove"
+            | "rm"
+            | "rpm"
+            | "semver-checks"
+            | "set-version"
+            | "shear"
+            | "shuttle"
+            | "size"
+            | "sort"
+            | "sqlx"
+            | "strip"
+            | "sweep"
+            | "tauri"
+            | "tarpaulin"
+            | "udeps"
+            | "upgrade"
+            | "vet"
+            | "watch"
+            | "wasi"
+            | "whatfeatures"
+            | "workspaces"
+            | "wix"
+            | "zigbuild"
+    )
+}
+
 /// Return a command override for one token, including built-in short aliases.
 #[must_use]
 pub(crate) fn command_override_for_token<'a>(
@@ -659,8 +754,8 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
 mod test {
     use super::{
         ArgumentParser, CargoSubcommand, builtin_diagnostics_safe, cargo_subcommand,
-        cargo_subcommand_token, command_override_for_token, rustup_toolchain,
-        verbose_from_env_value,
+        cargo_subcommand_token, command_override_for_token, known_quiet_cargo_subcommand,
+        rustup_toolchain, verbose_from_env_value,
     };
     use crate::config::{CommandCapabilities, FlagConfig};
     use similar_asserts::assert_eq as sim_assert_eq;
@@ -822,6 +917,28 @@ mod test {
     #[test]
     fn builtin_test_does_not_have_config_diagnostics_by_default() {
         assert!(!builtin_diagnostics_safe(Some("test")));
+    }
+
+    #[test]
+    fn known_quiet_subcommands_do_not_gain_builtin_capabilities() {
+        for token in [
+            "add",
+            "generate",
+            "license",
+            "msrv",
+            "nextest",
+            "machete",
+            "objdump",
+            "public-api",
+            "udeps",
+            "leptos",
+            "audit",
+        ] {
+            assert!(known_quiet_cargo_subcommand(Some(token)));
+            assert!(!super::builtin_target_capability(Some(token)));
+            assert!(!builtin_diagnostics_safe(Some(token)));
+        }
+        assert!(!known_quiet_cargo_subcommand(Some("clippy")));
     }
 
     #[test]

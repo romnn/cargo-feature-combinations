@@ -536,6 +536,11 @@ fn warn_if_configured_targets_ignored(
                     .is_some_and(|targets| !targets.is_empty()))
     });
     let warning_token = raw_token.or(resolved_token);
+    if cli::known_quiet_cargo_subcommand(raw_token)
+        || cli::known_quiet_cargo_subcommand(resolved_token)
+    {
+        return;
+    }
     if has_implicitly_skipped_configured_targets
         && let Some(token) = warning_token.filter(|t| !t.is_empty())
     {
@@ -543,7 +548,7 @@ fn warn_if_configured_targets_ignored(
             "not passing configured targets to cargo command `{token}` because it has no targets capability"
         );
         eprintln!(
-            "hint: add [{}.subcommands.{token}] targets = true if this command accepts --target",
+            "hint: add [{}.subcommands.{token}] targets = true if this command accepts --target, or targets = false to silence this warning",
             ws_metadata_section(ws_key),
         );
     }
@@ -557,6 +562,11 @@ fn warn_ignored_diagnostics_config(
     plan_set: &plan::execution::ExecutionPlanSet<'_>,
 ) {
     let cli_flags = options.flags;
+    if cli::known_quiet_cargo_subcommand(raw_token)
+        || cli::known_quiet_cargo_subcommand(resolved_token)
+    {
+        return;
+    }
     if cli_flags.diagnostics_only != Some(true)
         && cli_flags.dedupe != Some(true)
         && plan_set.plans.iter().any(|plan| {
@@ -570,7 +580,7 @@ fn warn_ignored_diagnostics_config(
             "not enabling configured diagnostics-only/dedupe for cargo command `{token}` because it is not diagnostics-safe by default"
         );
         eprintln!(
-            "hint: set [{}.subcommands.{token}] diagnostics_only = true or dedupe = true to force diagnostics mode for this command",
+            "hint: set [{}.subcommands.{token}] diagnostics_only = true or dedupe = true to force diagnostics mode for this command, or diagnostics_only = false to silence this warning",
             ws_metadata_section(ws_key),
         );
     }
@@ -684,6 +694,9 @@ fn resolve_execution_mode(
     }
 
     if plan_set.plans.len() <= 1 {
+        if !plan_set.show_target {
+            return TargetExecutionMode::SerialPerTarget;
+        }
         print_note!("--aggregate-targets has no effect for a single target; running normally");
         return TargetExecutionMode::SerialPerTarget;
     }

@@ -378,6 +378,12 @@ explicit declaration:
 targets = true
 ```
 
+For well-known cargo plugins such as `nextest`, `audit`, `deny`, `machete`,
+`udeps`, and `leptos`, cargo-fc suppresses the capability hint by default to
+avoid noisy output. This does not grant target capability; opt in or out
+explicitly with the same `subcommands.<name>` table when you want a local
+policy.
+
 The same table can override built-in defaults. For example, lint every
 configured target but keep `cargo fc build` on the single effective target:
 
@@ -465,6 +471,10 @@ setting the behavior in that command's own table:
 [workspace.metadata.cargo-fc.subcommands.my-custom-cmd]
 dedupe = true
 ```
+
+Known cargo plugins get the same quiet treatment as target capability hints:
+cargo-fc does not assume they are diagnostics-safe, but it also does not warn
+when broad diagnostics defaults are ignored for them.
 
 Subcommand-local diagnostics flags are explicit and are applied even for
 commands that are not safe by default. `dedupe = true` implies

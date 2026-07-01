@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1]
+
+### Changed
+
+- Common cargo plugin commands such as `nextest`, `audit`, `deny`, `machete`,
+  `udeps`, and `leptos` no longer print configured-target or diagnostics
+  capability hints by default. They still do not receive target or diagnostics
+  capability unless configured explicitly.
+
 ## [0.2.0]
 
 ### Breaking Changes
