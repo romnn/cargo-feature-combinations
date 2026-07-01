@@ -446,7 +446,11 @@ fn run_cargo_command(
         evaluator,
     )?;
     maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
-    let mode = resolve_execution_mode(&dispatch.cargo_args, &plan_set);
+    let mode = resolve_execution_mode(
+        &dispatch.cargo_args,
+        &plan_set,
+        dispatch.matrix_args_after_extra_args,
+    );
     let driver = resolve_driver(options, dispatch.workspace_config, &plan_set, env)?;
     warn_ignored_diagnostics_config(
         options,
@@ -689,6 +693,7 @@ fn normalize_driver(driver: &str, source: &str) -> eyre::Result<Option<String>> 
 fn resolve_execution_mode(
     cargo_args: &[&str],
     plan_set: &plan::execution::ExecutionPlanSet<'_>,
+    matrix_args_after_extra_args: bool,
 ) -> runner::TargetExecutionMode {
     use runner::TargetExecutionMode;
 
@@ -720,7 +725,12 @@ fn resolve_execution_mode(
         return TargetExecutionMode::SerialPerTarget;
     }
 
-    if cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run {
+    // Direct `cargo run --target A --target B` is invalid, so aggregate mode
+    // must fall back. Args after `--` belong to an opaque wrapper command:
+    // `run --package wrapper -- lint` receives generated args as
+    // `... -- lint --target A --target B`, and cargo-fc must not reinterpret
+    // wrapper tokens such as `lint` or `run` as Cargo subcommands.
+    if !matrix_args_after_extra_args && cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run {
         print_note!(
             "--aggregate-targets does not apply to `run` (cargo runs one target at a time); running targets serially"
         );
@@ -987,7 +997,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set, false),
             runner::TargetExecutionMode::Aggregate
         );
         Ok(())
@@ -1003,8 +1013,28 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["run"], &plan_set),
+            resolve_execution_mode(&["run"], &plan_set, false),
             runner::TargetExecutionMode::SerialPerTarget
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_execution_mode_allows_run_wrapper_aliases() -> eyre::Result<()> {
+        let package = test_package("a")?;
+        let flags = config::ResolvedFlags {
+            aggregate_targets: true,
+            ..config::ResolvedFlags::default()
+        };
+        let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
+
+        assert_eq!(
+            resolve_execution_mode(
+                &["run", "--package", "clippy-wrapper", "--", "lint"],
+                &plan_set,
+                true,
+            ),
+            runner::TargetExecutionMode::Aggregate
         );
         Ok(())
     }
@@ -1019,7 +1049,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], true, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set, false),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1035,7 +1065,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set),
+            resolve_execution_mode(&["check"], &plan_set, false),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())

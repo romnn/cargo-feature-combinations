@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2]
+
+### Fixed
+
+- Fixed `--aggregate-targets` for aliases that expand through `cargo run -- ...`
+  wrappers, avoiding a misleading direct-`run` fallback note when target args
+  are passed to the wrapped command.
+
 ## [0.2.1]
 
 ### Changed
