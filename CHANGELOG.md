@@ -7,6 +7,25 @@
 - Fixed `--aggregate-targets` for aliases that expand through `cargo run -- ...`
   wrappers, avoiding a misleading direct-`run` fallback note when target args
   are passed to the wrapped command.
+- Fixed `--diagnostics-only` and `--dedupe` for aliases that expand through
+  `cargo run -- ...` wrappers so the generated `--message-format` argument is
+  passed to the wrapped command instead of the wrapper package.
+- Fixed run aliases such as `serve = "run --package app"` so user program
+  arguments after `--` do not make cargo-fc pass generated matrix arguments to
+  the program instead of Cargo.
+- Fixed explicit `--target` detection for aliases that expand through
+  `cargo run -- ...` wrappers.
+- Fixed alias-defined wrapper `cargo run` flags such as `--target` and
+  `--features` so they continue to configure the wrapper package instead of
+  being treated as cargo-fc target planning or target-package feature matrix
+  input.
+- Fixed diagnostics suppression so only Cargo's actual `--message-format` flag
+  disables cargo-fc diagnostics mode; similarly named wrapper/program flags are
+  left alone.
+- Fixed wrapper-package `--message-format` flags so they do not suppress
+  diagnostics mode for the wrapped command.
+- Fixed aliases whose wrapped command has its own `--` separator so generated
+  cargo-fc args are inserted before the wrapped command's program arguments.
 
 ## [0.2.1]
 

@@ -20,6 +20,11 @@ const MAX_ALIAS_EXPANSIONS: usize = 50;
 pub(crate) struct AliasExpansion {
     pub(crate) args: Vec<String>,
     pub(crate) expanded: bool,
+    /// Whether a resolved alias body, not the user's trailing args, contributed
+    /// a `--` separator. This is true for
+    /// `lint = "run --package wrapper -- lint"` and false for
+    /// `serve = "run --package app"` invoked as `cargo fc serve -- arg`.
+    pub(crate) alias_provided_double_dash: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +113,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
         return AliasExpansion {
             args,
             expanded: false,
+            alias_provided_double_dash: false,
         };
     };
     match args.get(idx) {
@@ -116,6 +122,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
             return AliasExpansion {
                 args,
                 expanded: false,
+                alias_provided_double_dash: false,
             };
         }
     }
@@ -124,6 +131,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
         return AliasExpansion {
             args,
             expanded: false,
+            alias_provided_double_dash: false,
         };
     }
 
@@ -133,6 +141,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
     let mut rest: Vec<String> = args.get(idx..).unwrap_or_default().to_vec();
     let mut expansions = 0;
     let mut changed = false;
+    let mut alias_provided_double_dash = false;
     for _ in 0..MAX_ALIAS_EXPANSIONS {
         let Some(token) = rest.first().cloned() else {
             break;
@@ -149,6 +158,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
             break;
         }
         let mut expanded = expansion.clone();
+        alias_provided_double_dash |= expanded.iter().any(|arg| arg == "--");
         expanded.extend_from_slice(rest.get(1..).unwrap_or_default());
         rest = expanded;
         expansions += 1;
@@ -167,12 +177,14 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
         );
         rest = original_rest;
         changed = false;
+        alias_provided_double_dash = false;
     }
 
     head.extend(rest);
     AliasExpansion {
         args: head,
         expanded: changed,
+        alias_provided_double_dash,
     }
 }
 
@@ -274,6 +286,31 @@ mod tests {
         let out = expand_aliases(vec!["lint".to_string()], tmp.path());
 
         assert_eq!(out, ["clippy", "--features", "foo bar"]);
+        Ok(())
+    }
+
+    #[test]
+    fn tracks_only_alias_provided_double_dash() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            "[alias]\nwrapper = \"run --package wrapper -- lint\"\nserve = \"run --package app\"\n",
+        )?;
+
+        let wrapper = expand_aliases_with_info(vec!["wrapper".to_string()], tmp.path());
+        let serve = expand_aliases_with_info(
+            vec![
+                "serve".to_string(),
+                "--".to_string(),
+                "program-arg".to_string(),
+            ],
+            tmp.path(),
+        );
+
+        // Only separators from alias bodies select after-separator placement;
+        // user-provided trailing args stay program argv for a normal run alias.
+        assert!(wrapper.alias_provided_double_dash);
+        assert!(!serve.alias_provided_double_dash);
         Ok(())
     }
 

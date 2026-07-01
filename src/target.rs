@@ -136,6 +136,9 @@ pub fn parse_cli_target(cargo_args: &[String]) -> Option<String> {
         if arg == "--target"
             && let Some(v) = it.next()
         {
+            if v == "--" {
+                break;
+            }
             return Some(v.clone());
         }
         if let Some(v) = arg.strip_prefix("--target=")
@@ -179,6 +182,11 @@ mod test {
             parse_cli_target(&owned(&["run", "--", "--target", "binary-arg"])),
             None
         );
+    }
+
+    #[test]
+    fn parse_cli_target_does_not_consume_double_dash_as_value() {
+        assert_eq!(parse_cli_target(&owned(&["check", "--target", "--"])), None);
     }
 
     #[test]

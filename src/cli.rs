@@ -56,7 +56,9 @@ trait ArgumentParser {
     ///
     /// When `has_value` is `true`, this matches `--flag value` and
     /// `--flag=value` forms and returns the value part. When `has_value` is
-    /// `false`, it matches bare flags like `--flag`.
+    /// `false`, it matches bare flags like `--flag`. In both modes, `--`
+    /// remains the forwarded-argument boundary and is never consumed as a flag
+    /// value.
     fn get_all(&self, arg: &str, has_value: bool)
     -> Vec<(std::ops::RangeInclusive<usize>, String)>;
 }
@@ -73,13 +75,13 @@ impl ArgumentParser for Vec<String> {
                 break;
             }
             match (a, self.get(idx + 1)) {
-                (key, Some(value)) if key == arg && has_value => {
+                (key, Some(value)) if key == arg && has_value && value != "--" => {
                     matched.push((idx..=idx + 1, value.clone()));
                 }
                 (key, _) if key == arg && !has_value => {
                     matched.push((idx..=idx, key.clone()));
                 }
-                (key, _) if key.starts_with(&format!("{arg}=")) => {
+                (key, _) if has_value && key.starts_with(&format!("{arg}=")) => {
                     let value = key.trim_start_matches(&format!("{arg}="));
                     matched.push((idx..=idx, value.to_string()));
                 }
@@ -164,6 +166,9 @@ pub(crate) fn subcommand_token_index(args: &[impl AsRef<str>]) -> Option<usize> 
     for (idx, arg) in args.iter().map(AsRef::as_ref).enumerate() {
         if skip_next {
             skip_next = false;
+            if arg == "--" {
+                return None;
+            }
             continue;
         }
         if arg == "--" {
@@ -625,6 +630,9 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         ..Options::default()
     };
 
+    // Every cargo-fc option extracted below must use `get_all` or `mark_flag`.
+    // Those helpers stop at the first `--`, so `cargo fc run -- --help` keeps
+    // `--help` as a binary argument instead of turning into cargo-fc help.
     // Extract path to manifest to operate on
     for (span, manifest_path) in args.get_all("--manifest-path", true) {
         let manifest_path = PathBuf::from(manifest_path);
@@ -836,15 +844,71 @@ mod test {
         let args = vec![
             "run".to_string(),
             "--".to_string(),
+            "--manifest-path".to_string(),
+            "Cargo.toml".to_string(),
+            "--package".to_string(),
+            "pkg".to_string(),
+            "-p".to_string(),
+            "pkg".to_string(),
+            "--exclude-package".to_string(),
+            "pkg".to_string(),
             "--help".to_string(),
             "matrix".to_string(),
+            "--pretty".to_string(),
             "--driver".to_string(),
             "cross".to_string(),
+            "--only-packages-with-lib-target".to_string(),
+            "--pedantic".to_string(),
+            "--errors-only".to_string(),
+            "--packages-only".to_string(),
+            "--diagnostics-only".to_string(),
+            "--fail-fast".to_string(),
+            "--no-prune-implied".to_string(),
+            "--show-pruned".to_string(),
+            "--aggregate-targets".to_string(),
+            "--no-targets".to_string(),
+            "--install-missing-targets".to_string(),
+            "--dedupe".to_string(),
+            "--dedup".to_string(),
+            "--summary-only".to_string(),
+            "--summary".to_string(),
+            "--silent".to_string(),
+            "--workspace".to_string(),
         ];
 
-        assert!(args.get_all("--help", false).is_empty());
-        assert!(args.get_all("matrix", false).is_empty());
-        assert!(args.get_all("--driver", true).is_empty());
+        for flag in [
+            "--manifest-path",
+            "--package",
+            "-p",
+            "--exclude-package",
+            "--driver",
+        ] {
+            assert!(args.get_all(flag, true).is_empty(), "{flag}");
+        }
+        for flag in [
+            "--help",
+            "matrix",
+            "--pretty",
+            "--only-packages-with-lib-target",
+            "--pedantic",
+            "--errors-only",
+            "--packages-only",
+            "--diagnostics-only",
+            "--fail-fast",
+            "--no-prune-implied",
+            "--show-pruned",
+            "--aggregate-targets",
+            "--no-targets",
+            "--install-missing-targets",
+            "--dedupe",
+            "--dedup",
+            "--summary-only",
+            "--summary",
+            "--silent",
+            "--workspace",
+        ] {
+            assert!(args.get_all(flag, false).is_empty(), "{flag}");
+        }
     }
 
     #[test]
@@ -861,6 +925,35 @@ mod test {
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].1, "cargo");
+    }
+
+    #[test]
+    fn argument_parser_does_not_treat_inline_values_as_boolean_flags() {
+        let args = vec![
+            "--summary-only=false".to_string(),
+            "--driver=cargo".to_string(),
+        ];
+
+        assert!(args.get_all("--summary-only", false).is_empty());
+        let matches = args.get_all("--driver", true);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].1, "cargo");
+    }
+
+    #[test]
+    fn argument_parser_does_not_consume_double_dash_as_value() {
+        let args = vec![
+            "--driver".to_string(),
+            "--".to_string(),
+            "program-arg".to_string(),
+        ];
+
+        assert!(args.get_all("--driver", true).is_empty());
+    }
+
+    #[test]
+    fn cargo_subcommand_token_stops_at_double_dash_after_value_flag() {
+        sim_assert_eq!(cargo_subcommand_token(&["--config", "--", "clippy"]), None);
     }
 
     #[test]

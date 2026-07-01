@@ -16,6 +16,8 @@ pub mod config;
 mod diagnostics_only;
 /// Feature implication graph and redundant-combination pruning.
 pub mod implication;
+/// Forwarded Cargo argument splitting and generated-argument placement.
+mod invocation_args;
 /// JSON matrix output from resolved execution plans.
 mod matrix;
 /// Package-level configuration, feature combination generation, and error types.
@@ -42,6 +44,7 @@ pub use config::{
     WorkspaceTargetOverride,
 };
 pub use implication::{PruneResult, PrunedCombination, maybe_prune};
+pub use invocation_args::GeneratedArgPlacement;
 pub use matrix::build_matrix_rows;
 pub use package::{FeatureCombinationError, Package};
 pub use plan::execution::{
@@ -154,9 +157,7 @@ struct PreparedCargoCommand {
     raw_token: Option<String>,
     resolved_token: Option<String>,
     cli_target: Option<String>,
-    /// Aliases expanded through `cargo run ... --` keep Cargo's alias argument
-    /// placement: generated matrix args are appended after the expansion.
-    matrix_args_after_extra_args: bool,
+    generated_arg_placement: GeneratedArgPlacement,
 }
 
 impl PreparedCargoCommand {
@@ -174,7 +175,7 @@ struct CargoCommandDispatch<'a> {
     options: &'a Options,
     cargo_args: Vec<&'a str>,
     tokens: CommandTokens<'a>,
-    matrix_args_after_extra_args: bool,
+    generated_arg_placement: GeneratedArgPlacement,
     workspace_config: &'a config::WorkspaceConfig,
     workspace_key: &'a str,
 }
@@ -303,7 +304,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 options: &options,
                 cargo_args: prepared.args.iter().map(String::as_str).collect(),
                 tokens,
-                matrix_args_after_extra_args: prepared.matrix_args_after_extra_args,
+                generated_arg_placement: prepared.generated_arg_placement,
                 workspace_config: &ws_config,
                 workspace_key: ws_key,
             },
@@ -330,25 +331,44 @@ fn prepare_cargo_command(
     workspace_root: &std::path::Path,
 ) -> PreparedCargoCommand {
     let raw_token = cli::cargo_subcommand_token(&args);
+    let raw_cli_target = target::parse_cli_target(&args);
     // Resolve cargo command aliases so target policy and build-driver dispatch
     // see the underlying built-in subcommand when one is configured.
     let alias_expansion = cargo_alias::expand_aliases_with_info(args, workspace_root);
     let expanded_args = alias_expansion.args;
     let resolved_token = cli::cargo_subcommand_token(&expanded_args);
-    let cli_target = target::parse_cli_target(&expanded_args);
-    let matrix_args_after_extra_args = alias_expansion.expanded
+    // Expanded `run` aliases keep generated args after `--` only when the alias
+    // body supplied that separator: `lint = "run --package wrapper -- lint"`.
+    // A normal run alias plus user args (`serve = "run --package app"`,
+    // invoked as `cargo fc serve -- arg`) still needs Cargo-side matrix args.
+    let generated_arg_placement = if alias_expansion.expanded
         && matches!(
             cargo_subcommand(expanded_args.as_slice()),
             cli::CargoSubcommand::Run
         )
-        && expanded_args.iter().any(|arg| arg == "--");
+        && alias_expansion.alias_provided_double_dash
+    {
+        GeneratedArgPlacement::AliasWrapper
+    } else {
+        GeneratedArgPlacement::CargoCommand
+    };
+    // Target precedence is parsed from the user's raw command first, then from
+    // the expanded command when generated args still belong to Cargo. For
+    // wrapper aliases, an expanded `--target` configures the wrapper package
+    // (`cargo run --target host -- ...`) and must not collapse cargo-fc's
+    // configured target matrix.
+    let expanded_cli_target = match generated_arg_placement {
+        GeneratedArgPlacement::CargoCommand => target::parse_cli_target(&expanded_args),
+        GeneratedArgPlacement::AliasWrapper => None,
+    };
+    let cli_target = raw_cli_target.or(expanded_cli_target);
 
     PreparedCargoCommand {
         args: expanded_args,
         raw_token,
         resolved_token,
         cli_target,
-        matrix_args_after_extra_args,
+        generated_arg_placement,
     }
 }
 
@@ -449,7 +469,7 @@ fn run_cargo_command(
     let mode = resolve_execution_mode(
         &dispatch.cargo_args,
         &plan_set,
-        dispatch.matrix_args_after_extra_args,
+        dispatch.generated_arg_placement,
     );
     let driver = resolve_driver(options, dispatch.workspace_config, &plan_set, env)?;
     warn_ignored_diagnostics_config(
@@ -464,7 +484,7 @@ fn run_cargo_command(
         dispatch.cargo_args,
         mode,
         driver.as_deref(),
-        dispatch.matrix_args_after_extra_args,
+        dispatch.generated_arg_placement,
     )
 }
 
@@ -693,7 +713,7 @@ fn normalize_driver(driver: &str, source: &str) -> eyre::Result<Option<String>> 
 fn resolve_execution_mode(
     cargo_args: &[&str],
     plan_set: &plan::execution::ExecutionPlanSet<'_>,
-    matrix_args_after_extra_args: bool,
+    generated_arg_placement: GeneratedArgPlacement,
 ) -> runner::TargetExecutionMode {
     use runner::TargetExecutionMode;
 
@@ -726,11 +746,12 @@ fn resolve_execution_mode(
     }
 
     // Direct `cargo run --target A --target B` is invalid, so aggregate mode
-    // must fall back. Args after `--` belong to an opaque wrapper command:
-    // `run --package wrapper -- lint` receives generated args as
-    // `... -- lint --target A --target B`, and cargo-fc must not reinterpret
-    // wrapper tokens such as `lint` or `run` as Cargo subcommands.
-    if !matrix_args_after_extra_args && cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run {
+    // must fall back. For `lint = "run --package wrapper -- lint"`, aggregate
+    // produces `... -- lint --target A --target B`; Cargo's outer `run` still
+    // sees one target while the wrapped command receives the target group.
+    if generated_arg_placement == GeneratedArgPlacement::CargoCommand
+        && cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run
+    {
         print_note!(
             "--aggregate-targets does not apply to `run` (cargo runs one target at a time); running targets serially"
         );
@@ -868,9 +889,14 @@ mod test {
 
         let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path());
 
+        // Nested aliases still need wrapper placement once the final expansion
+        // is `cargo run ... -- <wrapped-command>`.
         assert_eq!(prepared.raw_token.as_deref(), Some("lint"));
         assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
-        assert!(prepared.matrix_args_after_extra_args);
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::AliasWrapper
+        );
         assert_eq!(
             prepared.args,
             vec!["run", "--package", "clippy-wrapper", "--", "lint"],
@@ -887,9 +913,40 @@ mod test {
             workspace.path(),
         );
 
+        // A user-provided `--` for direct `cargo run` is program argv, not an
+        // alias wrapper boundary.
         assert_eq!(prepared.raw_token.as_deref(), Some("run"));
         assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
-        assert!(!prepared.matrix_args_after_extra_args);
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::CargoCommand
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_keeps_run_alias_user_args_on_cargo_side() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            serve = "run --package app"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(
+            vec!["serve".to_string(), "--".to_string(), "lint".to_string()],
+            workspace.path(),
+        );
+
+        // The alias did not provide `--`; the user's trailing args remain the
+        // app's argv, so cargo-fc generated args still belong before `--`.
+        assert_eq!(prepared.raw_token.as_deref(), Some("serve"));
+        assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::CargoCommand
+        );
+        assert_eq!(prepared.args, vec!["run", "--package", "app", "--", "lint"]);
         Ok(())
     }
 
@@ -904,12 +961,123 @@ mod test {
 
         let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path());
 
+        // A `--` inside the alias body owns the argument boundary; generated
+        // args must preserve that alias-defined position.
         assert_eq!(prepared.raw_token.as_deref(), Some("serve"));
         assert_eq!(prepared.resolved_token.as_deref(), Some("run"));
-        assert!(prepared.matrix_args_after_extra_args);
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::AliasWrapper
+        );
         assert_eq!(
             prepared.args,
             vec!["run", "--package", "app", "--", "serve"],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_preserves_cli_target_for_run_wrapper_aliases() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            clippy-wrapper = "run --package clippy-wrapper --"
+            lint = "clippy-wrapper lint"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(
+            vec![
+                "lint".to_string(),
+                "--target".to_string(),
+                "wasm32-unknown-unknown".to_string(),
+            ],
+            workspace.path(),
+        );
+
+        // The user's explicit `--target` still wins even when the alias expands
+        // into a wrapper command.
+        assert_eq!(
+            prepared.cli_target,
+            Some("wasm32-unknown-unknown".to_string())
+        );
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::AliasWrapper
+        );
+        assert_eq!(
+            prepared.args,
+            vec![
+                "run",
+                "--package",
+                "clippy-wrapper",
+                "--",
+                "lint",
+                "--target",
+                "wasm32-unknown-unknown",
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_ignores_wrapper_cargo_target_for_target_planning() -> eyre::Result<()>
+    {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            lint = "run --package clippy-wrapper --target x86_64-unknown-linux-gnu -- lint"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path());
+
+        // The expanded `--target` configures the wrapper package, not the
+        // command behind `--`, so target planning must ignore it.
+        assert_eq!(prepared.cli_target, None);
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::AliasWrapper
+        );
+        assert_eq!(
+            prepared.args,
+            vec![
+                "run",
+                "--package",
+                "clippy-wrapper",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--",
+                "lint",
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_cargo_command_reads_cli_target_from_expanded_alias() -> eyre::Result<()> {
+        let workspace = workspace_with_aliases(
+            r#"
+            [alias]
+            wasm-check = "check --target wasm32-unknown-unknown"
+            "#,
+        )?;
+
+        let prepared = prepare_cargo_command(vec!["wasm-check".to_string()], workspace.path());
+
+        // Non-wrapper aliases still expose their expanded Cargo `--target` as
+        // an explicit target override.
+        assert_eq!(
+            prepared.cli_target,
+            Some("wasm32-unknown-unknown".to_string())
+        );
+        assert_eq!(
+            prepared.generated_arg_placement,
+            GeneratedArgPlacement::CargoCommand
+        );
+        assert_eq!(
+            prepared.args,
+            vec!["check", "--target", "wasm32-unknown-unknown"],
         );
         Ok(())
     }
@@ -997,7 +1165,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, false),
+            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
             runner::TargetExecutionMode::Aggregate
         );
         Ok(())
@@ -1013,7 +1181,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["run"], &plan_set, false),
+            resolve_execution_mode(&["run"], &plan_set, GeneratedArgPlacement::CargoCommand),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1032,7 +1200,7 @@ mod test {
             resolve_execution_mode(
                 &["run", "--package", "clippy-wrapper", "--", "lint"],
                 &plan_set,
-                true,
+                GeneratedArgPlacement::AliasWrapper,
             ),
             runner::TargetExecutionMode::Aggregate
         );
@@ -1049,7 +1217,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], true, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, false),
+            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1065,7 +1233,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, false),
+            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
