@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3]
+
+### Added
+
+- cargo-fc now exports the build driver it selected for each invocation to the
+  child process via the `CARGO_DRIVER` environment variable. Aliases that run
+  under cargo-fc for non-host targets and invoke cargo under the hood may want to
+  invoke the driver passed by cargo-fc via the `CARGO_DRIVER` env var instead, so
+  that cross compilation works transparently.
+
 ## [0.2.2]
 
 ### Fixed

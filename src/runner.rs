@@ -612,6 +612,12 @@ fn run_single_combination(
         None => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
     };
     let mut cmd = process::Command::new(&cargo);
+    // Propagate the resolved driver to the child via `CARGO_DRIVER` so wrapper
+    // aliases (e.g. `lint = "run --package clippy-wrapper -- lint"`) can spawn
+    // the same driver for their inner Cargo invocation. Without this, the inner
+    // command falls back to plain `cargo` and native-C deps fail to
+    // cross-compile even though this outer invocation used `cargo-zigbuild`.
+    cmd.env("CARGO_DRIVER", &cargo);
     force_color(&mut cmd);
 
     if inv.flags.errors_only {
