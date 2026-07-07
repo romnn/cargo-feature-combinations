@@ -2,7 +2,7 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::Package as _;
+use cargo_feature_combinations::{Package as _, ResolvedFeatures};
 use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 
@@ -65,7 +65,7 @@ fn feature_sets_for_settings(settings: &str) -> eyre::Result<Vec<Vec<String>>> {
         .ok_or_eyre("test package should exist")?;
 
     let config = pkg.config()?;
-    let matrix = pkg.feature_matrix(&config)?;
+    let matrix = pkg.feature_matrix(&ResolvedFeatures::from_config(&config))?;
 
     // Normalize into sorted vectors of feature names per combination.
     let mut combos: Vec<Vec<String>> = matrix

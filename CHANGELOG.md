@@ -16,6 +16,36 @@
   (package → subcommand → target → target×subcommand) mirroring flag precedence.
   These keys are per-package; workspace-scope subcommand tables continue to
   accept only the `targets` capability and cargo-fc flags.
+- Patch-object forms are now accepted at base scopes that previously accepted
+  only plain arrays, including package-base feature keys and workspace-base
+  `exclude_packages` / `targets`.
+
+### Changed
+
+- `replace = true` now uses one precedence-chain reset rule for every setting.
+  In particular, package-scope resets also discard inherited workspace
+  `targets`, and `expand_targets` falls back to the command default when a
+  broader explicit value is reset away.
+- `replace = true` combined with `add` or `remove` in the same section is now an
+  error for every patch-typed setting, including `targets` and
+  `exclude_packages`.
+- That `replace = true` + `add`/`remove` rule is enforced during config
+  validation, so invalid replacing sections now error even if a narrower reset
+  would shadow them or the target cfg would not match the current invocation.
+- Multiple matching target cfg sections may now all set `replace = true`; the
+  reset marker is combined consistently while real value conflicts are still
+  rejected.
+- `targets` override and add patches now preserve declaration order instead of
+  sorting set-backed values.
+- `driver = ""` or whitespace-only `driver` values are rejected during config
+  validation in every scope.
+- Target-capability explicitness is based on the final resolved
+  `expand_targets` value after resets, rather than on broader values that may
+  have been discarded.
+- The crate-root Rust API now exports only the small set of common entry
+  points; raw config schema and patch types remain available under their module
+  paths. The CLI is the supported interface, and the Rust API has no stability
+  guarantees.
 
 ## [0.2.3]
 

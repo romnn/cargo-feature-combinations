@@ -3,6 +3,9 @@
 //! This crate powers the `cargo-fc` and `cargo-feature-combinations` binaries.
 //! The main entry point for consumers is [`run`], which parses CLI arguments
 //! and dispatches the requested command.
+//!
+//! The Rust API is an implementation detail of the CLI and has no stability
+//! guarantees; the command-line interface is the supported interface.
 
 /// Resolve cargo command aliases from the `.cargo/config.toml` hierarchy.
 mod cargo_alias;
@@ -19,7 +22,7 @@ pub mod implication;
 /// Forwarded Cargo argument splitting and generated-argument placement.
 mod invocation_args;
 /// JSON matrix output from resolved execution plans.
-mod matrix;
+pub mod matrix;
 /// Package-level configuration, feature combination generation, and error types.
 pub mod package;
 /// Planning stages that prepare target and execution plans before Cargo runs.
@@ -35,33 +38,21 @@ mod tee;
 /// Workspace-level configuration and package discovery.
 pub mod workspace;
 
-pub use cfg_eval::{CfgEvaluator, RustcCfgEvaluator};
-pub use cli::{Command, Options, parse_arguments};
-pub use config::patch::{FeatureSetVecPatch, StringSetPatch};
+pub use cfg_eval::CfgEvaluator;
+pub use config::ResolvedFeatures;
 pub use config::resolve::resolve_config;
-pub use config::{
-    CommandCapabilities, Config, FlagConfig, ResolvedFlags, TargetOverride, WorkspaceConfig,
-    WorkspaceTargetOverride,
-};
-pub use implication::{PruneResult, PrunedCombination, maybe_prune};
-pub use invocation_args::GeneratedArgPlacement;
-pub use matrix::build_matrix_rows;
-pub use package::{FeatureCombinationError, Package};
-pub use plan::execution::{
-    ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan, PlanBuildContext, build_execution_plans,
-};
-pub use plan::targets::{
-    PlannedPackage, SelectedPackage, TargetPlan, TargetPlans, build_target_plans,
-};
-pub use runner::{ExitCode, TargetExecutionMode, run_execution_plans};
-pub use target::{EffectiveTarget, TargetEnvironment, TargetSource, TargetTriple};
-pub use workspace::Workspace;
+pub use package::Package;
+pub use target::TargetTriple;
 
-use cli::cargo_subcommand;
+use cfg_eval::RustcCfgEvaluator;
+use cli::{Command, Options, cargo_subcommand, parse_arguments};
 use color_eyre::eyre;
-use runner::print_feature_combination_error;
+use invocation_args::GeneratedArgPlacement;
+use package::FeatureCombinationError;
+use runner::{ExitCode, print_feature_combination_error};
 use std::process;
 use target::RustcTargetEnvironment;
+use workspace::Workspace;
 
 /// Yellow+bold color spec used by the [`print_warning!`] macro.
 static WARNING_COLOR: std::sync::LazyLock<termcolor::ColorSpec> = std::sync::LazyLock::new(|| {
@@ -396,31 +387,21 @@ fn selected_packages_for_target_planning<'a>(
     let default_diagnostics_allowed = cli::builtin_diagnostics_safe(command_token);
 
     let mut selected = Vec::new();
-    let empty_target_subcommands = std::collections::BTreeMap::new();
     for (package, package_config) in packages.iter().zip(configs) {
         // This resolution only decides target-selection capability; the resolved
         // driver is discarded, so the driver inputs are left unset.
-        let command_config = config::resolve_command_config(config::ResolveCommandConfigArgs {
-            workspace: ws_config,
-            workspace_target_flags: config::FlagConfig::default(),
-            workspace_target_replace: false,
-            workspace_target_driver: None,
-            workspace_target_subcommands: &empty_target_subcommands,
-            package_flags: package_config.flags,
-            package_replace: package_config.replace,
-            package_driver: None,
-            package_subcommands: &package_config.subcommand_overrides,
-            package_target_flags: config::FlagConfig::default(),
-            package_target_replace: false,
-            package_target_driver: None,
-            package_target_subcommands: &empty_target_subcommands,
-            raw_command: tokens.raw,
-            resolved_command: tokens.resolved,
-            cli_flags: options.flags,
-            cli_driver: None,
-            default_diagnostics_allowed,
-            default_targets_enabled: default_target_capability,
-        })?;
+        let command_config =
+            config::Chain::base(ws_config, Some(package_config), tokens.raw, tokens.resolved)
+                .resolve(
+                    config::resolve::CliOverlay {
+                        flags: options.flags,
+                        driver: None,
+                    },
+                    config::resolve::ResolvePolicy {
+                        default_diagnostics_allowed,
+                        default_targets_enabled: default_target_capability,
+                    },
+                )?;
         selected.push(plan::targets::SelectedPackage {
             package,
             config: package_config,
@@ -592,17 +573,10 @@ fn warn_if_configured_targets_ignored(
 
     let has_implicitly_skipped_configured_targets = selected.iter().any(|package| {
         !package.target_decision_explicit
-            && (!ws_config.workspace_targets.is_empty()
-                || package
-                    .config
-                    .package_targets
-                    .as_ref()
-                    .is_some_and(|patch| {
-                        // A non-empty override or any added targets means this package
-                        // configures targets that a no-expand command could skip.
-                        patch.override_value().is_some_and(|set| !set.is_empty())
-                            || !patch.add_values().is_empty()
-                    }))
+            && (target_patch_configures_non_empty_list(ws_config.base.settings.targets.as_ref())
+                || target_patch_configures_non_empty_list(
+                    package.config.base.settings.targets.as_ref(),
+                ))
     });
     let warning_token = raw_token.or(resolved_token);
     if cli::known_quiet_cargo_subcommand(raw_token)
@@ -621,6 +595,17 @@ fn warn_if_configured_targets_ignored(
             ws_metadata_section(ws_key),
         );
     }
+}
+
+fn target_patch_configures_non_empty_list(patch: Option<&config::patch::TargetListPatch>) -> bool {
+    patch.is_some_and(|patch| {
+        // A non-empty override or any added targets means this configures
+        // targets that a no-expand command could skip.
+        patch
+            .override_value()
+            .is_some_and(|targets| !targets.is_empty())
+            || !patch.add_values().is_empty()
+    })
 }
 
 fn warn_ignored_diagnostics_config(
@@ -1381,7 +1366,7 @@ mod test {
     fn builtin_command_can_be_disabled_by_workspace_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
-        ws.subcommand_overrides.insert(
+        ws.base.subcommands.insert(
             "build".to_string(),
             config::CommandCapabilities {
                 expand_targets: Some(false),
@@ -1393,6 +1378,47 @@ mod test {
 
         assert!(ignore_configured_targets);
         assert!(target_decision_explicit);
+        Ok(())
+    }
+
+    #[test]
+    fn package_subcommand_replace_resets_broader_expand_targets_policy() -> eyre::Result<()> {
+        let options = Options::default();
+        let mut ws = config::WorkspaceConfig::default();
+        ws.base.subcommands.insert(
+            "build".to_string(),
+            config::CommandCapabilities {
+                expand_targets: Some(false),
+                ..config::CommandCapabilities::default()
+            },
+        );
+        let mut config = config::Config::default();
+        config.base.subcommands.insert(
+            "build".to_string(),
+            config::CommandCapabilities {
+                replace: true,
+                ..config::CommandCapabilities::default()
+            },
+        );
+        let package = test_package("a")?;
+        let packages = [&package];
+        let configs = [config];
+        let selected = selected_packages_for_target_planning(
+            &packages,
+            &configs,
+            &options,
+            &ws,
+            CommandTokens {
+                raw: Some("build"),
+                resolved: Some("build"),
+            },
+        )?;
+        let [selected] = selected.as_slice() else {
+            eyre::bail!("expected one selected package, got {}", selected.len());
+        };
+
+        assert!(!selected.ignore_configured_targets);
+        assert!(!selected.target_decision_explicit);
         Ok(())
     }
 
@@ -1412,7 +1438,7 @@ mod test {
     fn explicit_alias_policy_wins_over_resolved_builtin_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
-        ws.subcommand_overrides.insert(
+        ws.base.subcommands.insert(
             "lint".to_string(),
             config::CommandCapabilities {
                 expand_targets: Some(false),
@@ -1431,7 +1457,7 @@ mod test {
     fn explicit_alias_policy_can_enable_unresolved_expanded_command() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
-        ws.subcommand_overrides.insert(
+        ws.base.subcommands.insert(
             "lint".to_string(),
             config::CommandCapabilities {
                 expand_targets: Some(true),

@@ -1,7 +1,7 @@
 //! Build resolved execution plans from target plans.
 
 use crate::cfg_eval::CfgEvaluator;
-use crate::config::{FlagConfig, ResolvedCommandConfig, ResolvedFlags, WorkspaceConfig};
+use crate::config::{Chain, FlagConfig, ResolvedFlags, WorkspaceConfig};
 use crate::implication::PrunedCombination;
 use crate::package::{Package, has_lib_target};
 use crate::plan::targets::{TargetPlan, TargetPlans};
@@ -102,34 +102,17 @@ pub fn build_execution_plans<'a>(
     for target_plan in &target_plans.plans {
         let mut package_plans = Vec::with_capacity(target_plan.packages.len());
         // Command-aware workspace package exclusion for this target and command.
-        let excluded = crate::plan::targets::resolve_effective_exclude_packages(
-            &target_plans.base_exclude,
+        let excluded = Chain::workspace(
             context.workspace_config,
-            target_plan.workspace_target_exclude_ops.as_ref(),
-            target_plan.workspace_target_replace,
-            &target_plan.workspace_target_subcommands,
+            &target_plan.ws_matched,
             context.raw_command,
             context.resolved_command,
-        );
+        )
+        .exclude_packages(&target_plans.base_exclude)?;
         for planned in &target_plan.packages {
             if excluded.contains(planned.package.name.as_str()) {
                 continue;
             }
-            let resolved_config = crate::config::resolve::resolve_config_with_flag_layers(
-                planned.config,
-                &target_plan.target,
-                evaluator,
-                context.raw_command,
-                context.resolved_command,
-            )?;
-            let config = resolved_config.config;
-            let command_config = resolve_package_command_config(
-                &resolved_config.flag_layers,
-                target_plan,
-                cli_flags,
-                context,
-            )?;
-            let flags = command_config.flags;
             let status = package_status
                 .entry(planned.package.id.repr.clone())
                 .or_insert_with(|| PackagePlanningStatus {
@@ -137,50 +120,23 @@ pub fn build_execution_plans<'a>(
                     ..PackagePlanningStatus::default()
                 });
 
-            let target_selection_skipped = is_configured_target_source(planned.target.source)
-                && (flags.no_targets || !command_config.targets_enabled);
-            if target_selection_skipped {
-                status.target_selection_skipped = true;
-                continue;
-            }
-
-            if flags.only_packages_with_lib_target && !has_lib_target(planned.package) {
-                continue;
-            }
-
-            config_show_pruned = config_show_pruned || flags.show_pruned;
-            config_show_target = config_show_target || planned.show_target;
-            let packages_only = context.matrix && flags.packages_only;
-
-            let (combinations, pruned) = if packages_only {
-                (Vec::new(), Vec::new())
-            } else {
-                let all_combos = planned.package.feature_combinations(&config)?;
-                let prune_result = crate::implication::maybe_prune_with_resolved_flag(
-                    all_combos,
-                    &planned.package.features,
-                    &config,
-                    flags.no_prune_implied,
-                );
-                // Own the feature strings before the resolved config is dropped.
-                let combinations: Vec<Vec<String>> = prune_result
-                    .keep
-                    .into_iter()
-                    .map(|combo| combo.into_iter().cloned().collect())
-                    .collect();
-                (combinations, prune_result.pruned)
+            let package_plan = match resolve_package_execution_plan(
+                target_plan,
+                planned,
+                cli_flags,
+                context,
+                evaluator,
+            )? {
+                PackagePlanOutcome::Kept(package_plan) => package_plan,
+                PackagePlanOutcome::TargetSelectionSkipped => {
+                    status.target_selection_skipped = true;
+                    continue;
+                }
+                PackagePlanOutcome::Filtered => continue,
             };
-
-            package_plans.push(PackageExecutionPlan {
-                package: planned.package,
-                target: planned.target.clone(),
-                combinations,
-                pruned,
-                matrix: config.matrix,
-                flags,
-                driver: command_config.driver,
-                ignored_diagnostics_config: command_config.ignored_diagnostics_config,
-            });
+            config_show_pruned = config_show_pruned || package_plan.flags.show_pruned;
+            config_show_target = config_show_target || planned.show_target;
+            package_plans.push(package_plan);
             status.kept = true;
         }
         if !package_plans.is_empty() {
@@ -203,11 +159,95 @@ pub fn build_execution_plans<'a>(
     })
 }
 
+fn resolve_package_execution_plan<'a>(
+    target_plan: &TargetPlan<'a>,
+    planned: &crate::plan::targets::PlannedPackage<'a>,
+    cli_flags: FlagConfig,
+    context: &PlanBuildContext<'_>,
+    evaluator: &mut impl CfgEvaluator,
+) -> eyre::Result<PackagePlanOutcome<'a>> {
+    let pkg_matched = crate::config::resolve::matching_overrides(
+        &planned.config.targets,
+        &target_plan.target,
+        evaluator,
+    )?;
+    let resolved = Chain::full(
+        context.workspace_config,
+        &target_plan.ws_matched,
+        planned.config,
+        pkg_matched,
+        context.raw_command,
+        context.resolved_command,
+    )
+    .resolve(
+        crate::config::resolve::CliOverlay {
+            flags: cli_flags,
+            driver: context.cli_driver,
+        },
+        crate::config::resolve::ResolvePolicy {
+            default_diagnostics_allowed: context.default_diagnostics_allowed,
+            // Target planning already decided which configured assignments may
+            // exist. Execution-plan resolution only lets narrower target-scoped
+            // config remove those assignments.
+            default_targets_enabled: true,
+        },
+    )?;
+    let flags = resolved.flags;
+
+    let target_selection_skipped = is_configured_target_source(planned.target.source)
+        && (flags.no_targets || !resolved.targets_enabled);
+    let lib_filter_skipped =
+        flags.only_packages_with_lib_target && !has_lib_target(planned.package);
+    if target_selection_skipped {
+        return Ok(PackagePlanOutcome::TargetSelectionSkipped);
+    }
+    if lib_filter_skipped {
+        return Ok(PackagePlanOutcome::Filtered);
+    }
+
+    let packages_only = context.matrix && flags.packages_only;
+    let (combinations, pruned) = if packages_only {
+        (Vec::new(), Vec::new())
+    } else {
+        let all_combos = planned.package.feature_combinations(&resolved.features)?;
+        let prune_result = crate::implication::maybe_prune_with_resolved_flag(
+            all_combos,
+            &planned.package.features,
+            &resolved.features,
+            flags.no_prune_implied,
+        );
+        // Own the feature strings before the resolved config is dropped.
+        let combinations: Vec<Vec<String>> = prune_result
+            .keep
+            .into_iter()
+            .map(|combo| combo.into_iter().cloned().collect())
+            .collect();
+        (combinations, prune_result.pruned)
+    };
+
+    Ok(PackagePlanOutcome::Kept(PackageExecutionPlan {
+        package: planned.package,
+        target: planned.target.clone(),
+        combinations,
+        pruned,
+        matrix: resolved.features.matrix,
+        flags,
+        driver: resolved.driver,
+        ignored_diagnostics_config: resolved.ignored_diagnostics_config,
+    }))
+}
+
 #[derive(Default)]
 struct PackagePlanningStatus {
     name: String,
     kept: bool,
     target_selection_skipped: bool,
+}
+
+enum PackagePlanOutcome<'a> {
+    Kept(PackageExecutionPlan<'a>),
+    TargetSelectionSkipped,
+    Filtered,
 }
 
 fn warn_packages_skipped_by_target_selection(status: &BTreeMap<String, PackagePlanningStatus>) {
@@ -228,50 +268,17 @@ fn is_configured_target_source(source: TargetSource) -> bool {
     )
 }
 
-fn resolve_package_command_config(
-    package_layers: &crate::config::resolve::PackageFlagLayers,
-    target_plan: &TargetPlan<'_>,
-    cli_flags: FlagConfig,
-    context: &PlanBuildContext<'_>,
-) -> eyre::Result<ResolvedCommandConfig> {
-    crate::config::resolve_command_config(crate::config::ResolveCommandConfigArgs {
-        workspace: context.workspace_config,
-        workspace_target_flags: target_plan.workspace_target_flags,
-        workspace_target_replace: target_plan.workspace_target_replace,
-        workspace_target_driver: target_plan.workspace_target_driver.as_deref(),
-        workspace_target_subcommands: &target_plan.workspace_target_subcommands,
-        package_flags: package_layers.package_flags,
-        package_replace: package_layers.package_replace,
-        package_driver: package_layers.package_driver.as_deref(),
-        package_subcommands: &package_layers.package_subcommands,
-        package_target_flags: package_layers.target_flags,
-        package_target_replace: package_layers.target_replace,
-        package_target_driver: package_layers.target_driver.as_deref(),
-        package_target_subcommands: &package_layers.target_subcommands,
-        raw_command: context.raw_command,
-        resolved_command: context.resolved_command,
-        cli_flags,
-        cli_driver: context.cli_driver,
-        default_diagnostics_allowed: context.default_diagnostics_allowed,
-        // Target planning already decided which configured assignments may
-        // exist. Execution-plan resolution only lets narrower target-scoped
-        // config remove those assignments.
-        default_targets_enabled: true,
-    })
-}
-
 #[cfg(test)]
 mod test {
     use super::{ExecutionPlanSet, PlanBuildContext, build_execution_plans};
     use crate::cfg_eval::CfgEvaluator;
-    use crate::config::{FlagConfig, TargetOverride};
+    use crate::config::{Config, FlagConfig, ScopeConfig, TargetOverride, WorkspaceTargetOverride};
     use crate::package::Package as _;
     use crate::package::test::{effective_target, package};
     use crate::plan::targets::{PlannedPackage, TargetPlan, TargetPlans};
     use crate::target::{EffectiveTarget, TargetSource, TargetTriple};
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
-    use std::collections::BTreeMap;
 
     #[derive(Default)]
     struct StubEval;
@@ -309,17 +316,20 @@ mod test {
     fn target_scoped_no_targets_skips_configured_assignments() -> eyre::Result<()> {
         let package = package("a")?;
         let config = crate::config::Config::default();
-        let target_plans = TargetPlans {
-            plans: vec![TargetPlan {
-                target: TargetTriple("configured-target".to_string()),
-                workspace_target_flags: FlagConfig {
+        let ws_override = WorkspaceTargetOverride {
+            settings: ScopeConfig {
+                flags: FlagConfig {
                     no_targets: Some(true),
                     ..FlagConfig::default()
                 },
-                workspace_target_replace: false,
-                workspace_target_driver: None,
-                workspace_target_exclude_ops: None,
-                workspace_target_subcommands: BTreeMap::new(),
+                ..ScopeConfig::default()
+            },
+            ..WorkspaceTargetOverride::default()
+        };
+        let target_plans = TargetPlans {
+            plans: vec![TargetPlan {
+                target: TargetTriple("configured-target".to_string()),
+                ws_matched: vec![("cfg(any())".to_string(), &ws_override)],
                 packages: vec![PlannedPackage {
                     package: &package,
                     config: &config,
@@ -350,27 +360,33 @@ mod test {
         let mut package = package("bin-only")?;
         package.targets.clear();
         let mut config = crate::config::Config::default();
-        config.target_overrides.insert(
+        config.targets.insert(
             "cfg(any())".to_string(),
             TargetOverride {
-                flags: FlagConfig {
-                    only_packages_with_lib_target: Some(false),
-                    ..FlagConfig::default()
+                settings: ScopeConfig {
+                    flags: FlagConfig {
+                        only_packages_with_lib_target: Some(false),
+                        ..FlagConfig::default()
+                    },
+                    ..ScopeConfig::default()
                 },
                 ..TargetOverride::default()
             },
         );
-        let target_plans = TargetPlans {
-            plans: vec![TargetPlan {
-                target: TargetTriple("configured-target".to_string()),
-                workspace_target_flags: FlagConfig {
+        let ws_override = WorkspaceTargetOverride {
+            settings: ScopeConfig {
+                flags: FlagConfig {
                     only_packages_with_lib_target: Some(true),
                     ..FlagConfig::default()
                 },
-                workspace_target_replace: false,
-                workspace_target_driver: None,
-                workspace_target_exclude_ops: None,
-                workspace_target_subcommands: BTreeMap::new(),
+                ..ScopeConfig::default()
+            },
+            ..WorkspaceTargetOverride::default()
+        };
+        let target_plans = TargetPlans {
+            plans: vec![TargetPlan {
+                target: TargetTriple("configured-target".to_string()),
+                ws_matched: vec![("cfg(any())".to_string(), &ws_override)],
                 packages: vec![PlannedPackage {
                     package: &package,
                     config: &config,
@@ -400,6 +416,40 @@ mod test {
     }
 
     #[test]
+    fn package_replace_does_not_clear_workspace_exclude_packages() -> eyre::Result<()> {
+        let package = package("drop")?;
+        let mut config = Config::default();
+        config.base.settings.replace = true;
+        let target_plans = TargetPlans {
+            plans: vec![TargetPlan {
+                target: TargetTriple("configured-target".to_string()),
+                ws_matched: Vec::new(),
+                packages: vec![PlannedPackage {
+                    package: &package,
+                    config: &config,
+                    target: effective_target("configured-target"),
+                    show_target: true,
+                }],
+            }],
+            base_exclude: std::collections::HashSet::from(["drop".to_string()]),
+            contains_configured_assignments: true,
+        };
+
+        let workspace_config = crate::config::WorkspaceConfig::default();
+        let context = test_context(&workspace_config);
+        let mut evaluator = StubEval;
+        let plan_set = build_execution_plans(
+            &target_plans,
+            FlagConfig::default(),
+            &context,
+            &mut evaluator,
+        )?;
+
+        assert!(plan_set.plans.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn build_execution_plans_keeps_pruned_entries_for_summary() -> eyre::Result<()> {
         let mut package = crate::package::test::package_with_metadata(
             &["A", "B", "C"],
@@ -415,11 +465,7 @@ mod test {
         let target_plans = TargetPlans {
             plans: vec![TargetPlan {
                 target: TargetTriple("test-target".to_string()),
-                workspace_target_flags: crate::config::FlagConfig::default(),
-                workspace_target_replace: false,
-                workspace_target_driver: None,
-                workspace_target_exclude_ops: None,
-                workspace_target_subcommands: BTreeMap::new(),
+                ws_matched: Vec::new(),
                 packages: vec![PlannedPackage {
                     package: &package,
                     config: &config,

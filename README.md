@@ -8,6 +8,9 @@
 
 Plugin for `cargo` to run commands against selected (or all) combinations of features.
 
+The CLI is the supported interface. The Rust API exists for the binaries and
+integration tests and has no stability guarantees.
+
 <p align="center">
   <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="500">
 </p>
@@ -182,19 +185,23 @@ scopes where it does not apply (`—`):
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | cargo-fc flags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | feature matrix¹ | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| `exclude_packages`² | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
+| `exclude_packages`² | ✓ | ✓ | ✓ | ✓ | —* | — | — | — |
 | `targets` (list)³ | ✓ | — | ✓ | — | ✓ | — | ✓ | — |
-| `expand_targets` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `expand_targets` | — | — | ✓ | ✓ | — | — | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `replace`⁴ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-The only four places a setting is *not* overridable, and why:
+The places a setting is *not* overridable, and why:
 
 1. **feature matrix** (`exclude_features`, `only_features`, `*_feature_sets`,
    `skip_optional_dependencies`, `no_empty_feature_set`, `matrix`) — a workspace
    isn't a crate, so it has no features to shape.
 2. **`exclude_packages`** — a package can't exclude its *sibling* packages; run
-   membership is a workspace-level decision.
+   membership is a workspace-level decision. The bare `pkg` scope accepts
+   `exclude_packages` only as a deprecated root-package spelling kept for
+   backwards compatibility; it is folded into the workspace base set with a
+   deprecation warning and is rejected in `pkg·target`, `pkg·sub`, and
+   `pkg·tgt·sub`.
 3. **`targets` (the list)** inside a `target.'cfg(...)'` section — circular: the
    section was selected *because* a target matched, so redefining the list there
    is self-referential. (Per-subcommand lists, e.g. "test only on host", are
@@ -202,6 +209,8 @@ The only four places a setting is *not* overridable, and why:
 4. **`replace`** at a *workspace base* — nothing broader exists for it to reset.
    (`replace` at a *package* base is fine: it discards the inherited workspace
    config for that package.)
+5. **`expand_targets`** outside a `subcommands.<cmd>` table — it is a
+   per-subcommand capability, not a base or target-wide setting.
 
 Notes: **`driver`** resolves per (package × target × command); when
 `aggregate_targets = true` runs several targets in one invocation, a per-target
@@ -666,8 +675,8 @@ including arrays, replace the base value.
 
 If a matching target override sets `replace = true`, resolution starts from a fresh default
 configuration (instead of inheriting from the base config). To avoid confusion, when
-`replace = true` is set, patchable fields must not use `add` or `remove` (only override
-is allowed).
+`replace = true` is set, patchable fields in that same section must not use `add` or
+`remove` (only override is allowed).
 
 <details>
 <summary>Example: Start from fresh config with `replace=true`</summary>

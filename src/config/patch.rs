@@ -63,24 +63,147 @@ impl StringSetPatch {
     pub fn has_add_or_remove(&self) -> bool {
         !self.add_values().is_empty() || !self.remove_values().is_empty()
     }
+}
 
-    /// Apply this single patch onto `base` (override-or-base → remove → add, with
-    /// add winning ties), matching [`SetPatchOps::apply`]. Kept as a direct
-    /// `HashSet` operation rather than routing through [`SetPatchOps`]: the shared
-    /// engine exists to *merge sibling patches with conflict detection*, which a
-    /// lone patch does not need, so the `BTreeSet` round-trip would be pure waste.
+/// Patch operations for an ordered target-triple list.
+///
+/// This has the same TOML surface as [`StringSetPatch`], but it keeps values in
+/// declaration order instead of normalizing through a set.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum TargetListPatch {
+    /// Shorthand syntax: `targets = ["a", "b"]`.
+    Override(Vec<String>),
+    /// Explicit patch syntax: `targets = { override = [...], add = [...], remove = [...] }`.
+    Patch {
+        /// If present, replace the inherited list before applying add/remove.
+        #[serde(default)]
+        r#override: Option<Vec<String>>,
+        /// Values to append to the inherited list.
+        #[serde(default)]
+        add: Vec<String>,
+        /// Values to remove from the inherited list.
+        #[serde(default)]
+        remove: Vec<String>,
+    },
+}
+
+impl TargetListPatch {
+    /// Return the override value, if the patch is an override.
     #[must_use]
-    pub(crate) fn apply_to(&self, base: &HashSet<String>) -> HashSet<String> {
-        let mut out = self
-            .override_value()
-            .cloned()
-            .unwrap_or_else(|| base.clone());
-        for value in self.remove_values() {
-            out.remove(value);
+    pub fn override_value(&self) -> Option<&[String]> {
+        match self {
+            Self::Override(v) => Some(v),
+            Self::Patch { r#override, .. } => r#override.as_deref(),
         }
-        out.extend(self.add_values().iter().cloned());
+    }
+
+    /// Return the ordered values to add.
+    #[must_use]
+    pub fn add_values(&self) -> &[String] {
+        match self {
+            Self::Override(_) => &[],
+            Self::Patch { add, .. } => add,
+        }
+    }
+
+    /// Return the ordered values to remove.
+    #[must_use]
+    pub fn remove_values(&self) -> &[String] {
+        match self {
+            Self::Override(_) => &[],
+            Self::Patch { remove, .. } => remove,
+        }
+    }
+
+    /// Return `true` if the patch contains any add/remove operations.
+    #[must_use]
+    pub fn has_add_or_remove(&self) -> bool {
+        !self.add_values().is_empty() || !self.remove_values().is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TargetListOps {
+    override_value: Option<Vec<String>>,
+    add: Vec<String>,
+    remove: Vec<String>,
+}
+
+impl TargetListOps {
+    /// Apply operations while preserving declaration order.
+    #[must_use]
+    pub(crate) fn apply_to(&self, base: &[String]) -> Vec<String> {
+        let mut out = self
+            .override_value
+            .clone()
+            .unwrap_or_else(|| dedup_ordered(base.iter().cloned()));
+        let remove: HashSet<&str> = self.remove.iter().map(String::as_str).collect();
+        out.retain(|value| !remove.contains(value.as_str()));
+        let mut existing: HashSet<String> = out.iter().cloned().collect();
+        out.extend(
+            self.add
+                .iter()
+                .filter(|value| existing.insert((*value).clone()))
+                .cloned(),
+        );
         out
     }
+}
+
+/// Combine sibling target-list patches without losing declaration order.
+pub(crate) fn combine_target_list_patches<'a>(
+    name: &str,
+    source_kind: &str,
+    patches: impl IntoIterator<Item = (&'a str, &'a TargetListPatch)>,
+) -> color_eyre::eyre::Result<Option<TargetListOps>> {
+    let mut any = false;
+    let mut override_value: Option<Vec<String>> = None;
+    let mut add = Vec::new();
+    let mut remove = Vec::new();
+
+    for (expr, patch) in patches {
+        any = true;
+
+        if let Some(value) = patch.override_value() {
+            let value = dedup_ordered(value.iter().cloned());
+            match &override_value {
+                None => override_value = Some(value),
+                Some(existing) if *existing == value => {}
+                Some(_) => {
+                    color_eyre::eyre::bail!(
+                        "conflicting overrides for `{name}` from {source_kind} `{expr}`"
+                    );
+                }
+            }
+        }
+
+        extend_ordered_unique(&mut add, patch.add_values().iter().cloned());
+        extend_ordered_unique(&mut remove, patch.remove_values().iter().cloned());
+    }
+
+    Ok(any.then_some(TargetListOps {
+        override_value,
+        add,
+        remove,
+    }))
+}
+
+fn dedup_ordered(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn extend_ordered_unique(out: &mut Vec<String>, values: impl IntoIterator<Item = String>) {
+    let mut seen: HashSet<String> = out.iter().cloned().collect();
+    out.extend(
+        values
+            .into_iter()
+            .filter(|value| seen.insert(value.clone())),
+    );
 }
 
 /// Patch operations for a list of feature sets (each represented as a set of strings).
@@ -232,19 +355,6 @@ impl SetPatchOps<String> {
             .into_iter()
             .collect()
     }
-
-    /// Re-express this combined patch as a [`StringSetPatch`], so several sibling
-    /// patches can be folded into one and stored back on a combined value for
-    /// later application. Round-trips losslessly: `override`/`add`/`remove` map
-    /// straight to the `Patch` variant with identical apply semantics.
-    #[must_use]
-    pub(crate) fn into_string_set_patch(self) -> StringSetPatch {
-        StringSetPatch::Patch {
-            r#override: self.override_value.map(|set| set.into_iter().collect()),
-            add: self.add.into_iter().collect(),
-            remove: self.remove.into_iter().collect(),
-        }
-    }
 }
 
 impl SetPatchOps<Vec<String>> {
@@ -309,7 +419,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{FeatureSetVecPatch, StringSetPatch};
+    use super::{FeatureSetVecPatch, StringSetPatch, TargetListPatch};
     use color_eyre::eyre;
     use serde_json::json;
     use std::collections::HashSet;
@@ -401,5 +511,47 @@ mod test {
         )
         .expect_err("conflicting overrides must error");
         assert!(err.to_string().contains("conflicting overrides"));
+    }
+
+    #[test]
+    fn target_list_patch_array_is_ordered_override() -> eyre::Result<()> {
+        let patch: TargetListPatch = serde_json::from_value(json!(["b", "a", "b"]))?;
+
+        let ops = super::combine_target_list_patches("targets", "package config", [("", &patch)])?
+            .expect("patch present");
+
+        assert_eq!(ops.apply_to(&["base".to_string()]), vec!["b", "a"]);
+        Ok(())
+    }
+
+    #[test]
+    fn target_list_patch_object_applies_in_declaration_order() -> eyre::Result<()> {
+        let patch: TargetListPatch =
+            serde_json::from_value(json!({ "remove": ["base"], "add": ["z", "a", "z"] }))?;
+
+        let ops = super::combine_target_list_patches("targets", "package config", [("", &patch)])?
+            .expect("patch present");
+
+        assert_eq!(
+            ops.apply_to(&["base".to_string(), "kept".to_string()]),
+            vec!["kept", "z", "a"],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn target_list_patch_conflicting_overrides_error() -> eyre::Result<()> {
+        let a: TargetListPatch = serde_json::from_value(json!(["a", "b"]))?;
+        let b: TargetListPatch = serde_json::from_value(json!(["b", "a"]))?;
+
+        let err = super::combine_target_list_patches(
+            "targets",
+            "workspace target override",
+            [("cfg(a)", &a), ("cfg(b)", &b)],
+        )
+        .expect_err("ordered overrides differ");
+
+        assert!(err.to_string().contains("conflicting overrides"));
+        Ok(())
     }
 }

@@ -175,17 +175,13 @@ fn replace_true_rejects_add_remove() -> eyre::Result<()> {
         .find(|p| p.name == "testdummy")
         .ok_or_eyre("test package should exist")?;
 
-    let base = pkg.config()?;
-
-    let mut eval = StubEval::default();
-    eval.matches
-        .insert("cfg(target_os = \"linux\")".to_string());
-
-    let Err(err) = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval) else {
-        eyre::bail!("expected replace=true validation to fail");
+    let Err(err) = pkg.config() else {
+        eyre::bail!("expected replace=true load-time validation to fail");
     };
 
-    assert!(err.to_string().contains("replace=true"));
+    let message = err.to_string();
+    assert!(message.contains("replace"), "{message}");
+    assert!(message.contains("add/remove"), "{message}");
 
     Ok(())
 }

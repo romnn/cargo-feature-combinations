@@ -6,15 +6,14 @@
 //! carries the *config-resolved* driver (before cargo-fc's cross-target
 //! `cargo-zigbuild` default, which is applied later against a real host).
 
+use cargo_feature_combinations::config::{Config, FlagConfig, WorkspaceConfig};
+use cargo_feature_combinations::plan::execution::{PlanBuildContext, build_execution_plans};
 use cargo_feature_combinations::plan::targets::{
     SelectedPackage, TargetPlanRequest, build_target_plans,
 };
 use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
-use cargo_feature_combinations::{
-    CfgEvaluator, Config, FlagConfig, Package as _, PlanBuildContext, WorkspaceConfig,
-    build_execution_plans,
-};
+use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre;
 use std::collections::HashMap;
 

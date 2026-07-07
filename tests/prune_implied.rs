@@ -2,11 +2,16 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::{
-    CfgEvaluator, Package as _, TargetTriple, maybe_prune, resolve_config,
-};
+use cargo_feature_combinations::config::patch::FeatureSetVecPatch;
+use cargo_feature_combinations::config::{Config, FlagConfig, WorkspaceConfig};
+use cargo_feature_combinations::implication::maybe_prune;
+use cargo_feature_combinations::plan::execution::{PlanBuildContext, build_execution_plans};
+use cargo_feature_combinations::plan::targets::build_target_plans;
+use cargo_feature_combinations::target::{TargetEnvironment, TargetTriple};
+use cargo_feature_combinations::{CfgEvaluator, Package as _, ResolvedFeatures, resolve_config};
 use color_eyre::eyre::{self, OptionExt};
 use similar_asserts::assert_eq as sim_assert_eq;
+use std::collections::HashSet;
 
 fn dummy_crate(features_toml: &str, settings: &str) -> eyre::Result<TempDir> {
     let temp = TempDir::new()?;
@@ -70,6 +75,18 @@ struct PruneTestResult {
     pruned: Vec<(Vec<String>, Vec<String>)>,
 }
 
+struct TestEnv;
+
+impl TargetEnvironment for TestEnv {
+    fn cargo_build_target(&self) -> Option<String> {
+        None
+    }
+
+    fn host_target(&self) -> eyre::Result<TargetTriple> {
+        Ok(TargetTriple("host".to_string()))
+    }
+}
+
 fn run_prune_test(features_toml: &str, settings: &str) -> eyre::Result<PruneTestResult> {
     let temp = dummy_crate(features_toml, settings)?;
     run_prune_in_dir(&temp)
@@ -93,7 +110,8 @@ fn run_prune_in_dir(temp: &TempDir) -> eyre::Result<PruneTestResult> {
         .ok_or_eyre("test package should exist")?;
 
     let config = pkg.config()?;
-    let combos = pkg.feature_combinations(&config)?;
+    let resolved = ResolvedFeatures::from_config(&config);
+    let combos = pkg.feature_combinations(&resolved)?;
     let result = maybe_prune(combos, &pkg.features, &config, false);
 
     let mut kept: Vec<Vec<String>> = result
@@ -451,7 +469,11 @@ fn resolve_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
     let config = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     let combos = pkg.feature_combinations(&config)?;
-    let result = maybe_prune(combos, &pkg.features, &config, false);
+    let mut prune_config = Config::default();
+    prune_config.base.settings.features.allow_feature_sets = Some(FeatureSetVecPatch::Override(
+        config.allow_feature_sets.clone(),
+    ));
+    let result = maybe_prune(combos, &pkg.features, &prune_config, false);
 
     let mut kept: Vec<Vec<String>> = result
         .keep
@@ -467,6 +489,73 @@ fn resolve_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
         .collect();
     pruned.sort();
 
+    Ok(PruneTestResult { kept, pruned })
+}
+
+fn execute_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<PruneTestResult> {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(temp.path())
+        .no_deps()
+        .exec()?;
+
+    let pkg = metadata
+        .packages
+        .iter()
+        .find(|p| p.name == "testpruning")
+        .ok_or_eyre("test package should exist")?;
+    let config = pkg.config()?;
+    let selected = vec![cargo_feature_combinations::plan::targets::SelectedPackage {
+        package: pkg,
+        config: &config,
+        ignore_configured_targets: false,
+        target_decision_explicit: true,
+    }];
+    let ws = WorkspaceConfig::default();
+    let env = TestEnv;
+    let mut planning_eval = StubEval::default();
+    let target_plans = build_target_plans(
+        &selected,
+        &ws,
+        &HashSet::new(),
+        cargo_feature_combinations::plan::targets::TargetPlanRequest {
+            expansion: cargo_feature_combinations::plan::targets::TargetExpansion::Explicit("x"),
+            raw_command: None,
+            resolved_command: None,
+        },
+        &env,
+        &mut planning_eval,
+    )?;
+    let mut execution_eval = StubEval::default();
+    for &cfg in matching_cfgs {
+        execution_eval.matches.insert(cfg.to_string());
+    }
+    let context = PlanBuildContext {
+        workspace_config: &ws,
+        raw_command: None,
+        resolved_command: None,
+        cli_driver: None,
+        default_diagnostics_allowed: true,
+        matrix: false,
+    };
+    let plan_set = build_execution_plans(
+        &target_plans,
+        FlagConfig::default(),
+        &context,
+        &mut execution_eval,
+    )?;
+    let package_plan = plan_set
+        .plans
+        .first()
+        .and_then(|plan| plan.package_plans.first())
+        .ok_or_eyre("expected one package execution plan")?;
+    let mut kept = package_plan.combinations.clone();
+    kept.sort();
+    let mut pruned = package_plan
+        .pruned
+        .iter()
+        .map(|entry| (entry.features.clone(), entry.equivalent_to.clone()))
+        .collect::<Vec<_>>();
+    pruned.sort();
     Ok(PruneTestResult { kept, pruned })
 }
 
@@ -542,12 +631,12 @@ fn target_override_disables_pruning_for_specific_target() -> eyre::Result<()> {
     temp.child("src/lib.rs").write_str("")?;
 
     // On macOS: pruning disabled by target override
-    let macos = resolve_and_prune(&temp, &["cfg(target_os = \"macos\")"])?;
+    let macos = execute_and_prune(&temp, &["cfg(target_os = \"macos\")"])?;
     sim_assert_eq!(macos.kept.len(), 4); // all 2^2 combos
     sim_assert_eq!(macos.pruned.len(), 0);
 
     // On other targets: pruning active
-    let other = resolve_and_prune(&temp, &[])?;
+    let other = execute_and_prune(&temp, &[])?;
     sim_assert_eq!(other.kept, vec![vs(&[]), vs(&["A"]), vs(&["B"])]);
     sim_assert_eq!(other.pruned.len(), 1);
 

@@ -7,15 +7,15 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
+use cargo_feature_combinations::config::{Config, FlagConfig, WorkspaceConfig};
+use cargo_feature_combinations::matrix::build_matrix_rows;
+use cargo_feature_combinations::plan::execution::{PlanBuildContext, build_execution_plans};
 use cargo_feature_combinations::plan::targets::{
     SelectedPackage, TargetExpansion, TargetPlanRequest, build_target_plans,
 };
 use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
-use cargo_feature_combinations::{
-    CfgEvaluator, Config, FlagConfig, Package as _, PlanBuildContext, WorkspaceConfig,
-    build_execution_plans, build_matrix_rows,
-};
+use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 

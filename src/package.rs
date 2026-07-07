@@ -1,6 +1,7 @@
 //! Package-level configuration, feature combination generation, and error types.
 
-use crate::config::{Config, validate_package_metadata};
+use crate::config::patch::{FeatureSetVecPatch, StringSetPatch};
+use crate::config::{Config, ResolvedFeatures, validate_package_metadata};
 use crate::print_warning;
 use crate::{DEFAULT_METADATA_KEY, find_metadata_value, pkg_metadata_section};
 use color_eyre::eyre;
@@ -72,21 +73,23 @@ pub trait Package {
     ///
     fn config(&self) -> eyre::Result<Config>;
     /// Compute all feature combinations for this package based on the
-    /// provided [`Config`].
+    /// provided [`ResolvedFeatures`].
     ///
     /// # Errors
     ///
     /// Returns an error if feature combinations can not be computed, e.g. when
     /// the package declares too many features.
-    fn feature_combinations<'a>(&'a self, config: &'a Config)
-    -> eyre::Result<Vec<Vec<&'a String>>>;
+    fn feature_combinations<'a>(
+        &'a self,
+        config: &ResolvedFeatures,
+    ) -> eyre::Result<Vec<Vec<&'a String>>>;
     /// Convert [`Package::feature_combinations`] into a list of comma-separated
     /// feature strings suitable for passing to `cargo --features`.
     ///
     /// # Errors
     ///
     /// Returns an error if [`Package::feature_combinations`] fails.
-    fn feature_matrix(&self, config: &Config) -> eyre::Result<Vec<String>>;
+    fn feature_matrix(&self, config: &ResolvedFeatures) -> eyre::Result<Vec<String>>;
 }
 
 impl Package for cargo_metadata::Package {
@@ -122,23 +125,25 @@ impl Package for cargo_metadata::Package {
             );
         }
 
-        // Handle deprecated config values
-        config
-            .exclude_feature_sets
-            .append(&mut config.deprecated.skip_feature_sets);
-        config
-            .exclude_features
-            .extend(config.deprecated.denylist.drain());
-        config
-            .include_feature_sets
-            .append(&mut config.deprecated.exact_combinations);
+        fold_deprecated_feature_sets(
+            &mut config.base.settings.features.exclude_feature_sets,
+            std::mem::take(&mut config.deprecated.skip_feature_sets),
+        );
+        fold_deprecated_string_set(
+            &mut config.base.settings.features.exclude_features,
+            std::mem::take(&mut config.deprecated.denylist),
+        );
+        fold_deprecated_feature_sets(
+            &mut config.base.settings.features.include_feature_sets,
+            std::mem::take(&mut config.deprecated.exact_combinations),
+        );
 
         Ok(config)
     }
 
     fn feature_combinations<'a>(
         &'a self,
-        config: &'a Config,
+        config: &ResolvedFeatures,
     ) -> eyre::Result<Vec<Vec<&'a String>>> {
         // Short-circuit: if an explicit allowlist of feature sets is configured,
         // interpret it as the complete matrix.
@@ -148,7 +153,7 @@ impl Package for cargo_metadata::Package {
         // care about (e.g. SSR vs hydrate), and we should not implicitly add
         // `[]` or any other combinations.
         if !config.allow_feature_sets.is_empty() {
-            let mut allowed = config
+            let mut allowed: BTreeSet<BTreeSet<&'a String>> = config
                 .allow_feature_sets
                 .iter()
                 .map(|proposed_allowed_set| {
@@ -275,7 +280,7 @@ impl Package for cargo_metadata::Package {
         // Add back exact combinations
         for proposed_exact_combination in &config.include_feature_sets {
             // Remove non-existent features and switch reference to that pointing to `self`
-            let exact_combination = proposed_exact_combination
+            let exact_combination: BTreeSet<&'a String> = proposed_exact_combination
                 .iter()
                 .filter_map(|maybe_feature| {
                     self.features.get_key_value(maybe_feature).map(|(k, _v)| k)
@@ -299,12 +304,61 @@ impl Package for cargo_metadata::Package {
             .collect::<Vec<_>>())
     }
 
-    fn feature_matrix(&self, config: &Config) -> eyre::Result<Vec<String>> {
+    fn feature_matrix(&self, config: &ResolvedFeatures) -> eyre::Result<Vec<String>> {
         Ok(self
             .feature_combinations(config)?
             .into_iter()
             .map(|features| features.iter().join(","))
             .collect())
+    }
+}
+
+fn fold_deprecated_string_set(target: &mut Option<StringSetPatch>, values: HashSet<String>) {
+    if values.is_empty() {
+        return;
+    }
+    match target {
+        Some(
+            StringSetPatch::Override(current)
+            | StringSetPatch::Patch {
+                r#override: Some(current),
+                ..
+            },
+        ) => current.extend(values),
+        Some(StringSetPatch::Patch { add, .. }) => add.extend(values),
+        None => {
+            *target = Some(StringSetPatch::Patch {
+                r#override: None,
+                add: values,
+                remove: HashSet::new(),
+            });
+        }
+    }
+}
+
+fn fold_deprecated_feature_sets(
+    target: &mut Option<FeatureSetVecPatch>,
+    mut values: Vec<HashSet<String>>,
+) {
+    if values.is_empty() {
+        return;
+    }
+    match target {
+        Some(
+            FeatureSetVecPatch::Override(current)
+            | FeatureSetVecPatch::Patch {
+                r#override: Some(current),
+                ..
+            },
+        ) => current.append(&mut values),
+        Some(FeatureSetVecPatch::Patch { add, .. }) => add.append(&mut values),
+        None => {
+            *target = Some(FeatureSetVecPatch::Patch {
+                r#override: None,
+                add: values,
+                remove: Vec::new(),
+            });
+        }
     }
 }
 
@@ -348,9 +402,13 @@ fn generate_global_base_powerset<'a>(
     package_name: &str,
     package_features: &'a BTreeMap<String, Vec<String>>,
     exclude_features: &HashSet<String>,
-    include_features: &'a HashSet<String>,
+    include_features: &HashSet<String>,
     only_features: &HashSet<String>,
 ) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
+    let included = include_features
+        .iter()
+        .filter_map(|feature| package_features.get_key_value(feature).map(|(key, _)| key))
+        .collect::<BTreeSet<_>>();
     let features = package_features
         .keys()
         .collect::<BTreeSet<_>>()
@@ -367,7 +425,7 @@ fn generate_global_base_powerset<'a>(
         .map(|combination| {
             combination
                 .into_iter()
-                .chain(include_features)
+                .chain(included.iter().copied())
                 .collect::<BTreeSet<&'a String>>()
         })
         .collect())
@@ -385,11 +443,15 @@ fn generate_isolated_base_powerset<'a>(
     package_features: &'a BTreeMap<String, Vec<String>>,
     isolated_feature_sets: &[HashSet<String>],
     exclude_features: &HashSet<String>,
-    include_features: &'a HashSet<String>,
+    include_features: &HashSet<String>,
     only_features: &HashSet<String>,
 ) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
     // Collect known package features for easy querying
     let known_features = package_features.keys().collect::<HashSet<_>>();
+    let included = include_features
+        .iter()
+        .filter_map(|feature| package_features.get_key_value(feature).map(|(key, _)| key))
+        .collect::<BTreeSet<_>>();
 
     let mut worst_case_total: u128 = 0;
     for isolated_feature_set in isolated_feature_sets {
@@ -433,7 +495,7 @@ fn generate_isolated_base_powerset<'a>(
                     combination
                         .into_iter()
                         .filter_map(|feature| known_features.get(feature).copied())
-                        .chain(include_features)
+                        .chain(included.iter().copied())
                         .collect::<BTreeSet<_>>()
                 })
         })
@@ -443,7 +505,7 @@ fn generate_isolated_base_powerset<'a>(
 #[cfg(test)]
 pub(crate) mod test {
     use super::{FeatureCombinationError, Package};
-    use crate::config::Config;
+    use crate::config::{Config, ResolvedFeatures};
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::HashSet;
@@ -512,7 +574,7 @@ pub(crate) mod test {
             vec!["foo-b", "foo-c"],
             vec!["foo-c"],
         ];
-        let have = package.feature_combinations(&config)?;
+        let have = package.feature_combinations(&ResolvedFeatures::from_config(&config))?;
 
         sim_assert_eq!(have: have, want: want);
         Ok(())
@@ -522,7 +584,7 @@ pub(crate) mod test {
     fn combinations_only_features() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["foo", "bar", "baz"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             exclude_features: HashSet::from(["default".to_string()]),
             only_features: HashSet::from(["foo".to_string(), "bar".to_string()]),
             ..Default::default()
@@ -540,7 +602,7 @@ pub(crate) mod test {
         init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-b", "car-a"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
@@ -567,7 +629,7 @@ pub(crate) mod test {
         init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
@@ -592,7 +654,7 @@ pub(crate) mod test {
         init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-a", "car-b"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "foo-b".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
@@ -618,7 +680,7 @@ pub(crate) mod test {
         init();
         let package =
             package_with_features(&["foo-b", "foo-a", "bar-a", "bar-b", "car-a", "car-b"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
@@ -638,7 +700,7 @@ pub(crate) mod test {
         init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             isolated_feature_sets: vec![
                 HashSet::from(["foo-a".to_string(), "non-existent".to_string()]),
                 HashSet::from(["bar-a".to_string(), "bar-b".to_string()]),
@@ -662,7 +724,7 @@ pub(crate) mod test {
     fn combinations_allow_feature_sets_exact() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["hydrate", "ssr", "other"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             allow_feature_sets: vec![
                 HashSet::from(["ssr".to_string()]),
                 HashSet::from(["hydrate".to_string()]),
@@ -681,7 +743,7 @@ pub(crate) mod test {
     fn combinations_allow_feature_sets_ignores_other_options() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["hydrate", "ssr"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             allow_feature_sets: vec![HashSet::from(["hydrate".to_string()])],
             exclude_features: HashSet::from(["hydrate".to_string()]),
             exclude_feature_sets: vec![HashSet::from(["hydrate".to_string()])],
@@ -701,7 +763,7 @@ pub(crate) mod test {
     fn combinations_no_empty_feature_set_filters_generated_empty() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["foo", "bar"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             no_empty_feature_set: true,
             ..Default::default()
         };
@@ -717,7 +779,7 @@ pub(crate) mod test {
     fn combinations_no_empty_feature_set_filters_included_empty() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["foo"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             include_feature_sets: vec![HashSet::new()],
             no_empty_feature_set: true,
             ..Default::default()
@@ -734,7 +796,7 @@ pub(crate) mod test {
     fn combinations_exclude_empty_feature_set_only() -> eyre::Result<()> {
         init();
         let package = package_with_features(&["foo", "bar"])?;
-        let config = Config {
+        let config = ResolvedFeatures {
             exclude_feature_sets: vec![HashSet::new()],
             ..Default::default()
         };
@@ -753,7 +815,7 @@ pub(crate) mod test {
         let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
         let package = package_with_features(&feature_refs)?;
 
-        let config = Config::default();
+        let config = ResolvedFeatures::default();
         let Err(err) = package.feature_combinations(&config) else {
             eyre::bail!("expected too-many-configurations error");
         };
@@ -787,8 +849,9 @@ pub(crate) mod test {
             &serde_json::json!({ "exclude_features": ["foo"] }),
         )?;
         let config = package.config()?;
-        assert!(config.exclude_features.contains("foo"));
-        assert!(!config.exclude_features.contains("bar"));
+        let resolved = ResolvedFeatures::from_config(&config);
+        assert!(resolved.exclude_features.contains("foo"));
+        assert!(!resolved.exclude_features.contains("bar"));
         Ok(())
     }
 
@@ -801,8 +864,9 @@ pub(crate) mod test {
             &serde_json::json!({ "exclude_features": ["bar"] }),
         )?;
         let config = package.config()?;
-        assert!(config.exclude_features.contains("bar"));
-        assert!(!config.exclude_features.contains("foo"));
+        let resolved = ResolvedFeatures::from_config(&config);
+        assert!(resolved.exclude_features.contains("bar"));
+        assert!(!resolved.exclude_features.contains("foo"));
         Ok(())
     }
 
@@ -815,7 +879,7 @@ pub(crate) mod test {
             &serde_json::json!({ "no_empty_feature_set": true }),
         )?;
         let config = package.config()?;
-        assert!(config.no_empty_feature_set);
+        assert!(ResolvedFeatures::from_config(&config).no_empty_feature_set);
         Ok(())
     }
 
@@ -828,7 +892,11 @@ pub(crate) mod test {
             &serde_json::json!({ "exclude_features": ["a"] }),
         )?;
         let config = package.config()?;
-        assert!(config.exclude_features.contains("a"));
+        assert!(
+            ResolvedFeatures::from_config(&config)
+                .exclude_features
+                .contains("a")
+        );
         Ok(())
     }
 
@@ -837,8 +905,9 @@ pub(crate) mod test {
         init();
         let package = package_with_features(&["foo"])?;
         let config = package.config()?;
-        assert!(config.exclude_features.is_empty());
-        assert!(!config.no_empty_feature_set);
+        let resolved = ResolvedFeatures::from_config(&config);
+        assert!(resolved.exclude_features.is_empty());
+        assert!(!resolved.no_empty_feature_set);
         Ok(())
     }
 
@@ -851,7 +920,7 @@ pub(crate) mod test {
             &serde_json::json!({ "exclude_features": ["foo"] }),
         )?;
         let config = package.config()?;
-        let matrix = package.feature_combinations(&config)?;
+        let matrix = package.feature_combinations(&ResolvedFeatures::from_config(&config))?;
 
         // "foo" is excluded, so no combination should contain it
         assert!(

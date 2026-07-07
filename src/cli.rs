@@ -550,7 +550,8 @@ Notes:
 - When multiple sections match, their `add`/`remove` sets are unioned.
   Conflicting `override` values result in an error.
 - `replace = true` starts from a fresh default config for that target.
-  When `replace = true` is set, patchable fields must not use `add`/`remove`.
+  When `replace = true` is set, patchable fields in that same section must not
+  use `add`/`remove`.
 - `cfg(feature = "...")` predicates are not supported in target override keys.
 - If `--target <triple>` or `CARGO_BUILD_TARGET` is set, it is used to select
   matching target overrides (this also applies to `cargo fc matrix`).
