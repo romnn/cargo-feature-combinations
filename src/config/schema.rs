@@ -11,20 +11,23 @@ use std::collections::{BTreeMap, HashSet};
 /// `[workspace.metadata.cargo-fc]` instead.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
-    /// Package-level target triples to check by default.
+    /// When enabled, this package discards everything broader in the precedence
+    /// chain (the inherited workspace config) and starts from defaults.
+    #[serde(default)]
+    pub replace: bool,
+    /// Package-level target-list patch, relative to the workspace target list.
     ///
     /// This is a target *selection* field, not a feature-matrix field:
     ///
     /// - `None` (key absent): inherit the workspace target list.
-    /// - `Some([])`: explicit opt-out of the workspace target list; use the
-    ///   single effective target (`CARGO_BUILD_TARGET` or host) instead.
-    /// - `Some([..])`: this package's own target list, overriding the workspace
-    ///   list.
+    /// - `targets = [..]` (override): this package's own list, replacing the
+    ///   workspace list. `targets = []` opts out (single effective target).
+    /// - `targets = { add = [..], remove = [..] }`: patch the inherited list.
     ///
     /// `targets` is never read by feature-combination generation. Target
     /// override sections (`target.'cfg(...)'`) must not change it.
     #[serde(default, rename = "targets")]
-    pub package_targets: Option<Vec<String>>,
+    pub package_targets: Option<StringSetPatch>,
     /// Feature sets that must be tested in isolation.
     #[serde(default)]
     pub isolated_feature_sets: Vec<HashSet<String>>,
@@ -76,6 +79,12 @@ pub struct Config {
     /// Arbitrary user-defined matrix values forwarded to the runner.
     #[serde(default)]
     pub matrix: serde_json::Map<String, serde_json::Value>,
+    /// Package-level build driver override (see [`WorkspaceConfig::driver`]).
+    ///
+    /// Overrides the inherited workspace driver for this package; narrower
+    /// scopes (`target.'cfg(...)'`, `subcommands.<cmd>`) override this in turn.
+    #[serde(default)]
+    pub driver: Option<String>,
     /// Package-level cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
@@ -96,6 +105,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            replace: false,
             package_targets: None,
             isolated_feature_sets: Vec::new(),
             exclude_features: HashSet::new(),
@@ -108,6 +118,7 @@ impl Default for Config {
             allow_feature_sets: Vec::new(),
             no_empty_feature_set: false,
             matrix: serde_json::Map::new(),
+            driver: None,
             flags: FlagConfig::default(),
             subcommand_overrides: BTreeMap::new(),
             target_overrides: BTreeMap::new(),
@@ -116,17 +127,19 @@ impl Default for Config {
     }
 }
 
-/// Target-specific configuration override.
+/// Feature-matrix-shaping patch fields, shared verbatim by target overrides
+/// (`target.'cfg(...)'`) and subcommand overrides (`subcommands.<cmd>`).
 ///
-/// These sections are keyed by Cargo-style cfg expressions, e.g.
-/// `cfg(target_os = "linux")`.
+/// Both carry the exact same payload, so this struct is `#[serde(flatten)]`ed
+/// into each. Keeping it in one place is what lets target and subcommand
+/// overrides resolve through a single code path in `config::resolve`.
+///
+/// Invariant: these field names must stay disjoint from [`FlagConfig`]'s, since
+/// both are `#[serde(flatten)]`ed side by side. A colliding name would be
+/// claimed by whichever flatten is declared first and silently dropped from the
+/// other, with no deserialize error.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct TargetOverride {
-    /// When enabled, start from a fresh default configuration instead of
-    /// inheriting values from the base config.
-    #[serde(default)]
-    pub replace: bool,
-
+pub struct FeatureMatrixPatch {
     /// Patch operations for [`Config::isolated_feature_sets`].
     #[serde(default)]
     pub isolated_feature_sets: Option<FeatureSetVecPatch>,
@@ -157,6 +170,24 @@ pub struct TargetOverride {
     /// Merge override for [`Config::matrix`].
     #[serde(default)]
     pub matrix: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// Target-specific configuration override.
+///
+/// These sections are keyed by Cargo-style cfg expressions, e.g.
+/// `cfg(target_os = "linux")`.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct TargetOverride {
+    /// When enabled, start from a fresh default configuration instead of
+    /// inheriting values from the base config.
+    #[serde(default)]
+    pub replace: bool,
+    /// Target-specific build driver override (see [`WorkspaceConfig::driver`]).
+    #[serde(default)]
+    pub driver: Option<String>,
+    /// Target-specific feature-matrix patches.
+    #[serde(flatten)]
+    pub features: FeatureMatrixPatch,
     /// Target-specific cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
@@ -210,9 +241,16 @@ pub struct WorkspaceConfig {
 /// Keyed by Cargo-style cfg expressions, e.g. `cfg(target_arch = "wasm32")`.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct WorkspaceTargetOverride {
+    /// When enabled, discard everything broader in the precedence chain for this
+    /// target and start this section from defaults.
+    #[serde(default)]
+    pub replace: bool,
     /// Patch operations for [`WorkspaceConfig::exclude_packages`].
     #[serde(default)]
     pub exclude_packages: Option<StringSetPatch>,
+    /// Target-specific build driver override (see [`WorkspaceConfig::driver`]).
+    #[serde(default)]
+    pub driver: Option<String>,
     /// Target-specific workspace cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
@@ -221,16 +259,42 @@ pub struct WorkspaceTargetOverride {
     pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
 }
 
-/// Workspace-level capability and flag overrides for a single command token.
+/// Per-subcommand capability, feature-matrix, and flag overrides for a single
+/// command token.
 ///
-/// Unresolved aliases and custom subcommands default to deny capabilities,
-/// while built-ins default according to cargo-fc's registry.
+/// A subcommand override carries the same [`FeatureMatrixPatch`] payload as
+/// [`TargetOverride`], so the feature combinations built for `cargo fc test`
+/// can differ from those built for `cargo fc build`. Unresolved aliases and
+/// custom subcommands default to deny capabilities, while built-ins default
+/// according to cargo-fc's registry.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct CommandCapabilities {
+    /// When enabled, discard everything broader in the precedence chain for this
+    /// command and start this section from defaults.
+    #[serde(default)]
+    pub replace: bool,
     /// When `true`, cargo-fc may expand configured target lists and inject
     /// `--target <triple>` for this command.
+    ///
+    /// Renamed from `targets` so the `targets` key can mean the target *list*
+    /// uniformly across scopes; this bool is only the expansion *capability*.
     #[serde(default)]
-    pub targets: Option<bool>,
+    pub expand_targets: Option<bool>,
+    /// Command-specific workspace package-selection patch (workspace scopes only;
+    /// package-scope subcommand tables reject it — a package can't exclude
+    /// siblings). Resolved command-aware at execution time.
+    #[serde(default)]
+    pub exclude_packages: Option<StringSetPatch>,
+    /// Command-specific target-list patch (e.g. "test only on host"), relative to
+    /// the inherited list. Resolved command-aware at target-planning time.
+    #[serde(default, rename = "targets")]
+    pub targets: Option<StringSetPatch>,
+    /// Command-specific build driver override (see [`WorkspaceConfig::driver`]).
+    #[serde(default)]
+    pub driver: Option<String>,
+    /// Command-specific feature-matrix patches.
+    #[serde(flatten)]
+    pub features: FeatureMatrixPatch,
     /// Per-command cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
@@ -248,4 +312,76 @@ pub(crate) struct DeprecatedTomlKeys {
     /// Former name of [`Config::include_feature_sets`].
     #[serde(default)]
     pub exact_combinations: Vec<HashSet<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandCapabilities, StringSetPatch, TargetOverride};
+
+    #[test]
+    fn target_override_splits_flattened_feature_and_flag_keys() {
+        // Feature keys and flag keys share one flat TOML table; the two
+        // `#[serde(flatten)]` sub-structs (`features` and `flags`) must each
+        // pick up only their own keys.
+        let value = serde_json::json!({
+            "replace": true,
+            "exclude_features": ["gpu"],
+            "only_features": { "add": ["core"] },
+            "skip_optional_dependencies": true,
+            "matrix": { "kind": "ci" },
+            "pedantic": true,
+        });
+        let ov: TargetOverride = serde_json::from_value(value).expect("deserialize TargetOverride");
+        assert!(ov.replace);
+        assert_eq!(ov.flags.pedantic, Some(true));
+        assert_eq!(ov.features.skip_optional_dependencies, Some(true));
+        assert!(matches!(
+            ov.features.exclude_features,
+            Some(StringSetPatch::Override(_))
+        ));
+        assert!(matches!(
+            ov.features.only_features,
+            Some(StringSetPatch::Patch { .. })
+        ));
+        assert!(ov.features.matrix.is_some());
+    }
+
+    #[test]
+    fn command_capabilities_splits_flattened_keys() {
+        let value = serde_json::json!({
+            "expand_targets": false,
+            "exclude_features": ["gpu"],
+            "verbose": true,
+        });
+        let cap: CommandCapabilities =
+            serde_json::from_value(value).expect("deserialize CommandCapabilities");
+        assert_eq!(cap.expand_targets, Some(false));
+        assert_eq!(cap.flags.verbose, Some(true));
+        assert!(matches!(
+            cap.features.exclude_features,
+            Some(StringSetPatch::Override(_))
+        ));
+    }
+
+    #[test]
+    fn absent_keys_default_to_none() {
+        let cap: CommandCapabilities =
+            serde_json::from_value(serde_json::json!({})).expect("deserialize empty");
+        assert!(cap.expand_targets.is_none());
+        assert!(cap.features.exclude_features.is_none());
+        assert!(cap.features.skip_optional_dependencies.is_none());
+    }
+
+    #[test]
+    fn empty_override_array_is_a_replace_not_absent() {
+        // `only_features = []` must deserialize to `Some(Override(empty))` — the
+        // resolver treats it as "replace with the empty set", not as absent.
+        let cap: CommandCapabilities =
+            serde_json::from_value(serde_json::json!({ "only_features": [] }))
+                .expect("deserialize empty override");
+        match cap.features.only_features {
+            Some(StringSetPatch::Override(set)) => assert!(set.is_empty()),
+            other => panic!("expected empty override, got {other:?}"),
+        }
+    }
 }

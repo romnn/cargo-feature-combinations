@@ -1052,7 +1052,7 @@ mod test {
         subcommands.insert(
             "build".to_string(),
             CommandCapabilities {
-                targets: Some(false),
+                expand_targets: Some(false),
                 ..CommandCapabilities::default()
             },
         );
@@ -1060,7 +1060,7 @@ mod test {
         let override_config = command_override_for_token(Some("b"), &subcommands);
 
         assert_eq!(
-            override_config.and_then(|config| config.targets),
+            override_config.and_then(|config| config.expand_targets),
             Some(false)
         );
     }
@@ -1071,14 +1071,14 @@ mod test {
         subcommands.insert(
             "build".to_string(),
             CommandCapabilities {
-                targets: Some(false),
+                expand_targets: Some(false),
                 ..CommandCapabilities::default()
             },
         );
         subcommands.insert(
             "b".to_string(),
             CommandCapabilities {
-                targets: Some(true),
+                expand_targets: Some(true),
                 ..CommandCapabilities::default()
             },
         );
@@ -1086,7 +1086,7 @@ mod test {
         let override_config = command_override_for_token(Some("b"), &subcommands);
 
         assert_eq!(
-            override_config.and_then(|config| config.targets),
+            override_config.and_then(|config| config.expand_targets),
             Some(true)
         );
     }

@@ -155,6 +155,60 @@ The following metadata key aliases are all supported:
 [package.metadata.feature-combinations]
 ```
 
+#### Override model
+
+Every setting resolves along **one precedence chain**, broadest to narrowest —
+workspace → package, and within each: base → `subcommands.<cmd>` →
+`target.'cfg(...)'` → `target.'cfg(...)'.subcommands.<cmd>`. A narrower scope
+overrides a broader one (so a `target.'cfg(...)'` override beats a bare
+`subcommands.<cmd>` one).
+
+Wherever a setting is valid, it accepts the **same forms**, consistently:
+
+- `key = value` — **override**: replace the inherited value exactly. For
+  set-like values this is the array shorthand `key = [...]`, which is exactly
+  equivalent to the patch op `key = { override = [...] }`.
+- `key = { override = [...], add = [...], remove = [...] }` — explicit **patch**
+  ops on a set-like value: `override` replaces the whole value, `add` unions
+  into it, `remove` subtracts from it. (Scalars — bools and `driver` — only have
+  `override`, i.e. `key = value`.)
+- `replace = true` on a section — **reset**: ignore everything broader in the
+  chain and start this section from defaults.
+
+The matrix shows where each setting may be overridden (`✓`), and the only
+scopes where it does not apply (`—`):
+
+| setting | ws | ws·target | ws·sub | ws·tgt·sub | pkg | pkg·target | pkg·sub | pkg·tgt·sub |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| cargo-fc flags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| feature matrix¹ | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
+| `exclude_packages`² | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
+| `targets` (list)³ | ✓ | — | ✓ | — | ✓ | — | ✓ | — |
+| `expand_targets` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `replace`⁴ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+The only four places a setting is *not* overridable, and why:
+
+1. **feature matrix** (`exclude_features`, `only_features`, `*_feature_sets`,
+   `skip_optional_dependencies`, `no_empty_feature_set`, `matrix`) — a workspace
+   isn't a crate, so it has no features to shape.
+2. **`exclude_packages`** — a package can't exclude its *sibling* packages; run
+   membership is a workspace-level decision.
+3. **`targets` (the list)** inside a `target.'cfg(...)'` section — circular: the
+   section was selected *because* a target matched, so redefining the list there
+   is self-referential. (Per-subcommand lists, e.g. "test only on host", are
+   fine.)
+4. **`replace`** at a *workspace base* — nothing broader exists for it to reset.
+   (`replace` at a *package* base is fine: it discards the inherited workspace
+   config for that package.)
+
+Notes: **`driver`** resolves per (package × target × command); when
+`aggregate_targets = true` runs several targets in one invocation, a per-target
+`driver` forces serial execution. **`expand_targets`** (the capability formerly
+spelled `targets = true|false` on a subcommand) gates whether cargo-fc drives a
+command across the target matrix at all.
+
 For example:
 
 ```toml
@@ -375,7 +429,7 @@ explicit declaration:
 
 ```toml
 [workspace.metadata.cargo-fc.subcommands.my-custom-cmd]
-targets = true
+expand_targets = true
 ```
 
 For well-known cargo plugins such as `nextest`, `audit`, `deny`, `machete`,
@@ -389,13 +443,13 @@ configured target but keep `cargo fc build` on the single effective target:
 
 ```toml
 [workspace.metadata.cargo-fc.subcommands.build]
-targets = false
+expand_targets = false
 ```
 
 For built-in short aliases, the long command's policy also applies unless the
 short alias has its own entry. If configured targets exist but the selected
 command lacks this capability by default, cargo-fc warns once and falls back to
-the single effective target. An explicit `targets = false` opt-out is quiet.
+the single effective target. An explicit `expand_targets = false` opt-out is quiet.
 
 #### Configurable cargo-fc flags
 
@@ -505,12 +559,24 @@ Override the driver with `--driver <bin>` or in config:
 ```toml
 [workspace.metadata.cargo-fc]
 driver = "cargo-zigbuild"   # the cross-compile default; set "cargo" to opt out
+
+# `driver` is a normal scalar setting, so it follows the same precedence chain
+# as everything else (see "Override model"): a package, a `target.'cfg(...)'`, or
+# a `subcommands.<cmd>` may override it. cargo-fc launches each package × target
+# × command separately, so each can resolve its own driver:
+[package.metadata.cargo-fc.target.'cfg(target_arch = "wasm32")']
+driver = "cargo"            # this one crate builds wasm with plain cargo
 ```
 
-`--driver` wins over the config, which wins over the automatic choice. Point it
-at any cargo wrapper (`cross`, `cargo-careful`, …), or set `cargo` to force plain
-cargo even when cross-compiling. If the selected driver is missing, cargo-fc
-warns with the install/override options before returning the spawn error.
+`--driver` wins over all config; within config a narrower scope wins over a
+broader one, and both win over the automatic choice. Point it at any cargo
+wrapper (`cross`, `cargo-careful`, …), or set `cargo` to force plain cargo even
+when cross-compiling. If the selected driver is missing, cargo-fc warns with the
+install/override options before returning the spawn error.
+
+> `--aggregate-targets` batches a package's targets into one Cargo invocation,
+> which can only use one driver — so if a package resolves different drivers per
+> target, cargo-fc runs those targets serially instead.
 
 #### Installing missing Rust targets
 
@@ -623,6 +689,67 @@ replace = true
 exclude_features = ["default", "cuda"] # using array shorthand, i.e. override
 ```
 </details>
+
+### Command-specific configuration
+
+Just as you can override configuration per target triple, you can override it
+per cargo subcommand under:
+
+```toml
+[package.metadata.cargo-fc.subcommands.<command>]
+```
+
+A subcommand override accepts the **same feature-matrix keys as a target
+override** — `exclude_features`, `include_features`, `only_features`,
+`*_feature_sets`, `skip_optional_dependencies`, `no_empty_feature_set`, and
+`matrix` — with identical patch semantics (`key = [...]` or `{ override = [...] }`
+to replace; `{ add = [...] }` / `{ remove = [...] }` for incremental edits). This lets the feature combinations
+built for one command differ from another. For example, enable a heavy `gpu`
+feature when building, but skip it when testing:
+
+```toml
+[package.metadata.cargo-fc]
+# `gpu` is part of the matrix by default (e.g. for `cargo fc build`).
+
+[package.metadata.cargo-fc.subcommands.test]
+# ...but never test the `gpu` combinations.
+exclude_features = { add = ["gpu"] }
+```
+
+Or restrict `cargo fc test` to a single focused feature set:
+
+```toml
+[package.metadata.cargo-fc.subcommands.test]
+only_features = ["core"]
+```
+
+The override applies to that command only. Built-in short aliases (`t` → `test`,
+`b` → `build`, …) and your own `.cargo/config.toml` aliases that resolve to a
+built-in inherit the override automatically, matching how cargo-fc resolves the
+`targets` capability and flag defaults.
+
+Target and subcommand overrides compose. A
+`target.'cfg(...)'.subcommands.<command>` section applies only when **both** the
+target matches and the command is selected:
+
+```toml
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")'.subcommands.test]
+exclude_features = { add = ["cuda"] }
+```
+
+Feature-matrix layers resolve broad-to-narrow, mirroring flag precedence — later
+layers override earlier ones:
+
+1. package config,
+2. matching package `subcommands.<command>`,
+3. matching package `target.'cfg(...)'`,
+4. matching package `target.'cfg(...)'.subcommands.<command>`.
+
+> [!NOTE]
+> Feature sets are per package, so these feature-matrix keys are only accepted
+> in **package**-scope subcommand tables. Workspace-scope subcommand tables
+> (`[workspace.metadata.cargo-fc.subcommands.<command>]`) continue to accept only
+> the `targets` capability and cargo-fc flags.
 
 ---
 

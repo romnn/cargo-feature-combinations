@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0]
+
+### Added
+
+- Per-subcommand feature-matrix overrides. A
+  `[package.metadata.cargo-fc.subcommands.<command>]` table now accepts the same
+  feature-shaping keys as a target override (`exclude_features`,
+  `include_features`, `only_features`, `*_feature_sets`,
+  `skip_optional_dependencies`, `no_empty_feature_set`, `matrix`), so the feature
+  combinations built for one cargo subcommand can differ from another — for
+  example enabling a feature for `cargo fc build` but excluding it for
+  `cargo fc test`. Target and subcommand overrides compose via
+  `target.'cfg(...)'.subcommands.<command>`, and resolve broad-to-narrow
+  (package → subcommand → target → target×subcommand) mirroring flag precedence.
+  These keys are per-package; workspace-scope subcommand tables continue to
+  accept only the `targets` capability and cargo-fc flags.
+
 ## [0.2.3]
 
 ### Added

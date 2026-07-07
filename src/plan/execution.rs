@@ -18,6 +18,8 @@ pub struct PlanBuildContext<'a> {
     pub raw_command: Option<&'a str>,
     /// Command token after cargo alias expansion.
     pub resolved_command: Option<&'a str>,
+    /// Explicit `--driver <bin>` override; overlaid last in driver resolution.
+    pub cli_driver: Option<&'a str>,
     /// Whether broad diagnostics config is safe for the resolved command.
     pub default_diagnostics_allowed: bool,
     /// Whether these plans are for `cargo fc matrix`.
@@ -51,6 +53,11 @@ pub struct PackageExecutionPlan<'a> {
     pub matrix: serde_json::Map<String, serde_json::Value>,
     /// Fully resolved cargo-fc flags for this package-target.
     pub flags: ResolvedFlags,
+    /// Build driver resolved from config + `--driver` for this
+    /// (package × target × command), before cargo-fc's cross-target default is
+    /// applied. `None` means "unset"; `Some("cargo")` means explicit plain
+    /// cargo. Finalized to the spawned program by [`crate`]'s driver pass.
+    pub driver: Option<String>,
     /// Whether broad config requested diagnostics mode but was ignored because
     /// this command is not diagnostics-safe by default.
     pub ignored_diagnostics_config: bool,
@@ -94,11 +101,26 @@ pub fn build_execution_plans<'a>(
 
     for target_plan in &target_plans.plans {
         let mut package_plans = Vec::with_capacity(target_plan.packages.len());
+        // Command-aware workspace package exclusion for this target and command.
+        let excluded = crate::plan::targets::resolve_effective_exclude_packages(
+            &target_plans.base_exclude,
+            context.workspace_config,
+            target_plan.workspace_target_exclude_ops.as_ref(),
+            target_plan.workspace_target_replace,
+            &target_plan.workspace_target_subcommands,
+            context.raw_command,
+            context.resolved_command,
+        );
         for planned in &target_plan.packages {
+            if excluded.contains(planned.package.name.as_str()) {
+                continue;
+            }
             let resolved_config = crate::config::resolve::resolve_config_with_flag_layers(
                 planned.config,
                 &target_plan.target,
                 evaluator,
+                context.raw_command,
+                context.resolved_command,
             )?;
             let config = resolved_config.config;
             let command_config = resolve_package_command_config(
@@ -156,6 +178,7 @@ pub fn build_execution_plans<'a>(
                 pruned,
                 matrix: config.matrix,
                 flags,
+                driver: command_config.driver,
                 ignored_diagnostics_config: command_config.ignored_diagnostics_config,
             });
             status.kept = true;
@@ -191,7 +214,7 @@ fn warn_packages_skipped_by_target_selection(status: &BTreeMap<String, PackagePl
     for entry in status.values() {
         if entry.target_selection_skipped && !entry.kept {
             print_warning!(
-                "not running package `{}` because target-scoped `no_targets` or `subcommands.<name>.targets = false` disabled all configured target assignments",
+                "not running package `{}` because target-scoped `no_targets` or `subcommands.<name>.expand_targets = false` disabled all configured target assignments",
                 entry.name
             );
         }
@@ -214,14 +237,21 @@ fn resolve_package_command_config(
     crate::config::resolve_command_config(crate::config::ResolveCommandConfigArgs {
         workspace: context.workspace_config,
         workspace_target_flags: target_plan.workspace_target_flags,
+        workspace_target_replace: target_plan.workspace_target_replace,
+        workspace_target_driver: target_plan.workspace_target_driver.as_deref(),
         workspace_target_subcommands: &target_plan.workspace_target_subcommands,
         package_flags: package_layers.package_flags,
+        package_replace: package_layers.package_replace,
+        package_driver: package_layers.package_driver.as_deref(),
         package_subcommands: &package_layers.package_subcommands,
         package_target_flags: package_layers.target_flags,
+        package_target_replace: package_layers.target_replace,
+        package_target_driver: package_layers.target_driver.as_deref(),
         package_target_subcommands: &package_layers.target_subcommands,
         raw_command: context.raw_command,
         resolved_command: context.resolved_command,
         cli_flags,
+        cli_driver: context.cli_driver,
         default_diagnostics_allowed: context.default_diagnostics_allowed,
         // Target planning already decided which configured assignments may
         // exist. Execution-plan resolution only lets narrower target-scoped
@@ -269,6 +299,7 @@ mod test {
             workspace_config,
             raw_command: None,
             resolved_command: None,
+            cli_driver: None,
             default_diagnostics_allowed: false,
             matrix: false,
         }
@@ -285,6 +316,9 @@ mod test {
                     no_targets: Some(true),
                     ..FlagConfig::default()
                 },
+                workspace_target_replace: false,
+                workspace_target_driver: None,
+                workspace_target_exclude_ops: None,
                 workspace_target_subcommands: BTreeMap::new(),
                 packages: vec![PlannedPackage {
                     package: &package,
@@ -293,6 +327,7 @@ mod test {
                     show_target: true,
                 }],
             }],
+            base_exclude: std::collections::HashSet::new(),
             contains_configured_assignments: true,
         };
         let mut evaluator = StubEval;
@@ -332,6 +367,9 @@ mod test {
                     only_packages_with_lib_target: Some(true),
                     ..FlagConfig::default()
                 },
+                workspace_target_replace: false,
+                workspace_target_driver: None,
+                workspace_target_exclude_ops: None,
                 workspace_target_subcommands: BTreeMap::new(),
                 packages: vec![PlannedPackage {
                     package: &package,
@@ -340,6 +378,7 @@ mod test {
                     show_target: true,
                 }],
             }],
+            base_exclude: std::collections::HashSet::new(),
             contains_configured_assignments: true,
         };
 
@@ -377,6 +416,9 @@ mod test {
             plans: vec![TargetPlan {
                 target: TargetTriple("test-target".to_string()),
                 workspace_target_flags: crate::config::FlagConfig::default(),
+                workspace_target_replace: false,
+                workspace_target_driver: None,
+                workspace_target_exclude_ops: None,
                 workspace_target_subcommands: BTreeMap::new(),
                 packages: vec![PlannedPackage {
                     package: &package,
@@ -388,6 +430,7 @@ mod test {
                     show_target: true,
                 }],
             }],
+            base_exclude: std::collections::HashSet::new(),
             contains_configured_assignments: false,
         };
 

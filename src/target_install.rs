@@ -295,6 +295,7 @@ mod test {
                             pruned: Vec::new(),
                             matrix: serde_json::Map::new(),
                             flags,
+                            driver: None,
                             ignored_diagnostics_config: false,
                         })
                         .collect(),

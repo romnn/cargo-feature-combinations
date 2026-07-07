@@ -1,17 +1,28 @@
 use crate::cfg_eval::CfgEvaluator;
 use crate::target::TargetTriple;
 use color_eyre::eyre::{self, WrapErr};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::BTreeMap;
 
-use super::patch::{FeatureSetVecPatch, StringSetPatch, combine_string_set_patches};
-use super::{CommandCapabilities, Config, FlagConfig, TargetOverride};
+use super::patch::{FeatureSetVecPatch, StringSetPatch, combine_set_patches};
+use super::{CommandCapabilities, Config, FeatureMatrixPatch, FlagConfig, TargetOverride};
 
 /// A package's flag layers after target-specific config has been matched.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PackageFlagLayers {
     pub(crate) package_flags: FlagConfig,
+    /// Whether the package base set `replace = true` (resets the flag chain from
+    /// the package-base layer, discarding inherited workspace flags).
+    pub(crate) package_replace: bool,
+    /// Package-base build driver override (`[package.metadata.cargo-fc].driver`).
+    pub(crate) package_driver: Option<String>,
     pub(crate) package_subcommands: BTreeMap<String, CommandCapabilities>,
     pub(crate) target_flags: FlagConfig,
+    /// Whether a matching package target override set `replace = true` (resets
+    /// the flag chain from the package-target layer). The flag pass applies it.
+    pub(crate) target_replace: bool,
+    /// Combined package-target build driver override (from matching
+    /// `target.'cfg(...)'` sections).
+    pub(crate) target_driver: Option<String>,
     pub(crate) target_subcommands: BTreeMap<String, CommandCapabilities>,
 }
 
@@ -43,77 +54,83 @@ pub fn resolve_config<E: CfgEvaluator>(
     target: &TargetTriple,
     evaluator: &mut E,
 ) -> eyre::Result<Config> {
-    Ok(resolve_config_with_flag_layers(base, target, evaluator)?.config)
+    Ok(resolve_config_with_flag_layers(base, target, evaluator, None, None)?.config)
 }
 
+/// Resolve the effective feature-matrix [`Config`] for one package, target, and
+/// command.
+///
+/// Feature-shaping fields are resolved by overlaying patch layers in
+/// broadest-to-narrowest precedence order, mirroring flag resolution:
+///
+/// 1. package base config (the starting point)
+/// 2. package subcommand override (`subcommands.<cmd>`)
+/// 3. package target override (`target.'cfg(...)'`)
+/// 4. package target × subcommand override (`target.'cfg(...)'.subcommands.<cmd>`)
+///
+/// `raw_command` / `resolved_command` select which subcommand override applies;
+/// pass `None` (as [`resolve_config`] does) to resolve without any
+/// command-scoped feature overrides.
 pub(crate) fn resolve_config_with_flag_layers<E: CfgEvaluator>(
     base: &Config,
     target: &TargetTriple,
     evaluator: &mut E,
+    raw_command: Option<&str>,
+    resolved_command: Option<&str>,
 ) -> eyre::Result<ResolvedTargetConfig> {
-    let matched = matching_overrides(base, target, evaluator)?;
+    let matched = matching_overrides(&base.target_overrides, target, evaluator)?;
 
-    // Fast path: no matching overrides.
-    if matched.is_empty() {
-        let mut out = base.clone();
-        out.target_overrides.clear();
-        // `targets` is a selection field consumed before resolution; clear it so
-        // the resolved (feature-matrix) config never carries it.
-        out.package_targets = None;
-        return Ok(ResolvedTargetConfig {
-            config: out,
-            flag_layers: PackageFlagLayers {
-                package_flags: base.flags,
-                package_subcommands: base.subcommand_overrides.clone(),
-                ..PackageFlagLayers::default()
-            },
-        });
-    }
-
-    let replace_exprs: Vec<&str> = matched
+    // The package feature layers, broadest → narrowest:
+    //   L1 = package base config
+    //   L2 = package subcommand override (`subcommands.<cmd>`)
+    //   L3 = package target override (`target.'cfg(...)'`)
+    //   L4 = package target × subcommand override
+    // `replace = true` on a layer resets the feature config: the narrowest
+    // layer with `replace` discards every broader layer, so resolution starts
+    // from defaults and applies from that layer onward. (Config/L1 `replace`
+    // concerns the flag/selection chain, not features, which have no broader
+    // source than the package base, so it is not a feature reset here.)
+    let base_command = crate::cli::selected_command_override(
+        raw_command,
+        resolved_command,
+        &base.subcommand_overrides,
+    );
+    let target_command_caps: Vec<(&str, &CommandCapabilities)> = matched
         .iter()
-        .filter_map(|(expr, ov)| if ov.replace { Some(*expr) } else { None })
+        .filter_map(|(expr, ov)| {
+            crate::cli::selected_command_override(
+                raw_command,
+                resolved_command,
+                &ov.subcommand_overrides,
+            )
+            .map(|cap| (*expr, cap))
+        })
         .collect();
 
-    if replace_exprs.len() > 1 {
-        eyre::bail!(
-            "multiple matching target overrides have replace = true: {}",
-            replace_exprs.join(", ")
-        );
-    }
+    let feature_replace_from = feature_replace_layer(&matched, base_command, &target_command_caps)?;
 
-    let replace_mode = replace_exprs.len() == 1;
-
-    if replace_mode {
-        // When replace is enabled, disallow add/remove operations, which are
-        // confusing (users might think they add to the base config rather than
-        // the fresh default config).
-        for (expr, ov) in &matched {
-            validate_replace_override(expr, ov)?;
-        }
-    }
-
-    let mut out = if replace_mode {
+    let mut out = if feature_replace_from.is_some() {
         Config::default()
     } else {
         base.clone()
     };
+    // The flag pass (`resolve_command_config`) applies `replace` across the full
+    // flag chain, so the package flag inputs are passed through unchanged here;
+    // `target_replace` tells that pass whether a matching target override resets.
     let flag_layers = PackageFlagLayers {
-        package_flags: if replace_mode {
-            FlagConfig::default()
-        } else {
-            base.flags
-        },
-        package_subcommands: if replace_mode {
-            BTreeMap::new()
-        } else {
-            base.subcommand_overrides.clone()
-        },
+        package_flags: base.flags,
+        package_replace: base.replace,
+        package_driver: base.driver.clone(),
+        package_subcommands: base.subcommand_overrides.clone(),
         target_flags: super::combine_flag_configs(
             None,
             "target override",
             matched.iter().map(|(expr, ov)| (*expr, ov.flags)),
         )?,
+        target_replace: matched.iter().any(|(_, ov)| ov.replace),
+        target_driver: super::combine_driver("driver", "target override", &matched, |ov| {
+            ov.driver.as_deref()
+        })?,
         target_subcommands: super::combine_command_capability_maps(
             "target override",
             matched
@@ -122,8 +139,49 @@ pub(crate) fn resolve_config_with_flag_layers<E: CfgEvaluator>(
         )?,
     };
 
-    // Apply matching overrides.
-    apply_overrides(&mut out, &matched, &flag_layers)?;
+    let apply_from = feature_replace_from.unwrap_or(0);
+
+    // Layer 2: package subcommand feature override (skipped if a narrower layer reset).
+    if apply_from <= 2
+        && let Some(cap) = base_command
+    {
+        apply_feature_layer(
+            &mut out,
+            &[("subcommands", &cap.features)],
+            "package subcommand override",
+        )?;
+    }
+
+    // Layer 3: package target feature overrides.
+    if apply_from <= 3 {
+        let target_feature_layers: Vec<(&str, &FeatureMatrixPatch)> = matched
+            .iter()
+            .map(|(expr, ov)| (*expr, &ov.features))
+            .collect();
+        apply_feature_layer(&mut out, &target_feature_layers, "target override")?;
+    }
+
+    // Flag layers touch disjoint (non-feature) fields, so their order relative
+    // to the feature layers does not matter.
+    out.flags.overlay(flag_layers.target_flags);
+    for (name, capability) in &flag_layers.target_subcommands {
+        out.subcommand_overrides
+            .entry(name.clone())
+            .or_default()
+            .merge(capability);
+    }
+
+    // Layer 4: package target × subcommand feature overrides (always the
+    // narrowest, so always applied).
+    let target_command_layers: Vec<(&str, &FeatureMatrixPatch)> = target_command_caps
+        .iter()
+        .map(|(expr, cap)| (*expr, &cap.features))
+        .collect();
+    apply_feature_layer(
+        &mut out,
+        &target_command_layers,
+        "target subcommand override",
+    )?;
 
     // Remove target metadata from the resolved config.
     out.target_overrides.clear();
@@ -138,13 +196,73 @@ pub(crate) fn resolve_config_with_flag_layers<E: CfgEvaluator>(
     })
 }
 
-fn matching_overrides<'a, E: CfgEvaluator>(
-    base: &'a Config,
+/// Determine the narrowest package feature layer that declares `replace` (L2 =
+/// package subcommand, L3 = package target, L4 = target × subcommand), and
+/// validate that the resetting layer uses only plain overrides (no add/remove,
+/// which would have nothing to add to after the reset). Returns the layer
+/// index, or `None` if no feature layer resets.
+fn feature_replace_layer(
+    matched: &[(&str, &TargetOverride)],
+    base_command: Option<&CommandCapabilities>,
+    target_command_caps: &[(&str, &CommandCapabilities)],
+) -> eyre::Result<Option<usize>> {
+    let l3_replace: Vec<&str> = matched
+        .iter()
+        .filter_map(|(expr, ov)| ov.replace.then_some(*expr))
+        .collect();
+    if l3_replace.len() > 1 {
+        eyre::bail!(
+            "multiple matching target overrides have replace = true: {}",
+            l3_replace.join(", ")
+        );
+    }
+    let l4_replace: Vec<&str> = target_command_caps
+        .iter()
+        .filter_map(|(expr, cap)| cap.replace.then_some(*expr))
+        .collect();
+    if l4_replace.len() > 1 {
+        eyre::bail!(
+            "multiple matching target subcommand overrides have replace = true: {}",
+            l4_replace.join(", ")
+        );
+    }
+
+    // The narrowest resetting layer wins; validate that layer's patches (a reset
+    // may only carry plain overrides) as we select it, so the predicates are
+    // evaluated once.
+    if !l4_replace.is_empty() {
+        for (expr, cap) in target_command_caps {
+            validate_replace_feature_patches(expr, "target subcommand override", &cap.features)?;
+        }
+        Ok(Some(4))
+    } else if !l3_replace.is_empty() {
+        for (expr, ov) in matched {
+            validate_replace_feature_patches(expr, "target override", &ov.features)?;
+        }
+        Ok(Some(3))
+    } else if let Some(cap) = base_command.filter(|cap| cap.replace) {
+        validate_replace_feature_patches(
+            "subcommands",
+            "package subcommand override",
+            &cap.features,
+        )?;
+        Ok(Some(2))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Return the `target.'cfg(...)'` overrides whose cfg expression matches
+/// `target`, preserving map order. Generic over the override value so both
+/// package [`TargetOverride`]s and [`WorkspaceTargetOverride`]s share one
+/// cfg-matching loop.
+pub(crate) fn matching_overrides<'a, V, E: CfgEvaluator>(
+    overrides: &'a BTreeMap<String, V>,
     target: &TargetTriple,
     evaluator: &mut E,
-) -> eyre::Result<Vec<(&'a str, &'a TargetOverride)>> {
+) -> eyre::Result<Vec<(&'a str, &'a V)>> {
     let mut matched = Vec::new();
-    for (expr, ov) in &base.target_overrides {
+    for (expr, ov) in overrides {
         let is_match = evaluator
             .matches(expr, target)
             .wrap_err_with(|| format!("failed to evaluate cfg expression `{expr}`"))?;
@@ -155,61 +273,43 @@ fn matching_overrides<'a, E: CfgEvaluator>(
     Ok(matched)
 }
 
-fn validate_replace_override(expr: &str, ov: &TargetOverride) -> eyre::Result<()> {
-    let mut invalid_fields = Vec::new();
-
-    let check_string_set = |name: &str, p: &Option<StringSetPatch>, invalid: &mut Vec<String>| {
-        if let Some(p) = p
-            && p.has_add_or_remove()
-        {
-            invalid.push(name.to_string());
-        }
+fn validate_replace_feature_patches(
+    expr: &str,
+    source_kind: &str,
+    ov: &FeatureMatrixPatch,
+) -> eyre::Result<()> {
+    let string_set =
+        |p: &Option<StringSetPatch>| p.as_ref().is_some_and(StringSetPatch::has_add_or_remove);
+    let feature_sets = |p: &Option<FeatureSetVecPatch>| {
+        p.as_ref()
+            .is_some_and(FeatureSetVecPatch::has_add_or_remove)
     };
 
-    let check_feature_sets =
-        |name: &str, p: &Option<FeatureSetVecPatch>, invalid: &mut Vec<String>| {
-            if let Some(p) = p
-                && p.has_add_or_remove()
-            {
-                invalid.push(name.to_string());
-            }
-        };
-
-    check_feature_sets(
-        "isolated_feature_sets",
-        &ov.isolated_feature_sets,
-        &mut invalid_fields,
-    );
-    check_string_set(
-        "exclude_features",
-        &ov.exclude_features,
-        &mut invalid_fields,
-    );
-    check_string_set(
-        "include_features",
-        &ov.include_features,
-        &mut invalid_fields,
-    );
-    check_string_set("only_features", &ov.only_features, &mut invalid_fields);
-    check_feature_sets(
-        "exclude_feature_sets",
-        &ov.exclude_feature_sets,
-        &mut invalid_fields,
-    );
-    check_feature_sets(
-        "include_feature_sets",
-        &ov.include_feature_sets,
-        &mut invalid_fields,
-    );
-    check_feature_sets(
-        "allow_feature_sets",
-        &ov.allow_feature_sets,
-        &mut invalid_fields,
-    );
+    let invalid_fields: Vec<&str> = [
+        (
+            "isolated_feature_sets",
+            feature_sets(&ov.isolated_feature_sets),
+        ),
+        ("exclude_features", string_set(&ov.exclude_features)),
+        ("include_features", string_set(&ov.include_features)),
+        ("only_features", string_set(&ov.only_features)),
+        (
+            "exclude_feature_sets",
+            feature_sets(&ov.exclude_feature_sets),
+        ),
+        (
+            "include_feature_sets",
+            feature_sets(&ov.include_feature_sets),
+        ),
+        ("allow_feature_sets", feature_sets(&ov.allow_feature_sets)),
+    ]
+    .into_iter()
+    .filter_map(|(name, uses_add_remove)| uses_add_remove.then_some(name))
+    .collect();
 
     if !invalid_fields.is_empty() {
         eyre::bail!(
-            "target override `{expr}` uses add/remove patch operations while replace=true: {}",
+            "{source_kind} `{expr}` uses add/remove patch operations while replace=true: {}",
             invalid_fields.join(", ")
         );
     }
@@ -217,97 +317,78 @@ fn validate_replace_override(expr: &str, ov: &TargetOverride) -> eyre::Result<()
     Ok(())
 }
 
-fn apply_overrides(
+/// Combine the sibling patches in one feature layer (conflict-checking any
+/// disagreeing overrides) and apply the result onto `out`.
+///
+/// `entries` are the matched overrides that make up a single precedence layer:
+/// either the sibling `cfg(...)` sections that all match the current target, or
+/// the single selected subcommand override. Later calls overlay earlier ones,
+/// so callers invoke this once per layer in broadest-to-narrowest order.
+fn apply_feature_layer(
     out: &mut Config,
-    matched: &[(&str, &TargetOverride)],
-    flag_layers: &PackageFlagLayers,
+    entries: &[(&str, &FeatureMatrixPatch)],
+    source_kind: &str,
 ) -> eyre::Result<()> {
-    // Booleans
-    if let Some(v) = combine_bool("skip_optional_dependencies", matched, |o| {
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    // Scalar overrides: a present value from a narrower layer replaces the base.
+    if let Some(v) = super::combine_bool("skip_optional_dependencies", source_kind, entries, |o| {
         o.skip_optional_dependencies
     })? {
         out.skip_optional_dependencies = v;
     }
-    if let Some(v) = combine_bool("no_empty_feature_set", matched, |o| o.no_empty_feature_set)? {
+    if let Some(v) = super::combine_bool("no_empty_feature_set", source_kind, entries, |o| {
+        o.no_empty_feature_set
+    })? {
         out.no_empty_feature_set = v;
     }
-    out.flags.overlay(flag_layers.target_flags);
-    for (name, capability) in &flag_layers.target_subcommands {
-        out.subcommand_overrides
-            .entry(name.clone())
-            .or_default()
-            .merge(capability);
-    }
 
-    // Set-like fields
-    if let Some(ops) = combine_string_set_patches(
-        "exclude_features",
-        "target override",
-        matched
-            .iter()
-            .filter_map(|(expr, ov)| ov.exclude_features.as_ref().map(|patch| (*expr, patch))),
-    )? {
-        out.exclude_features = ops.apply_to(&out.exclude_features);
+    // Every set-like field resolves identically: combine this layer's sibling
+    // patches, then apply the result onto the running value. The apply method
+    // differs only because plain string sets and feature-set lists hold
+    // different element types.
+    macro_rules! resolve_set_field {
+        ($field:ident, $apply:ident) => {
+            if let Some(ops) = combine_set_patches(
+                stringify!($field),
+                source_kind,
+                entries
+                    .iter()
+                    .filter_map(|(expr, o)| o.$field.as_ref().map(|p| (*expr, p))),
+            )? {
+                out.$field = ops.$apply(&out.$field);
+            }
+        };
     }
-    if let Some(ops) = combine_string_set_patches(
-        "include_features",
-        "target override",
-        matched
-            .iter()
-            .filter_map(|(expr, ov)| ov.include_features.as_ref().map(|patch| (*expr, patch))),
-    )? {
-        out.include_features = ops.apply_to(&out.include_features);
-    }
-    if let Some(ops) = combine_string_set_patches(
-        "only_features",
-        "target override",
-        matched
-            .iter()
-            .filter_map(|(expr, ov)| ov.only_features.as_ref().map(|patch| (*expr, patch))),
-    )? {
-        out.only_features = ops.apply_to(&out.only_features);
-    }
-
-    // Feature-set list fields
-    if let Some(ops) = combine_feature_set_vec_patch("isolated_feature_sets", matched, |o| {
-        o.isolated_feature_sets.as_ref()
-    })? {
-        out.isolated_feature_sets = apply_feature_set_vec_patch(&out.isolated_feature_sets, &ops);
-    }
-
-    if let Some(ops) = combine_feature_set_vec_patch("exclude_feature_sets", matched, |o| {
-        o.exclude_feature_sets.as_ref()
-    })? {
-        out.exclude_feature_sets = apply_feature_set_vec_patch(&out.exclude_feature_sets, &ops);
-    }
-
-    if let Some(ops) = combine_feature_set_vec_patch("include_feature_sets", matched, |o| {
-        o.include_feature_sets.as_ref()
-    })? {
-        out.include_feature_sets = apply_feature_set_vec_patch(&out.include_feature_sets, &ops);
-    }
+    resolve_set_field!(exclude_features, apply_to);
+    resolve_set_field!(include_features, apply_to);
+    resolve_set_field!(only_features, apply_to);
+    resolve_set_field!(isolated_feature_sets, apply_to_feature_sets);
+    resolve_set_field!(exclude_feature_sets, apply_to_feature_sets);
+    resolve_set_field!(include_feature_sets, apply_to_feature_sets);
 
     // allow_feature_sets is treated as a singleton mode switch: at most one
-    // matching override may specify it.
-    let allow_patches: Vec<(&str, &FeatureSetVecPatch)> = matched
+    // matching override in this layer may specify it.
+    let allow_patches: Vec<(&str, &FeatureSetVecPatch)> = entries
         .iter()
         .filter_map(|(expr, o)| o.allow_feature_sets.as_ref().map(|p| (*expr, p)))
         .collect();
     if allow_patches.len() > 1 {
         let exprs = allow_patches.iter().map(|(e, _)| *e).collect::<Vec<_>>();
         eyre::bail!(
-            "multiple matching target overrides set allow_feature_sets: {}",
+            "multiple matching {source_kind} entries set allow_feature_sets: {}",
             exprs.join(", ")
         );
     }
-    if let Some((_expr, patch)) = allow_patches.first() {
-        let ops = feature_set_vec_patch_to_ops(patch);
-        out.allow_feature_sets = apply_feature_set_vec_patch(&out.allow_feature_sets, &ops);
+    if let Some(ops) = combine_set_patches("allow_feature_sets", source_kind, allow_patches)? {
+        out.allow_feature_sets = ops.apply_to_feature_sets(&out.allow_feature_sets);
     }
 
     // Matrix metadata: deep-merge in deterministic order (cfg key order).
-    for (_expr, ov) in matched {
-        if let Some(matrix) = &ov.matrix {
+    for (_expr, o) in entries {
+        if let Some(matrix) = o.matrix.as_ref() {
             merge_matrix(&mut out.matrix, matrix);
         }
     }
@@ -331,143 +412,14 @@ fn merge_matrix(
     }
 }
 
-fn combine_bool<'a>(
-    name: &str,
-    matched: &[(&'a str, &'a TargetOverride)],
-    get: impl Fn(&'a TargetOverride) -> Option<bool>,
-) -> eyre::Result<Option<bool>> {
-    let mut out: Option<bool> = None;
-    for (expr, ov) in matched {
-        if let Some(v) = get(ov) {
-            match out {
-                None => out = Some(v),
-                Some(existing) if existing == v => {}
-                Some(_) => {
-                    eyre::bail!("conflicting values for `{name}` in target override `{expr}`")
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-#[derive(Debug, Clone)]
-struct FeatureSetVecOps {
-    override_value: Option<BTreeSet<Vec<String>>>,
-    add: BTreeSet<Vec<String>>,
-    remove: BTreeSet<Vec<String>>,
-}
-
-fn feature_set_vec_patch_to_ops(patch: &FeatureSetVecPatch) -> FeatureSetVecOps {
-    let override_value = patch.override_value().map(|v| normalize_feature_sets(v));
-    let mut add = BTreeSet::new();
-    for s in patch.add_values() {
-        add.insert(normalize_feature_set(s));
-    }
-    let mut remove = BTreeSet::new();
-    for s in patch.remove_values() {
-        remove.insert(normalize_feature_set(s));
-    }
-
-    FeatureSetVecOps {
-        override_value,
-        add,
-        remove,
-    }
-}
-
-fn combine_feature_set_vec_patch<'a>(
-    name: &str,
-    matched: &[(&'a str, &'a TargetOverride)],
-    get: impl Fn(&'a TargetOverride) -> Option<&'a FeatureSetVecPatch>,
-) -> eyre::Result<Option<FeatureSetVecOps>> {
-    let mut any = false;
-    let mut override_value: Option<BTreeSet<Vec<String>>> = None;
-    let mut add: BTreeSet<Vec<String>> = BTreeSet::new();
-    let mut remove: BTreeSet<Vec<String>> = BTreeSet::new();
-
-    for (expr, ov) in matched {
-        if let Some(patch) = get(ov) {
-            any = true;
-
-            if let Some(ovv) = patch.override_value() {
-                let normalized = normalize_feature_sets(ovv);
-                match &override_value {
-                    None => override_value = Some(normalized),
-                    Some(existing) => {
-                        if existing != &normalized {
-                            eyre::bail!(
-                                "conflicting overrides for `{name}` from target override `{expr}`"
-                            );
-                        }
-                    }
-                }
-            }
-
-            for s in patch.add_values() {
-                add.insert(normalize_feature_set(s));
-            }
-            for s in patch.remove_values() {
-                remove.insert(normalize_feature_set(s));
-            }
-        }
-    }
-
-    if !any {
-        return Ok(None);
-    }
-
-    Ok(Some(FeatureSetVecOps {
-        override_value,
-        add,
-        remove,
-    }))
-}
-
-/// Apply combined patch operations to a feature set list.
-///
-/// The order is: start from override (or base), then remove, then add.
-/// This means if a set appears in both `add` and `remove`, **add wins**.
-fn apply_feature_set_vec_patch(
-    base: &[HashSet<String>],
-    ops: &FeatureSetVecOps,
-) -> Vec<HashSet<String>> {
-    let mut out: BTreeSet<Vec<String>> = if let Some(v) = &ops.override_value {
-        v.clone()
-    } else {
-        normalize_feature_sets(base)
-    };
-
-    for r in &ops.remove {
-        out.remove(r);
-    }
-    for a in &ops.add {
-        out.insert(a.clone());
-    }
-
-    out.into_iter()
-        .map(|v| v.into_iter().collect::<HashSet<String>>())
-        .collect()
-}
-
-fn normalize_feature_set(set: &HashSet<String>) -> Vec<String> {
-    let mut v = set.iter().cloned().collect::<Vec<_>>();
-    v.sort();
-    v
-}
-
-fn normalize_feature_sets(sets: &[HashSet<String>]) -> BTreeSet<Vec<String>> {
-    sets.iter().map(normalize_feature_set).collect()
-}
-
 #[cfg(test)]
 mod test {
     use super::{resolve_config, resolve_config_with_flag_layers};
     use crate::cfg_eval::CfgEvaluator;
     use crate::config::patch::{FeatureSetVecPatch, StringSetPatch};
     use crate::config::{
-        CommandCapabilities, Config, FlagConfig, ResolveCommandConfigArgs, ResolvedFlags,
-        TargetOverride, WorkspaceConfig, resolve_command_config,
+        CommandCapabilities, Config, FeatureMatrixPatch, FlagConfig, ResolveCommandConfigArgs,
+        ResolvedFlags, TargetOverride, WorkspaceConfig, resolve_command_config,
     };
     use crate::target::TargetTriple;
     use color_eyre::eyre;
@@ -492,6 +444,22 @@ mod test {
         sets.iter().map(|s| hs(s)).collect()
     }
 
+    /// A `TargetOverride` carrying only the given feature-matrix patch.
+    fn target_features(features: FeatureMatrixPatch) -> TargetOverride {
+        TargetOverride {
+            features,
+            ..TargetOverride::default()
+        }
+    }
+
+    /// A `CommandCapabilities` carrying only the given feature-matrix patch.
+    fn command_features(features: FeatureMatrixPatch) -> CommandCapabilities {
+        CommandCapabilities {
+            features,
+            ..CommandCapabilities::default()
+        }
+    }
+
     #[test]
     fn additive_exclude_features() -> eyre::Result<()> {
         let mut base = Config {
@@ -502,14 +470,14 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Patch {
                     r#override: None,
                     add: hs(&["cuda"]),
                     remove: HashSet::new(),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -523,6 +491,265 @@ mod test {
         Ok(())
     }
 
+    fn resolve_for_command(
+        base: &Config,
+        command: Option<&str>,
+        matches: &[&str],
+    ) -> eyre::Result<Config> {
+        let mut eval = StubEval::default();
+        for m in matches {
+            eval.matches.insert((*m).to_string());
+        }
+        Ok(resolve_config_with_flag_layers(
+            base,
+            &TargetTriple("x".to_string()),
+            &mut eval,
+            command,
+            command,
+        )?
+        .config)
+    }
+
+    #[test]
+    fn package_subcommand_feature_override_applies_only_for_that_command() -> eyre::Result<()> {
+        let base = Config {
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                command_features(FeatureMatrixPatch {
+                    exclude_features: Some(StringSetPatch::Override(hs(&["gpu"]))),
+                    ..FeatureMatrixPatch::default()
+                }),
+            )]),
+            ..Config::default()
+        };
+
+        // The `test` subcommand override shapes the matrix for `cargo fc test`.
+        let for_test = resolve_for_command(&base, Some("test"), &[])?;
+        assert!(for_test.exclude_features.contains("gpu"));
+
+        // A different command and the command-less path are both unaffected.
+        let for_build = resolve_for_command(&base, Some("build"), &[])?;
+        assert!(!for_build.exclude_features.contains("gpu"));
+        let no_command = resolve_for_command(&base, None, &[])?;
+        assert!(!no_command.exclude_features.contains("gpu"));
+        Ok(())
+    }
+
+    #[test]
+    fn target_subcommand_feature_override_applies() -> eyre::Result<()> {
+        let base = Config {
+            target_overrides: BTreeMap::from([(
+                "cfg(unix)".to_string(),
+                TargetOverride {
+                    subcommand_overrides: BTreeMap::from([(
+                        "test".to_string(),
+                        command_features(FeatureMatrixPatch {
+                            only_features: Some(StringSetPatch::Override(hs(&["a"]))),
+                            ..FeatureMatrixPatch::default()
+                        }),
+                    )]),
+                    ..TargetOverride::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        let for_test = resolve_for_command(&base, Some("test"), &["cfg(unix)"])?;
+        assert_eq!(for_test.only_features, hs(&["a"]));
+
+        // Same target, different command: the target×subcommand layer is inert.
+        let for_build = resolve_for_command(&base, Some("build"), &["cfg(unix)"])?;
+        assert!(for_build.only_features.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn feature_layer_precedence_target_beats_subcommand() -> eyre::Result<()> {
+        // Each layer overrides `only_features`; the narrowest applicable layer
+        // must win. Precedence (narrowest last): package base → package
+        // subcommand → package target → package target×subcommand.
+        let base = Config {
+            only_features: hs(&["base"]),
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                command_features(FeatureMatrixPatch {
+                    only_features: Some(StringSetPatch::Override(hs(&["sub"]))),
+                    ..FeatureMatrixPatch::default()
+                }),
+            )]),
+            target_overrides: BTreeMap::from([(
+                "cfg(unix)".to_string(),
+                TargetOverride {
+                    features: FeatureMatrixPatch {
+                        only_features: Some(StringSetPatch::Override(hs(&["target"]))),
+                        ..FeatureMatrixPatch::default()
+                    },
+                    subcommand_overrides: BTreeMap::from([(
+                        "test".to_string(),
+                        command_features(FeatureMatrixPatch {
+                            only_features: Some(StringSetPatch::Override(hs(&["target-sub"]))),
+                            ..FeatureMatrixPatch::default()
+                        }),
+                    )]),
+                    ..TargetOverride::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        // All four layers present: target×subcommand is narrowest.
+        let all = resolve_for_command(&base, Some("test"), &["cfg(unix)"])?;
+        assert_eq!(all.only_features, hs(&["target-sub"]));
+
+        // Drop the target×subcommand layer (different command): package target
+        // beats the package subcommand layer.
+        let no_target_sub = resolve_for_command(&base, Some("build"), &["cfg(unix)"])?;
+        assert_eq!(no_target_sub.only_features, hs(&["target"]));
+
+        // No matching target: the package subcommand layer beats the base.
+        let sub_only = resolve_for_command(&base, Some("test"), &[])?;
+        assert_eq!(sub_only.only_features, hs(&["sub"]));
+        Ok(())
+    }
+
+    #[test]
+    fn replace_resets_base_subcommand_layer_but_keeps_target_subcommand() -> eyre::Result<()> {
+        // `replace = true` on the matching target discards everything
+        // package-base-scoped (including the base subcommand layer), while the
+        // target×subcommand layer is target-scoped and still applies.
+        let base = Config {
+            only_features: hs(&["base"]),
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                command_features(FeatureMatrixPatch {
+                    only_features: Some(StringSetPatch::Override(hs(&["sub"]))),
+                    ..FeatureMatrixPatch::default()
+                }),
+            )]),
+            target_overrides: BTreeMap::from([(
+                "cfg(unix)".to_string(),
+                TargetOverride {
+                    replace: true,
+                    subcommand_overrides: BTreeMap::from([(
+                        "test".to_string(),
+                        command_features(FeatureMatrixPatch {
+                            only_features: Some(StringSetPatch::Override(hs(&["target-sub"]))),
+                            ..FeatureMatrixPatch::default()
+                        }),
+                    )]),
+                    ..TargetOverride::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        let out = resolve_for_command(&base, Some("test"), &["cfg(unix)"])?;
+        // Base and base-subcommand layers are gone; only the target×subcommand
+        // override remains.
+        assert_eq!(out.only_features, hs(&["target-sub"]));
+        Ok(())
+    }
+
+    #[test]
+    fn replace_at_package_subcommand_resets_base_features() -> eyre::Result<()> {
+        // `replace = true` on a package subcommand override discards the package
+        // base features for that command.
+        let base = Config {
+            only_features: hs(&["base"]),
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                CommandCapabilities {
+                    replace: true,
+                    features: FeatureMatrixPatch {
+                        only_features: Some(StringSetPatch::Override(hs(&["sub"]))),
+                        ..FeatureMatrixPatch::default()
+                    },
+                    ..CommandCapabilities::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        // For `test` the base is discarded; only the subcommand's features remain.
+        let for_test = resolve_for_command(&base, Some("test"), &[])?;
+        assert_eq!(for_test.only_features, hs(&["sub"]));
+
+        // For a command with no replacing override, the base is intact.
+        let for_build = resolve_for_command(&base, Some("build"), &[])?;
+        assert_eq!(for_build.only_features, hs(&["base"]));
+        Ok(())
+    }
+
+    #[test]
+    fn replace_at_target_subcommand_resets_all_broader_layers() -> eyre::Result<()> {
+        // The target×subcommand layer is the narrowest, so its `replace` discards
+        // the base, package-subcommand, and target layers.
+        let base = Config {
+            only_features: hs(&["base"]),
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                command_features(FeatureMatrixPatch {
+                    only_features: Some(StringSetPatch::Override(hs(&["sub"]))),
+                    ..FeatureMatrixPatch::default()
+                }),
+            )]),
+            target_overrides: BTreeMap::from([(
+                "cfg(unix)".to_string(),
+                TargetOverride {
+                    features: FeatureMatrixPatch {
+                        only_features: Some(StringSetPatch::Override(hs(&["target"]))),
+                        ..FeatureMatrixPatch::default()
+                    },
+                    subcommand_overrides: BTreeMap::from([(
+                        "test".to_string(),
+                        CommandCapabilities {
+                            replace: true,
+                            features: FeatureMatrixPatch {
+                                only_features: Some(StringSetPatch::Override(hs(&["target-sub"]))),
+                                ..FeatureMatrixPatch::default()
+                            },
+                            ..CommandCapabilities::default()
+                        },
+                    )]),
+                    ..TargetOverride::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        let out = resolve_for_command(&base, Some("test"), &["cfg(unix)"])?;
+        assert_eq!(out.only_features, hs(&["target-sub"]));
+        Ok(())
+    }
+
+    #[test]
+    fn replace_at_subcommand_disallows_add_remove() {
+        // A resetting section starts from defaults, so add/remove there is
+        // rejected — there is nothing to add to.
+        let base = Config {
+            subcommand_overrides: BTreeMap::from([(
+                "test".to_string(),
+                CommandCapabilities {
+                    replace: true,
+                    features: FeatureMatrixPatch {
+                        exclude_features: Some(StringSetPatch::Patch {
+                            r#override: None,
+                            add: hs(&["a"]),
+                            remove: HashSet::new(),
+                        }),
+                        ..FeatureMatrixPatch::default()
+                    },
+                    ..CommandCapabilities::default()
+                },
+            )]),
+            ..Config::default()
+        };
+
+        let err = resolve_for_command(&base, Some("test"), &[])
+            .expect_err("replace + add/remove should fail");
+        assert!(err.to_string().contains("replace=true"));
+    }
+
     #[test]
     fn override_exclude_features_array_syntax() -> eyre::Result<()> {
         let mut base = Config {
@@ -533,10 +760,10 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Override(hs(&["cuda"]))),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -560,17 +787,17 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Override(hs(&["a"]))),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Override(hs(&["b"]))),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -598,11 +825,14 @@ mod test {
             "cfg(unix)".to_string(),
             TargetOverride {
                 replace: true,
-                exclude_features: Some(StringSetPatch::Patch {
-                    r#override: None,
-                    add: hs(&["cuda"]),
-                    remove: HashSet::new(),
-                }),
+                features: FeatureMatrixPatch {
+                    exclude_features: Some(StringSetPatch::Patch {
+                        r#override: None,
+                        add: hs(&["cuda"]),
+                        remove: HashSet::new(),
+                    }),
+                    ..FeatureMatrixPatch::default()
+                },
                 ..TargetOverride::default()
             },
         );
@@ -633,12 +863,15 @@ mod test {
             "cfg(unix)".to_string(),
             TargetOverride {
                 replace: true,
-                exclude_features: Some(StringSetPatch::Override(hs(&["cuda"]))),
-                matrix: Some({
-                    let mut m = serde_json::Map::new();
-                    m.insert("k".to_string(), serde_json::json!({"b": 2}));
-                    m
-                }),
+                features: FeatureMatrixPatch {
+                    exclude_features: Some(StringSetPatch::Override(hs(&["cuda"]))),
+                    matrix: Some({
+                        let mut m = serde_json::Map::new();
+                        m.insert("k".to_string(), serde_json::json!({"b": 2}));
+                        m
+                    }),
+                    ..FeatureMatrixPatch::default()
+                },
                 ..TargetOverride::default()
             },
         );
@@ -697,14 +930,14 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Patch {
                     r#override: None,
                     add: HashSet::new(),
                     remove: hs(&["cuda"]),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -732,25 +965,25 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Patch {
                     r#override: None,
                     add: hs(&["a"]),
                     remove: HashSet::new(),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Patch {
                     r#override: None,
                     add: hs(&["b"]),
                     remove: HashSet::new(),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -776,14 +1009,14 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 exclude_features: Some(StringSetPatch::Patch {
                     r#override: None,
                     add: hs(&["cuda"]),
                     remove: hs(&["cuda"]),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -806,10 +1039,10 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 no_empty_feature_set: Some(true),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -928,21 +1161,33 @@ mod test {
         let mut eval = StubEval::default();
         eval.matches.insert("cfg(unix)".to_string());
 
-        let resolved =
-            resolve_config_with_flag_layers(&base, &TargetTriple("x".to_string()), &mut eval)?;
+        let resolved = resolve_config_with_flag_layers(
+            &base,
+            &TargetTriple("x".to_string()),
+            &mut eval,
+            Some("check"),
+            Some("check"),
+        )?;
         let workspace = WorkspaceConfig::default();
         let empty_target_subcommands = BTreeMap::new();
         let flags = resolve_command_config(ResolveCommandConfigArgs {
             workspace: &workspace,
             workspace_target_flags: FlagConfig::default(),
+            workspace_target_replace: false,
+            workspace_target_driver: None,
             workspace_target_subcommands: &empty_target_subcommands,
             package_flags: resolved.flag_layers.package_flags,
+            package_replace: resolved.flag_layers.package_replace,
+            package_driver: resolved.flag_layers.package_driver.as_deref(),
             package_subcommands: &resolved.flag_layers.package_subcommands,
             package_target_flags: resolved.flag_layers.target_flags,
+            package_target_replace: resolved.flag_layers.target_replace,
+            package_target_driver: resolved.flag_layers.target_driver.as_deref(),
             package_target_subcommands: &resolved.flag_layers.target_subcommands,
             raw_command: Some("check"),
             resolved_command: Some("check"),
             cli_flags: FlagConfig::default(),
+            cli_driver: None,
             default_diagnostics_allowed: true,
             default_targets_enabled: true,
         })?
@@ -1002,8 +1247,14 @@ mod test {
         eval.matches
             .insert("cfg(target_os = \"linux\")".to_string());
 
-        let err = resolve_config_with_flag_layers(&base, &TargetTriple("x".to_string()), &mut eval)
-            .expect_err("conflicting target subcommand flags should fail");
+        let err = resolve_config_with_flag_layers(
+            &base,
+            &TargetTriple("x".to_string()),
+            &mut eval,
+            Some("check"),
+            Some("check"),
+        )
+        .expect_err("conflicting target subcommand flags should fail");
 
         assert!(err.to_string().contains("subcommands.check.pedantic"));
     }
@@ -1018,14 +1269,14 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 include_feature_sets: Some(FeatureSetVecPatch::Patch {
                     r#override: None,
                     add: hss(&[&["c", "d"]]),
                     remove: Vec::new(),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -1050,14 +1301,14 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 include_feature_sets: Some(FeatureSetVecPatch::Patch {
                     r#override: None,
                     add: Vec::new(),
                     remove: hss(&[&["a", "b"]]),
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -1088,7 +1339,7 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 matrix: Some({
                     let mut m = serde_json::Map::new();
                     m.insert("added".to_string(), serde_json::json!("new"));
@@ -1102,8 +1353,8 @@ mod test {
                     m.insert("tags".to_string(), serde_json::json!(["override"]));
                     m
                 }),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 
@@ -1148,17 +1399,17 @@ mod test {
         let mut target = BTreeMap::new();
         target.insert(
             "cfg(unix)".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 allow_feature_sets: Some(FeatureSetVecPatch::Override(hss(&[&["a"]]))),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         target.insert(
             "cfg(target_os = \"linux\")".to_string(),
-            TargetOverride {
+            target_features(FeatureMatrixPatch {
                 allow_feature_sets: Some(FeatureSetVecPatch::Override(hss(&[&["b"]]))),
-                ..TargetOverride::default()
-            },
+                ..FeatureMatrixPatch::default()
+            }),
         );
         base.target_overrides = target;
 

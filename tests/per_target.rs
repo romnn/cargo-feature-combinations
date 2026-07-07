@@ -7,8 +7,10 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::plan::targets::{SelectedPackage, build_target_plans};
-use cargo_feature_combinations::target::{TargetEnvironment, TargetTriple};
+use cargo_feature_combinations::plan::targets::{
+    SelectedPackage, TargetExpansion, TargetPlanRequest, build_target_plans,
+};
+use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
 use cargo_feature_combinations::{
     CfgEvaluator, Config, FlagConfig, Package as _, PlanBuildContext, WorkspaceConfig,
@@ -17,62 +19,18 @@ use cargo_feature_combinations::{
 use color_eyre::eyre::{self, OptionExt};
 use std::collections::HashSet;
 
-struct HostEnv(&'static str);
-
-impl TargetEnvironment for HostEnv {
-    fn cargo_build_target(&self) -> Option<String> {
-        None
-    }
-    fn host_target(&self) -> eyre::Result<TargetTriple> {
-        Ok(TargetTriple(self.0.to_string()))
-    }
-}
+mod common;
+use common::{HostEnv, PairEval, metadata, single_crate};
 
 fn matrix_context(workspace_config: &WorkspaceConfig) -> PlanBuildContext<'_> {
     PlanBuildContext {
         workspace_config,
         raw_command: None,
         resolved_command: None,
+        cli_driver: None,
         default_diagnostics_allowed: false,
         matrix: true,
     }
-}
-
-/// cfg evaluator matching `(triple, cfg)` pairs exactly, with no real `rustc`.
-#[derive(Default)]
-struct PairEval {
-    rules: Vec<(String, String)>,
-}
-
-impl PairEval {
-    fn matching(triple: &str, cfg: &str) -> Self {
-        Self {
-            rules: vec![(triple.to_string(), cfg.to_string())],
-        }
-    }
-}
-
-impl CfgEvaluator for PairEval {
-    fn matches(&mut self, cfg_expr: &str, target: &TargetTriple) -> eyre::Result<bool> {
-        Ok(self
-            .rules
-            .iter()
-            .any(|(t, c)| t == target.as_str() && c == cfg_expr))
-    }
-}
-
-fn single_crate(cargo_toml: &str) -> eyre::Result<TempDir> {
-    let temp = TempDir::new()?;
-    temp.child("Cargo.toml").write_str(cargo_toml)?;
-    temp.child("src/lib.rs").write_str("pub fn x() {}\n")?;
-    Ok(temp)
-}
-
-fn metadata(temp: &TempDir) -> eyre::Result<cargo_metadata::Metadata> {
-    Ok(cargo_metadata::MetadataCommand::new()
-        .current_dir(temp.path())
-        .no_deps()
-        .exec()?)
 }
 
 /// Build matrix rows for a metadata workspace using the deterministic adapters.
@@ -101,12 +59,19 @@ fn matrix_rows(
         .collect();
     let base_exclude = meta.base_workspace_exclude_packages()?;
 
+    let expansion = match cli_target {
+        Some(cli) => TargetExpansion::Explicit(cli),
+        None if capability_allowed => TargetExpansion::Configured,
+        None => TargetExpansion::Denied,
+    };
     let target_plans = build_target_plans(
         &selected,
         &ws_config,
         &base_exclude,
-        cli_target,
-        capability_allowed,
+        TargetPlanRequest {
+            expansion,
+            ..Default::default()
+        },
         env,
         evaluator,
     )?;
@@ -533,8 +498,7 @@ fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
         &selected,
         &ws_config,
         &base_exclude,
-        None,
-        true,
+        TargetPlanRequest::default(),
         &env,
         &mut eval,
     )?;
