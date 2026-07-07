@@ -1,381 +1,950 @@
 # Config Override Chain Redesign
 
-## Purpose
+This document is an implementation spec. It is written so that an agent
+without prior context on this codebase can execute the redesign correctly.
+Read it fully before writing code. Normative rules are numbered `S-*`
+(semantics that must hold), `B-*` (deliberate behavior changes), `P-*`
+(pitfalls), and milestones `M1`–`M5`. When this document and the current code
+disagree, the document wins only where a `B-*` rule says so; everywhere else
+the current behavior is the contract.
 
-The README now documents a crisp override model:
+Verification commands (run after every milestone; all must pass):
 
-> Every setting resolves along **one precedence chain**, broadest to narrowest —
-> workspace → package, and within each: base → `subcommands.<cmd>` →
-> `target.'cfg(...)'` → `target.'cfg(...)'.subcommands.<cmd>`.
-
-That is eight scopes plus the CLI, one uniform set of forms per setting
-(scalar override, set patch, `replace`), and a matrix saying where each
-setting is valid. The model is simple. The implementation is not: the chain
-is hand-rolled independently for each setting family, the scope payloads are
-shredded into parallel struct fields and re-threaded through three modules,
-and the raw schema types double as resolved output. This plan describes a
-redesign that implements the documented model *once* and derives everything
-else from it.
-
-## What the current code actually does
-
-The same broad→narrow walk is written out at least six times, each with its
-own shape, its own `replace` handling, and its own error wording:
-
-1. `flags::resolve_flags` — walks a `[Scope; 4]` array (ws, ws·target, pkg,
-   pkg·target) with the selected subcommand override interleaved per scope,
-   resetting a merged `FlagConfig` on `replace`.
-2. `flags::resolve_driver_chain` — the identical walk, re-implemented for the
-   `driver` scalar.
-3. `flags::resolve_target_capability` — the identical walk again, reduced to
-   the `expand_targets` bool (no `replace` handling at all).
-4. `resolve::resolve_config_with_flag_layers` — a *different* hand-rolled walk
-   for the feature matrix: layers L1–L4 with a `feature_replace_layer()` index
-   and `apply_from <= N` arithmetic, plus a carve-out ("Config/L1 `replace`
-   concerns the flag chain, not features").
-5. `targets::resolve_effective_exclude_packages` — a third hand-rolled walk
-   (ws base → ws sub → ws target → ws target·sub) with `replace` implemented
-   as `HashSet::clear()` inside a closure.
-6. `targets::workspace_effective_targets` + `package_target_list` — a fourth
-   walk for the `targets` list (ws base → ws sub → pkg base → pkg sub), which
-   honors no `replace` at all.
-
-Because each walk needs its own inputs, the scope payloads get shredded into
-parallel plumbing:
-
-- `PackageFlagLayers` — 8 fields (`package_flags`, `package_replace`,
-  `package_driver`, `package_subcommands`, ×2 for the target layer).
-- `ResolveCommandConfigArgs` — **18 fields**, four of which are
-  default-empty at some call sites (`lib.rs::selected_packages_for_target_planning`
-  passes four empty/false target-layer slots just to reuse the function).
-- `TargetPlan` — five parallel `workspace_target_*` fields
-  (`flags`, `replace`, `driver`, `exclude_ops`, `subcommands`) that are really
-  one value: "the combined matching workspace target section".
-
-Adding one new setting today means: a schema field in up to four structs, a
-`combine_*` helper, a slot in `PackageFlagLayers`, a slot in
-`ResolveCommandConfigArgs`, a slot in `TargetPlan`, threading through
-`build_target_plans` and `build_execution_plans`, and a validator allowlist
-entry — seven places for one setting. `driver` (commit 4b7de34 and this diff)
-paid exactly that cost, which is why the diff is ~3700 lines.
-
-Two more structural smells:
-
-- **Half-merged `CommandCapabilities`.** Sibling `cfg(...)` sections that both
-  match get pre-merged per subcommand (`combine_command_capability_maps` →
-  `combine_command_capabilities`), but only *some* fields: flags, driver,
-  `expand_targets`, `exclude_packages`. `features` and `targets` are
-  deliberately NOT merged there and are read off the raw overrides by a
-  different pass. Both `CommandCapabilities::merge` and
-  `combine_command_capabilities` carry warning comments about this trap, and
-  the latter constructs a `CommandCapabilities` with knowingly-default
-  `features` — a value that lies about what the user wrote.
-- **Raw schema as resolved output.** `resolve_config*` returns the schema type
-  `Config` with `target_overrides` cleared, `package_targets` forced to
-  `None`, and `deprecated` reset — three fields that exist only to be
-  scrubbed. Consumers can't tell a raw config from a resolved one by type.
-
-And the semantics have drifted between the parallel implementations:
-
-- `replace = true` + `add`/`remove` in the same section is an **error** for
-  feature-matrix fields (`validate_replace_feature_patches`) but silently
-  allowed for `exclude_packages` (`resolve_effective_exclude_packages` clears
-  then applies the add).
-- Two sibling `cfg(...)` sections both setting `replace = true` is an
-  **error** in the feature pass (`feature_replace_layer`) but a harmless
-  `any()` in the flag pass.
-- `replace = true` at the package base resets inherited workspace flags and
-  driver, but the inherited workspace `targets` list is *not* reset (the
-  targets walk never consults `replace`), contradicting the README's "discards
-  everything broader".
-- Empty-driver rejection is implemented twice: `combine_driver` (target
-  scopes) and `normalize_driver` (base/subcommand/CLI scopes).
-
-## The redesign, from first principles
-
-The README's model has exactly four concepts. The code should have exactly
-four mechanisms:
-
-1. **One scope payload shape.** Every cell in the matrix — workspace base,
-   package base, every `target.'cfg(...)'` section, every `subcommands.<cmd>`
-   table — accepts the same settings bag. This is nearly true already:
-   `CommandCapabilities` has `replace + expand_targets + exclude_packages +
-   targets + driver + features + flags`, which is a superset of every other
-   scope type. Make it literal:
-
-   ```rust
-   /// What one scope may say. Every field optional; absent = inherit.
-   #[derive(Deserialize, ...)]
-   pub struct ScopeConfig {
-       pub replace: bool,
-       pub driver: Option<String>,
-       pub expand_targets: Option<bool>,
-       pub targets: Option<TargetListPatch>,
-       pub exclude_packages: Option<StringSetPatch>,
-       #[serde(flatten)] pub features: FeatureMatrixPatch,
-       #[serde(flatten)] pub flags: FlagConfig,
-   }
-
-   /// A scope plus its nested per-command tables.
-   pub struct SectionConfig {
-       #[serde(flatten)] pub settings: ScopeConfig,
-       #[serde(default, rename = "subcommands")]
-       pub subcommands: BTreeMap<String, ScopeConfig>,
-   }
-
-   /// A metadata root (workspace or package): base section + target sections.
-   pub struct RootConfig {
-       #[serde(flatten)] pub base: SectionConfig,
-       #[serde(default, rename = "target")]
-       pub targets: BTreeMap<String, SectionConfig>,
-       #[serde(flatten)] pub(crate) deprecated: DeprecatedTomlKeys, // package roots
-   }
-   ```
-
-   `Config`, `WorkspaceConfig`, `TargetOverride`, `WorkspaceTargetOverride`,
-   and `CommandCapabilities` — five bespoke types — collapse into these three.
-   "Workspace configs don't have feature keys" stops being a type distinction
-   and becomes a validation rule, which is already the pattern used for
-   `CommandCapabilities` (one shared type, scope-gated keys). Deserializing
-   permissively and validating against the matrix is strictly simpler than
-   maintaining five overlapping serde types, and the existing
-   "flatten fields must stay disjoint" invariant shrinks to one struct + one
-   test.
-
-2. **One chain construction.** Given what is known at a call site, build the
-   ordered list of applicable layers exactly once:
-
-   ```rust
-   /// Where a layer came from — for error messages, warnings, and provenance.
-   #[derive(Clone, Copy)]
-   pub(crate) enum ScopeId {
-       WorkspaceBase, WorkspaceCommand, WorkspaceTarget, WorkspaceTargetCommand,
-       PackageBase, PackageCommand, PackageTarget, PackageTargetCommand,
-   }
-
-   /// One precedence layer: its sibling sources (usually one; several when
-   /// multiple cfg sections match one triple).
-   pub(crate) struct Layer<'a> {
-       scope: ScopeId,
-       /// (source label for errors — cfg expr or "", payload)
-       entries: Vec<(&'a str, &'a ScopeConfig)>,
-   }
-
-   pub(crate) struct Chain<'a> { layers: Vec<Layer<'a>> }
-   ```
-
-   Two constructors, replacing all six hand-rolled walks:
-
-   - `Chain::base(ws, pkg, cmd)` — the four non-target layers. Used before a
-     concrete target exists: pre-planning capability/`no_targets` resolution
-     (today's degenerate `resolve_command_config` call in
-     `selected_packages_for_target_planning`) and the `targets`-list
-     resolution (target sections are excluded there by the matrix anyway —
-     the circularity rule).
-   - `Chain::full(ws, pkg, target, cmd, evaluator)` — all eight layers, with
-     `matching_overrides` selecting the cfg sections. Used per
-     (package × target × command) in `build_execution_plans`.
-
-   Subcommand tables are ordinary layers (their `replace` is just the layer's
-   `replace`), selected by the existing raw-token-first
-   `selected_command_override` rule. The CLI stays an explicit final overlay
-   (flags + `--driver`), not a pseudo-layer.
-
-3. **One resolution engine over the chain.** `replace` is computed once:
-   find the narrowest layer where any sibling sets `replace = true`, validate
-   that resetting layers carry only plain overrides (uniformly, for *every*
-   patch-typed setting), and slice — every setting then folds over
-   `layers[start..]`:
-
-   ```rust
-   impl Chain<'_> {
-       /// Scalars (driver, expand_targets, feature bools): siblings within a
-       /// layer must agree (else error); the narrowest layer that sets the
-       /// value wins. Returns the value and the scope that supplied it.
-       fn scalar<T>(&self, name, get) -> Result<Option<(T, ScopeId)>>;
-
-       /// Set-like fields: combine siblings per layer via the existing
-       /// combine_set_patches (conflicting overrides error, adds/removes
-       /// union), then apply layer results broad→narrow onto the base.
-       fn set<P: SetPatchInput>(&self, name, get) -> Result<Option<SetPatchOps<P::Elem>>>;
-
-       /// FlagConfig overlay with the existing dedupe/diagnostics/prune
-       /// interactions and the diagnostics gate for non-command layers.
-       fn flags(&self, cli, gate) -> Result<ResolvedFlagResult>;
-   }
-   ```
-
-   The per-field quirks stay, but as leaf policies fed to the engine rather
-   than as separate walks: the `allow_feature_sets` singleton rule, the
-   `matrix` deep-merge, the diagnostics gate (applies to base/target layers,
-   bypassed by command layers — expressible as `ScopeId::is_command()`), and
-   the ordered-list semantics of `targets`.
-
-   Provenance (`ScopeId` on every resolved value) replaces today's ad-hoc
-   booleans: `targets_explicit` = `scalar(expand_targets)` returned a scope;
-   `TargetSource::PackageConfig` vs `WorkspaceConfig` = which scope last
-   touched the `targets` list; error messages get their "source kind" string
-   from `ScopeId` instead of threaded `&str`s.
-
-4. **The validity matrix lives only in validation.** Resolution never asks
-   "is this setting allowed here" — absent settings simply don't contribute,
-   and validation has already rejected present-but-misplaced ones. The
-   README's table becomes data in one place:
-
-   ```rust
-   enum SettingKind { Flags, FeatureMatrix, ExcludePackages, TargetsList,
-                      ExpandTargets, Driver, Replace }
-
-   /// The README matrix: is `setting` valid at `scope`? Encodes exactly the
-   /// four documented exceptions, each with its user-facing reason.
-   fn valid_in(setting: SettingKind, scope: ScopeId) -> Result<(), &'static str>;
-   ```
-
-   The raw-JSON walk (`validate_keys` etc.) stays, but drives off this one
-   function plus a `key → SettingKind` map, replacing seven allowlist consts,
-   `misplaced_key_reason`, and the three allowlist-sync tests. Deprecated
-   spellings (`denylist`, `skip_feature_sets`, `exact_combinations`, package
-   `exclude_packages`) are a per-scope extra set, normalized into the
-   `RootConfig` immediately after deserialization so nothing downstream sees
-   them. Empty-driver rejection moves here too (one rule, every scope),
-   deleting the `combine_driver`/`normalize_driver` split.
-
-### Resolved output gets its own types
-
-Resolution returns dedicated output types instead of a scrubbed `Config`:
-
-```rust
-/// Everything one (package × target × command) execution needs.
-pub struct Resolved {
-    pub flags: ResolvedFlags,
-    pub driver: Option<String>,          // unnormalized; None = unset
-    pub features: ResolvedFeatures,      // the sets/bools/matrix, nothing else
-    pub ignored_diagnostics_config: bool,
-}
+```sh
+task test        # cargo nextest run --workspace --all-targets
+task lint        # cargo lint --workspace --all-features + ast-grep rules
 ```
 
-`ResolvedFeatures` is today's `Config` minus `replace`, `package_targets`,
-`subcommand_overrides`, `target_overrides`, `deprecated`, `flags`, `driver` —
-i.e. exactly the fields `feature_combinations(&config)` and matrix output
-read. `package.rs` and the pruning code switch to it mechanically.
+## 1. Purpose
 
-### What the callers look like afterwards
+The README ("Override model" section) documents this model:
 
-- `TargetPlan` carries `target: TargetTriple`, `packages`, and the matched
-  workspace target sections (`Vec<(String, &SectionConfig)>`) — one field
-  where there were five. No pre-combining; siblings stay siblings until the
-  engine folds them.
-- `build_execution_plans` builds `Chain::full(...)` per planned package and
-  calls `chain.resolve(cli_flags, cli_driver, gate)` — replacing the
-  `resolve_config_with_flag_layers` + `PackageFlagLayers` +
-  `resolve_command_config(18 fields)` + `resolve_effective_exclude_packages`
-  four-step. `exclude_packages` is just another `chain.set(...)` call at the
-  same site.
-- `selected_packages_for_target_planning` builds `Chain::base(...)` and reads
-  `flags.no_targets` / `scalar(expand_targets)` — no more fabricated empty
-  target layers.
-- `targets.rs` keeps everything that is genuinely target *planning* (fallback
-  resolution, ordering, `show_target`, dedup by triple, source attribution)
-  but gets its input list from `chain.base(...)` resolution of `targets`
-  instead of `workspace_effective_targets` + `package_target_list`.
+> Every setting resolves along **one precedence chain**, broadest to
+> narrowest — workspace → package, and within each: base →
+> `subcommands.<cmd>` → `target.'cfg(...)'` → `target.'cfg(...)'.subcommands.<cmd>`.
 
-### `targets` as an order-preserving list patch
+Eight scopes plus the CLI, uniform forms per setting (scalar override, set
+patch, `replace`), and a matrix of where each setting is valid. The model is
+simple; the implementation is not. The chain is hand-rolled six times:
 
-The unified schema needs one `targets` type for every scope, and order
-matters (plans run in declared order). Today the workspace base is an ordered
-`Vec<String>` while package `targets` is a set-based `StringSetPatch` whose
-overrides/adds get *sorted*. Introduce `TargetListPatch` — same untagged
-serde surface (plain array = override, `{override/add/remove}` object), but
-`Vec<String>`-backed: overrides and adds keep declaration order, removes
-filter, normalize dedups. This is one small type, serves all four scopes, and
-declaration order is strictly more intuitive than today's sorted order.
+1. `src/config/flags.rs::resolve_flags` — walks a `[Scope; 4]` array with the
+   subcommand override interleaved per scope.
+2. `src/config/flags.rs::resolve_driver_chain` — the identical walk for `driver`.
+3. `src/config/flags.rs::resolve_target_capability` — the identical walk for
+   `expand_targets` (with no `replace` handling).
+4. `src/config/resolve.rs::resolve_config_with_flag_layers` — a different walk
+   for the feature matrix (layer indices L1–L4, `apply_from <= N` arithmetic).
+5. `src/plan/targets.rs::resolve_effective_exclude_packages` — a third walk
+   for workspace package exclusion.
+6. `src/plan/targets.rs::{workspace_effective_targets, package_target_list}` —
+   a fourth walk for the `targets` list (which honors no `replace` at all).
 
-## Behavior changes (all deliberate, all README-aligned)
+Feeding these requires parallel plumbing: `PackageFlagLayers` (8 fields),
+`ResolveCommandConfigArgs` (18 fields, four of which are passed empty at some
+call sites), and five parallel `workspace_target_*` fields on `TargetPlan`.
+Sibling `cfg(...)` sections are pre-merged per subcommand
+(`combine_command_capability_maps`) but only for *some* fields — `features`
+and `targets` are deliberately left out and read from the raw overrides by a
+different pass, a trap documented by warning comments on both
+`CommandCapabilities::merge` and `combine_command_capabilities`. Resolution
+returns the raw schema type `Config` with three fields scrubbed
+(`target_overrides` cleared, `package_targets` forced `None`, `deprecated`
+reset). Adding one setting today touches ~seven places.
 
-The TOML surface is unchanged. Six edge behaviors change; each should get a
-CHANGELOG line:
+The redesign: implement the chain once (one scope payload view, one chain
+constructor, one resolution engine, one validity matrix in validation), give
+resolution its own output types, and delete the parallel walks and plumbing.
 
-1. `replace = true` + `add`/`remove` in the same section becomes an error for
-   `exclude_packages` and `targets`, matching the existing feature-matrix
-   rule ("a reset has nothing to add to").
-2. `replace = true` at the package base now also resets the inherited
-   workspace `targets` list (README: "discards everything broader").
-3. Two matching sibling cfg sections both setting `replace = true` stops
-   being an error (feature pass today) and ORs, like the flag pass; sibling
-   conflict detection still catches real disagreements.
-4. Overridden/added `targets` run in declaration order instead of sorted.
-5. `driver = ""` is rejected at validation time in every scope (today:
-   resolution-time at some scopes, `combine`-time at others), so the error
-   appears even when the scope doesn't match the current target.
-6. Misplaced-key error wording changes slightly (now generated from the
-   matrix); the per-key *reasons* are preserved.
+## 2. Glossary
 
-Anything else that differs after the port is a bug: the three new integration
-suites (`tests/per_subcommand.rs`, `tests/per_target.rs`, `tests/driver.rs`)
-plus the existing target-override/prune/matrix suites pin the TOML-observable
-behavior and are the safety net for the whole migration.
+- **Scope**: one place in TOML where settings may appear. There are eight:
 
-## Module layout
+  | id                      | TOML location                                                        |
+  |-------------------------|----------------------------------------------------------------------|
+  | `WsBase`                | `[workspace.metadata.cargo-fc]`                                      |
+  | `WsCmd`                 | `[workspace.metadata.cargo-fc.subcommands.<cmd>]`                    |
+  | `WsTarget`              | `[workspace.metadata.cargo-fc.target.'cfg(...)']`                    |
+  | `WsTargetCmd`           | `[workspace.metadata.cargo-fc.target.'cfg(...)'.subcommands.<cmd>]`  |
+  | `PkgBase`               | `[package.metadata.cargo-fc]`                                        |
+  | `PkgCmd`                | `[package.metadata.cargo-fc.subcommands.<cmd>]`                      |
+  | `PkgTarget`             | `[package.metadata.cargo-fc.target.'cfg(...)']`                      |
+  | `PkgTargetCmd`          | `[package.metadata.cargo-fc.target.'cfg(...)'.subcommands.<cmd>]`    |
+
+  ("cargo-fc" stands for any accepted metadata key alias; see
+  `find_metadata_value`.) The CLI is a ninth, final overlay, not a scope.
+
+- **Layer**: one scope instantiated for a concrete (package, target, command)
+  resolution. A layer holds one or more **sibling entries**: for target
+  scopes, every `cfg(...)` section whose expression matches the target; for
+  other scopes, at most one entry.
+
+- **Chain**: the ordered list of layers, broadest → narrowest:
+  `WsBase, WsCmd, WsTarget, WsTargetCmd, PkgBase, PkgCmd, PkgTarget,
+  PkgTargetCmd`, then the CLI overlay. Workspace-only resolutions use the
+  first four; pre-target resolutions use the four non-target layers
+  (`WsBase, WsCmd, PkgBase, PkgCmd`).
+
+- **Settings** (the rows of the README matrix):
+  - *flags*: the ~15 tri-state bools in `FlagConfig`.
+  - *driver*: scalar string.
+  - *expand_targets*: scalar bool, command scopes only.
+  - *targets* (list): ordered target-triple list patch.
+  - *exclude_packages*: string-set patch, workspace scopes only.
+  - *feature matrix*: the ten `FeatureMatrixPatch` fields, package scopes only.
+  - *replace*: reset marker, every scope except `WsBase`.
+
+## 3. Behavior contract (must hold after the redesign)
+
+These rules restate what the current code does. Every rule below is exercised
+by existing tests unless noted; do not change any of them except where a
+`B-*` rule explicitly overrides.
+
+### S-1: Command layer selection
+
+Given the raw command token (what the user typed, e.g. `t` or a custom
+alias) and the resolved token (after cargo alias expansion, e.g. `test`),
+a scope's `subcommands` map selects at most one entry via
+`cli::selected_command_override(raw, resolved, map)`:
+
+1. Look up the raw token: direct map hit, else the canonical name of a
+   built-in short alias (`cli::builtin_command`, e.g. `t` → `test`). If found,
+   use it.
+2. Otherwise, if `resolved != raw`, repeat the lookup with the resolved token.
+3. Otherwise, no command layer for this scope.
+
+This is evaluated **per sibling entry**: when two `cfg(...)` sections both
+match a target, each section's own `subcommands` map is consulted
+independently, and the hits become the sibling entries of the
+`*TargetCmd` layer. Keep `selected_command_override` and
+`command_override_for_token` unchanged in `cli.rs`.
+
+### S-2: Sibling combination (within one layer)
+
+When a layer has multiple sibling entries (matching `cfg(...)` sections),
+per-field combination rules apply, each labeled with the offending cfg
+expression on error:
+
+- **Scalar bool** (flags fields, `expand_targets`, feature bools): all
+  siblings that set the field must agree, else error
+  `conflicting values for `{name}` in {source_kind} `{expr}``. For flags in a
+  command layer, `{name}` is prefixed `subcommands.{cmd}.` (test
+  `conflicting_target_subcommand_flags_error` asserts
+  `subcommands.check.pedantic`).
+- **Driver**: values are trimmed before comparison; trimmed-equal values do
+  not conflict; differing values error like scalar bools. (Empty rejection:
+  see S-8 / B-5.)
+- **Set patch** (`combine_set_patches` in `patch.rs`, keep as-is): sibling
+  `override` values must be equal (as sets) or error
+  `conflicting overrides for `{name}` from {source_kind} `{expr}``;
+  `add`/`remove` contributions union.
+- **`allow_feature_sets`**: at most one sibling may set it, else error
+  `multiple matching {source_kind} entries set allow_feature_sets: {exprs}`.
+- **`matrix` (JSON)**: no conflict detection; sibling maps deep-merge in cfg
+  key order (`BTreeMap` iteration order): objects merge recursively, all
+  other values overwrite (`merge_matrix`, keep as-is).
+- **`replace`**: OR across siblings (B-3 relaxes the old feature-pass error).
+
+`source_kind` strings by scope (preserve, tests match on them):
+`WsTarget` → `workspace target override`; `PkgTarget` → `target override`;
+`PkgTargetCmd` → `target subcommand override`; `PkgCmd` →
+`package subcommand override`. Single-entry scopes never emit sibling
+conflicts.
+
+### S-3: `replace` semantics
+
+`replace = true` on a layer discards every broader layer: resolution behaves
+as if the chain started at the narrowest layer where any sibling sets
+`replace`. Implement once: compute
+`start = max index of a layer with replace` (0 if none), fold every setting
+over `layers[start..]`, values before `start` never contribute, and
+accumulated warning state (S-6's ignored-diagnostics flag) restarts. A
+resetting layer may not use `add`/`remove` patch ops on any patch-typed
+setting it carries (`{source_kind} `{expr}` uses add/remove patch operations
+while replace=true: {fields}`) — validate all sibling entries of the
+resetting layer. `WsBase` cannot carry `replace` (validation rejects it).
+The CLI overlay is applied regardless of `replace`.
+
+Interactions that must come out exactly as today:
+
+- Package-base `replace` resets inherited workspace flags and driver
+  (`driver_replace_at_package_discards_inherited_workspace_driver`).
+- A resetting `PkgTarget` layer discards `PkgBase` and `PkgCmd` feature
+  layers but not `PkgTargetCmd`
+  (`replace_resets_base_subcommand_layer_but_keeps_target_subcommand`).
+- Feature fields are unaffected by workspace-layer resets since workspace
+  scopes carry no feature fields — no special-casing needed; this falls out
+  of the slice. (Today's code special-cases "L1 replace is not a feature
+  reset"; with slicing at `PkgBase` the features base is re-applied from the
+  `PkgBase` layer itself, which yields the same result — see S-7 on base
+  values being patches onto defaults.)
+- `exclude_packages` resolves on the workspace chain only (S-9), so package
+  `replace` never un-excludes packages.
+
+### S-4: Flag overlay and same-scope validation
+
+Keep `FlagConfig`, the two field-list macros, `overlay`, `validate`,
+`requests_diagnostics`, `mentions_diagnostics`, `ResolvedFlags`,
+`from_config`, `try_from_config` in `flags.rs` **unchanged**. For reference,
+the semantics that must survive:
+
+- Each raw scope validates in isolation: `no_prune_implied` +
+  `prune_implied` both set → error; `dedupe = true` + `diagnostics_only =
+  false` in one scope → error.
+- Overlay: a `Some` from a narrower layer replaces; plus three couplings —
+  (a) `diagnostics_only = Some(false)` without `dedupe = Some(true)` also
+  forces accumulated `dedupe = Some(false)`; (b) `dedupe = Some(true)` with
+  no `diagnostics_only` in the same layer clears an accumulated
+  `diagnostics_only = Some(false)`; (c) setting either prune spelling clears
+  the accumulated other spelling.
+- `ResolvedFlags::from_config`: `diagnostics_only = diagnostics_only
+  .unwrap_or(false) || dedupe.unwrap_or(false)`; `no_prune_implied =
+  no_prune_implied.or(prune_implied.map(|e| !e)).unwrap_or(false)`; all other
+  fields `unwrap_or(false)`.
+- `try_from_config` errors when the merged config has `dedupe = Some(true)`
+  and `diagnostics_only = Some(false)`.
+
+### S-5: Flag fold over the chain
+
+For each layer from the replace-slice start, in order:
+
+1. Combine siblings (S-2) into one `FlagConfig`; call `validate()` on it.
+2. If the layer is **not** a command layer and
+   `default_diagnostics_allowed == false`, gate it (S-6) before overlaying.
+3. If the layer **is** a command layer: if the combined flags mention
+   diagnostics (`diagnostics_only` or `dedupe` is `Some`), clear the
+   ignored-diagnostics flag; overlay ungated.
+4. Overlay onto the accumulator (`FlagConfig::overlay`).
+
+Then overlay the CLI flags, run `ResolvedFlags::try_from_config`, and set
+`ignored_diagnostics_config &&= !flags.diagnostics_only`.
+
+### S-6: Diagnostics gate (non-command layers, diagnostics-unsafe commands)
+
+`default_diagnostics_allowed` is `cli::builtin_diagnostics_safe(resolved_or_raw)`
+(true for `build`, `check`, `clippy`, `doc` and their aliases). When false,
+a non-command layer's flags pass through `gated_plain_diagnostics` (keep the
+function): if the layer requests diagnostics (`diagnostics_only == Some(true)`
+or `dedupe == Some(true)`), set the ignored flag and strip those `Some(true)`
+values (leaving `Some(false)` intact, which still overlays); else if the
+layer merely mentions diagnostics, clear the ignored flag. Command layers
+bypass the gate entirely (a `subcommands.<cmd>` table is explicit
+command-local intent). The resulting `ignored_diagnostics_config` reaches
+`PackageExecutionPlan` and drives `lib.rs::warn_ignored_diagnostics_config`
+(text unchanged).
+
+### S-7: Feature-matrix fold
+
+Feature fields exist only on package-scope layers (`PkgBase`, `PkgCmd`,
+`PkgTarget`, `PkgTargetCmd`). Resolution starts from
+`ResolvedFeatures::default()` (all empty/false) and folds layers from the
+slice start:
+
+- Set-like fields (`exclude_features`, `include_features`, `only_features`:
+  string sets; `isolated_feature_sets`, `exclude_feature_sets`,
+  `include_feature_sets`, `allow_feature_sets`: feature-set lists): combine
+  siblings via `combine_set_patches`, then apply
+  (override-or-current → remove → add; **add wins ties**).
+- Bools (`skip_optional_dependencies`, `no_empty_feature_set`): sibling
+  scalar combine; narrower `Some` wins.
+- `matrix`: deep-merge each layer onto the accumulator (S-2 rule).
+- The `PkgBase` layer's concrete values act as patches applied to the empty
+  default — `exclude_features = ["a"]` at base is `Override({"a"})` onto `{}`,
+  which reproduces today's "base config is the starting point" exactly.
+
+Precedence pins (unit tests exist for all):
+`PkgTargetCmd` > `PkgTarget` > `PkgCmd` > `PkgBase`
+(`feature_layer_precedence_target_beats_subcommand`); a command-less
+resolution (`raw = resolved = None`) applies no command layers; a different
+command leaves command layers inert.
+
+### S-8: Driver
+
+Scalar fold with replace slicing; narrower layer wins; sibling combine trims
+before comparing (S-2). CLI `--driver` overlays last and always wins. The
+resolved value is **unnormalized**: `None` = unset, `Some("cargo")` = explicit
+plain cargo. Everything downstream of resolution stays as-is:
+`lib.rs::finalize_plan_drivers` (cross-target `cargo-zigbuild` default only
+when some plan has `driver == None`), `finalize_driver`, `normalize_driver`
+(`"cargo"` → `None` so spawn honors `$CARGO`), the runner's `CARGO_DRIVER`
+env export, and the aggregate-targets serial fallback when per-target drivers
+differ. Empty-driver rejection: see B-5.
+
+### S-9: `exclude_packages`
+
+Resolved per (target × command) — not per package — at execution-plan time,
+over the **workspace chain only** (`WsBase, WsCmd, WsTarget, WsTargetCmd`).
+The fold seeds from `base_exclude` =
+`Workspace::base_workspace_exclude_packages()` (workspace base set ∪ the
+deprecated root-package `exclude_packages`), then folds `WsCmd`, `WsTarget`,
+`WsTargetCmd` patches with replace slicing (a resetting layer starts from the
+empty set, discarding `base_exclude`). A narrower `remove` can re-include a
+package excluded by a broader scope
+(`subcommand_exclude_packages_remove_reincludes_for_command`). Package layers
+never participate; package `replace` must not affect this fold (see S-3).
+The resulting set filters `TargetPlan.packages` by package name in
+`build_execution_plans`.
+
+### S-10: `targets` list
+
+Resolved on the four non-target layers (`WsBase, WsCmd, PkgBase, PkgCmd`) —
+target sections cannot carry it (circularity; validation rejects). Ordered
+semantics (until M4, keep today's exactly): start from the workspace list in
+declared order; apply each layer's patch via `apply_target_patch` (override
+replaces the whole list **sorted**; `remove` filters preserving order; `add`
+appends new entries **sorted**; entries already present are not re-added).
+After M4 (B-4) order becomes declaration order throughout.
+
+Normalization (`normalize_targets`, keep): trim each triple, error
+`empty target triple in configured `targets` list` on empty, dedup preserving
+first occurrence.
+
+Interaction with planning (all stays in `plan/targets.rs`, only the list
+computation is replaced):
+
+- Empty effective list → single fallback target (`CARGO_BUILD_TARGET` env,
+  else host), with `show_target = true` iff any configured patch applied
+  ("patched"), so an explicit opt-out (`targets = []`) still attributes the
+  fallback as configured.
+- `TargetSource` provenance: if any package-scope layer (`PkgBase`/`PkgCmd`)
+  touched the list → `PackageConfig`; else if configured → `WorkspaceConfig`;
+  fallback sources `CargoBuildTargetEnv`/`Host`; explicit `--target` → `Cli`.
+- Explicit `--target <triple>` overrides all configured lists for every
+  package (`TargetExpansion::Explicit`); denied capability ignores configured
+  lists (`TargetExpansion::Denied`); empty `--target` value errors.
+- Global plan order: workspace-list order first, then package-only targets in
+  selected-package order, dedup by triple; per-target cfg evaluation happens
+  only for planned targets (`unused_workspace_target_does_not_evaluate_overrides`).
+
+### S-11: `expand_targets` capability and two-phase planning
+
+`expand_targets` (bool) appears only in `subcommands` tables. Resolution is a
+scalar fold over the chain's command layers with default
+`default_targets_enabled`; `targets_explicit` records whether any layer
+supplied the final value (see B-6/B-7 for replace/explicitness edges). It is
+resolved **twice**:
+
+1. **Pre-target phase** (`lib.rs::selected_packages_for_target_planning`):
+   chain = `WsBase, WsCmd, PkgBase, PkgCmd` (no target layers exist yet);
+   `default_targets_enabled` = `matrix` command or
+   `cli::builtin_target_capability(resolved_or_raw)` (any built-in). Output
+   per package: `ignore_configured_targets = flags.no_targets || !enabled`,
+   `target_decision_explicit = flags.no_targets == true || explicit`. These
+   drive `TargetExpansion::{Configured,Denied}` and
+   `warn_if_configured_targets_ignored` (text unchanged).
+2. **Per-target phase** (`build_execution_plans`): full chain,
+   `default_targets_enabled = true` (planning already decided); if the
+   assignment's source is configured (`WorkspaceConfig`/`PackageConfig`) and
+   `flags.no_targets || !enabled`, the package-target is skipped
+   (`target_selection_skipped`), feeding
+   `warn_packages_skipped_by_target_selection` (text unchanged).
+
+### S-12: Loading, deprecated keys, validation errors
+
+- Metadata key aliases: `find_metadata_value` picks the first present alias;
+  unchanged.
+- Package deprecated keys (`skip_feature_sets` → `exclude_feature_sets`,
+  `denylist` → `exclude_features`, `exact_combinations` →
+  `include_feature_sets`): accepted at `PkgBase` only; each emits one
+  deprecation warning naming section and package
+  (`package.rs::config()`); values fold into the target field. Deprecated
+  root-package `exclude_packages`: accepted at `PkgBase`, folded into the
+  workspace base exclude by `base_workspace_exclude_packages` (no warning
+  there; `warn_workspace_metadata_misuse` warns once).
+- Validation walks the raw JSON before deserialization and rejects:
+  - unknown keys: `unknown cargo-fc config key `{key}` in [{section}]` plus
+    `; cargo-fc config keys use `_`, not `-`` when the key contains `-`;
+  - known-but-misplaced keys with per-key reasons (preserve wording):
+    feature-matrix keys/deprecated spellings in workspace scope
+    ("feature-matrix settings are per-package …"); `exclude_packages` outside
+    workspace scope ("… only valid in workspace scope"); `targets` anywhere
+    inside a `target.'cfg(...)'` section ("not valid anywhere inside …
+    circular …"); `replace` at `WsBase` ("nothing for it to reset");
+    `expand_targets` outside a `subcommands` table ("per-subcommand
+    capability").
+  - Section labels in errors use the user's alias:
+    `package.metadata.{key}[.target.'{cfg}'][.subcommands.{name}]`.
+- The `dedup` spelling is a serde alias for `dedupe` and is accepted wherever
+  flags are.
+
+## 4. Target architecture
+
+### 4.1 Module layout
 
 ```
 src/config/
-  mod.rs       re-exports
-  schema.rs    ScopeConfig, SectionConfig, RootConfig, DeprecatedTomlKeys (serde only)
-  patch.rs     StringSetPatch, FeatureSetVecPatch, TargetListPatch, SetPatchOps (≈ as-is)
-  flags.rs     FlagConfig field macros, ResolvedFlags, diagnostics/prune policies (shrinks ~⅔)
-  scope.rs     ScopeId, Layer, Chain::{base,full}, cfg matching, command selection glue
-  resolve.rs   the engine: replace slicing, scalar/set/flags folds, Resolved/ResolvedFeatures
-  validate.rs  SettingKind, valid_in(), raw-JSON walk, deprecated-key normalization
+  mod.rs       re-exports (update as types move)
+  schema.rs    serde types (M4: ScopeConfig, SectionConfig, RootConfig, DeprecatedTomlKeys)
+  patch.rs     StringSetPatch, FeatureSetVecPatch, SetPatchOps, combine_set_patches (unchanged),
+               + TargetListPatch (M4)
+  flags.rs     FlagConfig macros, ResolvedFlags, gate + overlay policies (shrinks: the
+               chain walkers move out / are deleted)
+  scope.rs     NEW: ScopeId, ScopeView, Layer, Chain + constructors
+  resolve.rs   REWRITTEN: the engine (replace slicing, scalar/set/flags/feature folds),
+               Resolved, ResolvedFeatures, public resolve_config wrapper
+  validate.rs  REWRITTEN: SettingKind + validity matrix + JSON walk
 ```
 
-Expected size: `resolve.rs` 1463 → ~450, `flags.rs` 1260 → ~450,
-`validate.rs` 547 → ~300, `targets.rs` loses its ~350 lines of config
-resolution, `execution.rs` and `lib.rs` shed the plumbing structs. Deleted
-outright: `PackageFlagLayers`, `ResolveCommandConfigArgs`,
-`ResolvedTargetConfig`, `WorkspaceTargetConfig`,
-`CommandCapabilities::merge`, `combine_command_capability_maps`,
-`combine_command_capabilities`, `combine_flag_configs`, `combine_driver`,
-`resolve_driver_chain`, `resolve_target_capability`,
-`feature_replace_layer`, `resolve_effective_exclude_packages`,
-`workspace_effective_targets`. Net: roughly −1000 lines of src, and — the
-real win — adding a future setting touches two places (schema field +
-matrix row) instead of seven.
+Unchanged modules: `patch.rs` (except M4 addition), `cfg_eval.rs`,
+`target.rs`, `cargo_alias.rs`, `runner.rs`, `matrix.rs`, `tee.rs`,
+`diagnostics_only.rs`, `implication.rs` (signature only: takes
+`&ResolvedFeatures`), `invocation_args.rs`, `target_install.rs`, and all
+warning text in `lib.rs`.
 
-The library API is consumed only by this crate's binaries and tests, so
-renaming `Config` → `RootConfig`/`ResolvedFeatures` and re-pointing the test
-imports is acceptable; keep `pub use` aliases only where they cost nothing.
+### 4.2 Core types (`scope.rs`)
 
-## Milestones
+```rust
+/// One position in the precedence chain. Order of variants = chain order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ScopeId {
+    WorkspaceBase,
+    WorkspaceCommand,
+    WorkspaceTarget,
+    WorkspaceTargetCommand,
+    PackageBase,
+    PackageCommand,
+    PackageTarget,
+    PackageTargetCommand,
+}
 
-1. **Schema + validation.** Introduce `ScopeConfig`/`SectionConfig`/
-   `RootConfig` and `TargetListPatch`; deserialize both metadata roots into
-   them; port validation to the `SettingKind × ScopeId` matrix; normalize
-   deprecated keys at load. Old resolution keeps running via temporary
-   adapters from the new schema (or the old types kept alongside), so this
-   lands green on the existing suites.
-2. **Engine.** `scope.rs` + `resolve.rs`: chain constructors, replace
-   slicing, scalar/set/flags folds with provenance, `Resolved` /
-   `ResolvedFeatures`. Port the unit tests from `resolve.rs`/`flags.rs` —
-   they compress substantially because one engine test covers what four
-   parallel walks each needed tested.
-3. **Callers.** Re-point `selected_packages_for_target_planning`, target
-   planning's `targets`-list input, `TargetPlan`'s workspace-target payload,
-   and `build_execution_plans` at the engine. Delete the old walks and
-   plumbing structs. Integration suites must pass unmodified except for the
-   six documented behavior changes.
-4. **Docs + polish.** CHANGELOG entries for the behavior changes; README
-   gains nothing (the model is already documented — that's the point);
-   optionally assert the README table against `valid_in()` in a test so docs
-   and code cannot drift.
+impl ScopeId {
+    pub(crate) fn is_command(self) -> bool { /* the four *Command variants */ }
+    pub(crate) fn is_package(self) -> bool { /* the four Package* variants */ }
+    /// The `source_kind` string used in error messages (S-2 table).
+    pub(crate) fn source_kind(self) -> &'static str;
+}
 
-## Open questions
+/// Uniform borrowed view of what one scope said. Until M4 this is assembled
+/// from the five legacy schema types; after M4 it is a trivial projection of
+/// `ScopeConfig`.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ScopeView<'a> {
+    pub(crate) replace: bool,
+    pub(crate) driver: Option<&'a str>,
+    pub(crate) expand_targets: Option<bool>,
+    pub(crate) targets: Option<&'a StringSetPatch>,       // TargetListPatch after M4
+    pub(crate) exclude_packages: Option<&'a StringSetPatch>,
+    pub(crate) features: Option<&'a FeatureMatrixPatch>,
+    pub(crate) flags: FlagConfig,
+}
 
-- Should `replace` at a *workspace target* section also reset the workspace
-  `targets` list for packages? Proposed: no — the `targets` list is resolved
-  on the base chain (target sections can't touch it per the circularity
-  rule), so only base/command-scope `replace` affects it. This matches the
-  matrix.
-- Keep `resolve_config(base, target, evaluator)` as a public convenience
-  (base chain with no workspace, no command)? Proposed: yes, as a thin
-  wrapper over `Chain::full` with empty workspace — it's what
-  `tests/target_overrides.rs` uses.
+pub(crate) struct Layer<'a> {
+    pub(crate) scope: ScopeId,
+    /// Selected command name when `scope.is_command()`, for error labels
+    /// (`subcommands.{cmd}.{field}`).
+    pub(crate) command: Option<&'a str>,
+    /// (label, payload). Label is the cfg expression for target scopes, ""
+    /// otherwise. Non-target layers have exactly one entry.
+    pub(crate) entries: Vec<(&'a str, ScopeView<'a>)>,
+}
+
+pub(crate) struct Chain<'a> {
+    layers: Vec<Layer<'a>>,   // chain order; layers with no entries omitted
+}
+```
+
+Constructors (until M4 these take the legacy types; adapt in place at M4):
+
+```rust
+impl<'a> Chain<'a> {
+    /// WsBase, WsCmd, PkgBase, PkgCmd. `pkg = None` for workspace-only chains
+    /// (then only the first two layers). Used pre-target (S-11 phase 1) and
+    /// for the `targets` list (S-10).
+    pub(crate) fn base(
+        ws: &'a WorkspaceConfig,
+        pkg: Option<&'a Config>,
+        raw: Option<&'a str>,
+        resolved: Option<&'a str>,
+    ) -> Self;
+
+    /// All eight layers for one (package, target, command). `ws_matched` are
+    /// the workspace target sections already matched per target plan;
+    /// package target sections are matched here via `matching_overrides`.
+    pub(crate) fn full(
+        ws: &'a WorkspaceConfig,
+        ws_matched: &'a [(String, &'a WorkspaceTargetOverride)],
+        pkg: &'a Config,
+        pkg_matched: Vec<(&'a str, &'a TargetOverride)>,
+        raw: Option<&'a str>,
+        resolved: Option<&'a str>,
+    ) -> Self;
+
+    /// WsBase, WsCmd, WsTarget, WsTargetCmd only — for S-9.
+    pub(crate) fn workspace(
+        ws: &'a WorkspaceConfig,
+        ws_matched: &'a [(String, &'a WorkspaceTargetOverride)],
+        raw: Option<&'a str>,
+        resolved: Option<&'a str>,
+    ) -> Self;
+}
+```
+
+Command layers are built per S-1 (per-sibling `selected_command_override`).
+`matching_overrides` (cfg matching, `resolve.rs`) is kept and reused.
+
+### 4.3 Engine (`resolve.rs`)
+
+```rust
+/// Feature-matrix output: exactly the fields feature generation reads.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedFeatures {
+    pub exclude_features: HashSet<String>,
+    pub include_features: HashSet<String>,
+    pub only_features: HashSet<String>,
+    pub isolated_feature_sets: Vec<HashSet<String>>,
+    pub exclude_feature_sets: Vec<HashSet<String>>,
+    pub include_feature_sets: Vec<HashSet<String>>,
+    pub allow_feature_sets: Vec<HashSet<String>>,
+    pub skip_optional_dependencies: bool,
+    pub no_empty_feature_set: bool,
+    pub matrix: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Everything one (package × target × command) needs.
+pub(crate) struct Resolved {
+    pub(crate) flags: ResolvedFlags,
+    pub(crate) ignored_diagnostics_config: bool,
+    pub(crate) driver: Option<String>,
+    pub(crate) targets_enabled: bool,
+    pub(crate) targets_explicit: bool,
+    pub(crate) features: ResolvedFeatures,
+}
+
+pub(crate) struct CliOverlay<'a> {
+    pub(crate) flags: FlagConfig,
+    pub(crate) driver: Option<&'a str>,
+}
+
+pub(crate) struct ResolvePolicy {
+    pub(crate) default_diagnostics_allowed: bool,
+    pub(crate) default_targets_enabled: bool,
+}
+
+impl Chain<'_> {
+    pub(crate) fn resolve(&self, cli: CliOverlay<'_>, policy: ResolvePolicy)
+        -> eyre::Result<Resolved>;
+
+    /// The command-aware effective exclude set (S-9), seeded from base_exclude.
+    pub(crate) fn exclude_packages(&self, base_exclude: &HashSet<String>)
+        -> eyre::Result<HashSet<String>>;
+
+    /// The effective ordered targets list (S-10); also reports whether any
+    /// patch applied ("patched") and whether a package layer touched it.
+    pub(crate) fn targets_list(&self, workspace_base: &[String])
+        -> eyre::Result<TargetListResolution>;
+}
+```
+
+Seeding note for `exclude_packages` and `targets_list` (until M4): the seed
+argument (`base_exclude` / `workspace_base`) *is* the `WsBase` layer's value
+for replace-slicing purposes — if the slice starts at any later layer, the
+seed is discarded and the fold starts empty (this is what makes B-2 work).
+After M4 the `WsBase` `ScopeConfig` carries these values itself and the seed
+parameters can be dropped (`base_exclude` still needs the deprecated
+root-package union folded into the `WsBase` value at load time).
+
+`resolve` algorithm:
+
+1. `start` = index of the narrowest layer with any sibling `replace` (S-3);
+   validate every entry of that layer carries no `add`/`remove` on
+   `targets`, `exclude_packages`, or any feature set field.
+2. Flags fold per S-5/S-6 over `layers[start..]`, CLI overlay, finalize.
+3. Driver scalar fold per S-8, CLI overlay.
+4. `expand_targets` scalar fold; `enabled = value.unwrap_or(default)`,
+   `explicit = value.is_some()`.
+5. Feature fold per S-7 over package layers in `layers[start..]`.
+
+Public wrapper kept for `tests/target_overrides.rs` and external use:
+
+```rust
+/// Resolve target-specific feature config with no workspace and no command.
+pub fn resolve_config<E: CfgEvaluator>(base: &Config, target: &TargetTriple,
+    evaluator: &mut E) -> eyre::Result<ResolvedFeatures>;
+```
+
+(That test also asserts flag overlays via the old return type; move those
+assertions to engine unit tests and keep the integration test on features —
+see §9.)
+
+### 4.4 Caller changes
+
+- **`plan/targets.rs`**
+  - `TargetPlan<'a>` drops `workspace_target_flags`, `workspace_target_replace`,
+    `workspace_target_driver`, `workspace_target_exclude_ops`,
+    `workspace_target_subcommands`; gains
+    `pub(crate) ws_matched: Vec<(String, &'a WorkspaceTargetOverride)>` (the
+    sections whose cfg matched this triple, in map order). Tie the workspace
+    borrow into `'a` (`build_target_plans(…, workspace_config: &'a
+    WorkspaceConfig, …)`); all call sites already keep the workspace config
+    alive long enough.
+  - Delete `resolve_workspace_target_config`, `WorkspaceTargetConfig`,
+    `resolve_effective_exclude_packages`, `workspace_effective_targets`,
+    `WorkspaceEffectiveTargets`, `package_target_list`'s patch plumbing.
+    `build_target_plans` computes each package's list via
+    `Chain::base(ws, Some(pkg.config), raw, resolved).targets_list(&ws_list)`
+    and keeps all fallback/ordering/source/show_target logic (S-10).
+  - `TargetPlans.base_exclude` stays (threaded to execution).
+- **`plan/execution.rs`**
+  - Per target plan: `excluded = Chain::workspace(ws, &plan.ws_matched, raw,
+    resolved).exclude_packages(&target_plans.base_exclude)?`.
+  - Per package: `resolved = Chain::full(ws, &plan.ws_matched, planned.config,
+    matching_overrides(&planned.config.target_overrides, &plan.target, eval)?,
+    raw, resolved).resolve(cli, policy)?`. Replaces the
+    `resolve_config_with_flag_layers` + `resolve_package_command_config` pair.
+  - `PackageExecutionPlan.matrix` ← `resolved.features.matrix`; feature
+    generation takes `&resolved.features`.
+- **`package.rs`**: `Package::feature_combinations` and
+  `Package::feature_matrix` change their parameter from `&Config` to
+  `&ResolvedFeatures` (they only read feature fields);
+  `implication::maybe_prune_with_resolved_flag` likewise. `Package::config()`
+  keeps returning the raw schema type (`Config` until M4, `RootConfig`
+  after).
+- **`lib.rs`**
+  - `selected_packages_for_target_planning` uses `Chain::base` — delete the
+    18-field `ResolveCommandConfigArgs` call with fabricated empty layers.
+  - Everything else (driver finalization, warnings, execution mode) unchanged.
+- **Deleted outright** (after M3 nothing references them):
+  `PackageFlagLayers`, `ResolvedTargetConfig`,
+  `resolve_config_with_flag_layers`, `feature_replace_layer`,
+  `apply_feature_layer` (subsumed), `validate_replace_feature_patches`
+  (generalized into S-3 validation), `ResolveCommandConfigArgs`,
+  `ResolvedCommandConfig`, `resolve_command_config`, `resolve_flags`,
+  `resolve_driver_chain`, `resolve_target_capability`, `Scope` (flags.rs),
+  `combine_flag_configs`, `combine_bool`, `combine_driver`, `combine_scalar`
+  (re-homed into the engine as private helpers is fine),
+  `combine_command_capability_maps`, `combine_command_capabilities`,
+  `CommandCapabilities::merge`, `SetPatchOps::into_string_set_patch`.
+
+### 4.5 Unified schema (M4)
+
+```rust
+/// What one scope may say. Every field optional; absent = inherit.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct ScopeConfig {
+    #[serde(default)] pub replace: bool,
+    #[serde(default)] pub driver: Option<String>,
+    #[serde(default)] pub expand_targets: Option<bool>,
+    #[serde(default)] pub targets: Option<TargetListPatch>,
+    #[serde(default)] pub exclude_packages: Option<StringSetPatch>,
+    #[serde(flatten)] pub features: FeatureMatrixPatch,
+    #[serde(default, flatten)] pub flags: FlagConfig,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct SectionConfig {
+    #[serde(flatten)] pub settings: ScopeConfig,
+    #[serde(default, rename = "subcommands")]
+    pub subcommands: BTreeMap<String, ScopeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct RootConfig {
+    #[serde(flatten)] pub base: SectionConfig,
+    #[serde(default, rename = "target")]
+    pub targets: BTreeMap<String, SectionConfig>,
+    #[serde(flatten)] pub(crate) deprecated: DeprecatedTomlKeys,
+}
+```
+
+`Config`, `WorkspaceConfig`, `TargetOverride`, `WorkspaceTargetOverride`,
+`CommandCapabilities` are replaced by `RootConfig`/`SectionConfig`/
+`ScopeConfig`. Both metadata roots deserialize as `RootConfig`; scope-validity
+is validation's job (S-12), matching the existing pattern where
+`CommandCapabilities` was shared and key-gated. `DeprecatedTomlKeys` gains
+`exclude_packages: HashSet<String>` (the deprecated package-base flat key —
+today a first-class `Config` field). Deprecated folding (package loading):
+fold each deprecated collection into the corresponding
+`base.settings.features` patch — into its `override` payload when present,
+else into `add` (onto the empty default both are equivalent to today's
+`extend`).
+
+`TargetListPatch` (in `patch.rs`): same untagged serde surface as
+`StringSetPatch` (plain array = override; `{override/add/remove}` object) but
+`Vec<String>`-backed, preserving declaration order; implement `SetPatchInput`
+is *not* needed — it gets a small dedicated combine (sibling overrides must
+be equal as ordered-deduped lists; adds/removes concatenate in layer order,
+deduped) and ordered apply (override replaces in declared order; remove
+filters; add appends unseen entries in declared order).
+
+Flatten-key disjointness: `ScopeConfig`'s own keys, `FeatureMatrixPatch`
+keys, and `FlagConfig` keys share one flat TOML table. Keep one test that
+serializes defaults of each and asserts pairwise disjointness (replaces the
+existing comment-invariant on `TargetOverride`).
+
+## 5. Validation (`validate.rs`)
+
+Replace the seven allowlist consts and `misplaced_key_reason` with data:
+
+```rust
+enum SettingKind { Flag, FeatureMatrix, DeprecatedFeature, ExcludePackages,
+                   TargetsList, ExpandTargets, Driver, Replace,
+                   TargetTable, SubcommandsTable }
+
+/// key → kind. Flag keys come from FLAG_KEYS (incl. "dedup"); feature keys
+/// from FEATURE_MATRIX_KEYS (keep that const, it is the single list).
+fn setting_kind(key: &str) -> Option<SettingKind>;
+
+/// The README matrix. Err(reason) carries the user-facing explanation.
+fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str>;
+```
+
+The matrix (rows = kind, allowed scopes):
+
+| kind               | allowed at                                              | reason when rejected |
+|--------------------|---------------------------------------------------------|----------------------|
+| Flag               | all eight                                               | — (never rejected)   |
+| Driver             | all eight                                               | —                    |
+| Replace            | all except `WsBase`                                     | "nothing for it to reset" (S-12 wording) |
+| ExpandTargets      | `WsCmd`, `WsTargetCmd`, `PkgCmd`, `PkgTargetCmd`        | "per-subcommand capability" |
+| TargetsList        | `WsBase`, `WsCmd`, `PkgBase`, `PkgCmd`                  | circularity wording  |
+| ExcludePackages    | `WsBase`, `WsCmd`, `WsTarget`, `WsTargetCmd`, `PkgBase` (deprecated) | "only valid in workspace scope" |
+| FeatureMatrix      | `PkgBase`, `PkgCmd`, `PkgTarget`, `PkgTargetCmd`        | "per-package"        |
+| DeprecatedFeature  | `PkgBase`                                               | same as FeatureMatrix |
+| TargetTable        | `WsBase`, `PkgBase`                                     | unknown-key error    |
+| SubcommandsTable   | `WsBase`, `WsTarget`, `PkgBase`, `PkgTarget`            | unknown-key error    |
+
+The walk: `validate_package_metadata(value, section)` visits `PkgBase`, each
+`target.'cfg'` (`PkgTarget`), each `subcommands.<n>` (`PkgCmd`), each
+`target.'cfg'.subcommands.<n>` (`PkgTargetCmd`); the workspace variant
+mirrors with Ws scopes. For each key: `setting_kind` → known? check
+`valid_in`, emit reason on Err; unknown → S-12 unknown-key error with the
+hyphen hint. Additionally (B-5): if a `driver` value is a string that trims
+empty, error `` `driver` must not be empty in [{section}] ``.
+
+Note: the README matrix row for `expand_targets` shows ✓ in base/target
+columns, but the key has only ever been accepted inside `subcommands`
+tables; encode the code truth (command scopes only) and fix the README row
+in M5.
+
+Tests to keep (rewritten against the matrix): the serde-vs-allowlist sync
+test becomes "every serialized `ScopeConfig`/`SectionConfig`/`RootConfig` key
+has a `SettingKind`" plus "every `SettingKind` maps to at least one real
+key"; keep the scope-rejection tests (`workspace_base_rejects_replace`,
+`package_subcommand_rejects_exclude_packages`,
+`workspace_subcommand_rejects_feature_matrix_keys`,
+`targets_list_rejected_in_target_nested_subcommand`,
+`misplaced_known_keys_get_scope_aware_reasons`,
+`driver_is_accepted_in_every_scope`, hyphen hint) verbatim — they assert the
+user-facing contract.
+
+## 6. Deliberate behavior changes
+
+Each lands with a CHANGELOG entry and test updates listed in §9.
+
+- **B-1** `replace = true` + `add`/`remove` in the same section becomes an
+  error for `exclude_packages` and `targets` (today: silently applies after
+  the reset; features already error). One rule via S-3.
+- **B-2** `replace = true` at `PkgBase`/`PkgCmd` now also resets the
+  inherited workspace `targets` list (today: the targets walk ignores
+  `replace`). README: "discards everything broader".
+- **B-3** Two matching sibling cfg sections both setting `replace = true`
+  stops erroring (today: the feature pass errors, the flag pass ORs).
+  Siblings OR; real disagreements are still caught by S-2 conflicts. Delete
+  the `multiple matching target overrides have replace = true` error and its
+  test.
+- **B-4** (M4) `targets` overrides/adds keep declaration order instead of
+  sorted order; workspace base list keeps declared order as today. Update
+  the two targets-patch unit tests that pin sorted output.
+- **B-5** `driver = ""`/whitespace is rejected at validation time in every
+  scope (today: resolution-time via `normalize_driver` at some scopes,
+  sibling-combine time at target scopes — meaning an empty driver in a
+  non-matching cfg section is currently *not* rejected). The
+  `combine_driver_trims_whitespace_and_rejects_empty` unit test moves its
+  empty-rejection half to validation tests. `normalize_driver` keeps its
+  check as a backstop for the CLI value.
+- **B-6** `expand_targets` now honors `replace` slicing (today
+  `resolve_target_capability` ignores `replace`, so a broader explicit
+  `expand_targets = false` survives a narrower reset). After a reset with no
+  narrower value it falls back to `default_targets_enabled`.
+- **B-7** `targets_explicit` becomes "the final value came from config"
+  (provenance) instead of "any command layer ever set it, even if later
+  replaced". Only observable through B-6 corner cases in
+  `warn_if_configured_targets_ignored`.
+- **B-8** (M4) Uniform forms per the README: patch objects (`{add/remove}`)
+  become *accepted* where only plain arrays parse today (feature keys at
+  `PkgBase`, `exclude_packages` at `WsBase`), applying onto the empty default.
+  Explicit `targets = []` at `WsBase` becomes distinguishable from an absent
+  key and counts as a configured opt-out (fallback gets `show_target = true`),
+  matching the package-level opt-out semantics.
+
+Anything else that changes observable behavior is a bug. The integration
+suites (`tests/per_target.rs`, `tests/per_subcommand.rs`, `tests/driver.rs`,
+`tests/target_overrides.rs`, `tests/metadata_key_aliases.rs`,
+`tests/prune_implied.rs`, `tests/allow_feature_sets.rs`, and the runner
+tests) pin the TOML-observable contract and must pass with no changes except
+those enumerated in §9.
+
+## 7. Milestones
+
+Each milestone must end with `task test` and `task lint` green. Do not start
+the next milestone with the previous one red. Commit per milestone
+(lowercase imperative subjects, e.g.
+`refactor(config): drive validation from one setting-scope matrix`; no
+Co-Authored-By or generated-with trailers).
+
+### M1 — validation rewrite (no schema change, no behavior change except B-5)
+
+1. Add `ScopeId` in a new `src/config/scope.rs` (just the enum + helpers;
+   chain types come in M2).
+2. Rewrite `validate.rs` per §5, keeping `validate_package_metadata` /
+   `validate_workspace_metadata` signatures and all error wording (S-12).
+3. Add B-5 empty-driver validation + tests.
+4. Port the existing validate tests; replace the three allowlist-sync tests
+   with the matrix-coverage tests (§5).
+
+### M2 — engine (additive; nothing switches over yet)
+
+1. `scope.rs`: `ScopeView`, `Layer`, `Chain` with the three constructors
+   building views **from the legacy schema types** (`WorkspaceConfig`,
+   `Config`, `TargetOverride`, `WorkspaceTargetOverride`,
+   `CommandCapabilities` → `ScopeView` field-by-field).
+2. `resolve.rs`: add `ResolvedFeatures`, `Resolved`, `CliOverlay`,
+   `ResolvePolicy`, `Chain::{resolve, exclude_packages, targets_list}` per
+   §4.3 and S-2…S-11. Reuse `combine_set_patches`, `merge_matrix`,
+   `matching_overrides`, `gated_plain_diagnostics`, `FlagConfig` policies.
+3. Unit tests: port every scenario from the current `resolve.rs` and
+   `flags.rs` test modules to the engine (see §9 mapping). This is the bulk
+   of M2; the old tests stay in place and green alongside.
+
+### M3 — switchover and deletion (B-1, B-2, B-3, B-6, B-7 land here)
+
+1. `plan/targets.rs`: `TargetPlan` carries `ws_matched`; targets list via
+   `Chain::base(...).targets_list(...)` (keep `apply_target_patch`'s sorted
+   semantics for now by implementing the list fold with the existing
+   `StringSetPatch` — B-4 waits for M4); delete the six walks' plumbing
+   (§4.4).
+2. `plan/execution.rs`: per-target excludes via `Chain::workspace`,
+   per-package resolution via `Chain::full(...).resolve(...)`.
+3. `lib.rs`: `selected_packages_for_target_planning` via `Chain::base`.
+4. Delete everything in §4.4's deletion list; delete their now-moved tests.
+5. Update the tests affected by B-1/B-2/B-3/B-6 (§9).
+
+### M4 — schema unification (B-4, B-8 land here)
+
+1. `patch.rs`: add `TargetListPatch` (§4.5) + unit tests (array=override,
+   object form, ordered apply, sibling combine).
+2. `schema.rs`: replace the five types with
+   `ScopeConfig`/`SectionConfig`/`RootConfig`; `ScopeView` becomes a trivial
+   projection; `Chain` constructors simplify; `package.rs::config()` and
+   `workspace.rs::workspace_config()` return the new types; deprecated
+   folding per §4.5; `base_workspace_exclude_packages` reads the deprecated
+   pkg-base key from `DeprecatedTomlKeys`.
+3. Flatten-disjointness test (§4.5). Keep the existing
+   "flattened feature/flag key splitting" serde tests, retargeted at
+   `ScopeConfig`.
+4. Update B-4/B-8 tests (§9).
+
+### M5 — docs and drift guards
+
+1. CHANGELOG entries for B-1…B-8.
+2. README: fix the `expand_targets` matrix row (command scopes only); no
+   other README changes needed — the model is already documented.
+3. Optional: a test that renders the README's `✓/—` matrix from `valid_in`
+   and asserts it matches the table in README.md, so docs and code cannot
+   drift.
+
+## 8. Pitfalls — read before coding
+
+- **P-1** Do not pre-merge `subcommands` maps across sibling cfg sections.
+  Keep siblings as separate layer entries until each field's fold. (The old
+  half-merged `CommandCapabilities` is the main defect this redesign removes.)
+- **P-2** The raw-token-first rule (S-1) is per sibling map. Two matching cfg
+  sections may select entries under *different* names (one via raw, one via
+  resolved); both become siblings of the same layer.
+- **P-3** `serde(untagged)` patch enums swallow shape errors silently — do
+  not "improve" them; validation catches unknown keys before deserialization.
+  `serde(flatten)` is incompatible with `deny_unknown_fields`; unknown-key
+  detection must stay in `validate.rs`, not serde.
+- **P-4** Add wins over remove within one combined patch (`apply`:
+  override-or-base → remove → add). Test:
+  `add_wins_over_remove_for_same_value`.
+- **P-5** The diagnostics gate strips only `Some(true)`; a gated layer's
+  `diagnostics_only = Some(false)` still overlays (and via S-4 coupling can
+  force `dedupe = Some(false)`). Test:
+  `broad_diagnostics_true_with_dedupe_false_still_warns`.
+- **P-6** `ignored_diagnostics_config` must end up false whenever the final
+  flags have `diagnostics_only = true` (CLI can rescue: test
+  `broad_config_diagnostics_are_gated_but_cli_flags_win`).
+- **P-7** `exclude_packages` folds over the workspace chain only (S-9). If
+  you fold it over the full chain, package `replace` will wrongly clear
+  workspace excludes — no current test catches this, so add one (§9).
+- **P-8** Feature resolution must be identical for `raw/resolved = None`
+  (matrix + command-less paths) — no command layers at all, not "command
+  layers with empty name".
+- **P-9** Determinism: cfg sections iterate in `BTreeMap` (lexicographic)
+  order — sibling entry order, matrix deep-merge order, and error `expr`
+  labels depend on it. Target plan order is workspace-list order then
+  package order (S-10), not alphabetical.
+- **P-10** `resolve` runs per (package × target); the workspace target
+  sections are matched once per target (stored on `TargetPlan`), package
+  target sections once per package-target. Do not re-run cfg evaluation for
+  unplanned targets (test
+  `unused_workspace_target_does_not_evaluate_overrides` uses a panicking
+  evaluator).
+- **P-11** Empty selection must not touch the environment or the evaluator
+  (`empty_selection_skips_target_resolution` uses panicking stubs).
+- **P-12** `Vec<(&str, ScopeView)>` labels: use `""` for non-target scopes
+  and the cfg expression for target scopes; error messages interpolate them
+  directly.
+- **P-13** House style: no banner comments; comments explain *why*; never
+  delete existing accurate comments — several current comments (e.g. on
+  `merge_matrix`, the fallback attribution, the alias-wrapper placement)
+  must survive the move into the new files. Prefer
+  `#[expect(lint, reason = "…")]` over `#[allow]`.
+- **P-14** `dedup` is a serde alias of `dedupe` only; `FLAG_KEYS` includes
+  the alias for validation.
+- **P-15** Keep `StringSetPatch::apply_to` (single-patch fast path) — the
+  engine's per-layer fold may use `SetPatchOps` uniformly instead, in which
+  case delete `apply_to` and its comment; do not keep both if only one is
+  used.
+
+## 9. Test migration map
+
+Unit tests (move + retarget at the engine; scenario must be preserved):
+
+| current test (file::name) | disposition |
+|---|---|
+| resolve.rs: `additive_exclude_features`, `override_exclude_features_array_syntax`, `remove_exclude_features`, `multiple_matching_sections_combine_adds`, `add_wins_over_remove_for_same_value`, `boolean_override_no_empty_feature_set`, `feature_set_vec_patch_*`, `matrix_metadata_merge_adds_new_key`, `allow_feature_sets_singleton_conflict`, `conflicting_override_errors`, `no_match_returns_base_unchanged`, `replace_starts_from_default`, `replace_disallows_add_remove` | M2 engine tests (features via `Chain::full` with empty workspace) |
+| resolve.rs: `package_subcommand_feature_override_*`, `target_subcommand_feature_override_applies`, `feature_layer_precedence_target_beats_subcommand`, `replace_resets_base_subcommand_layer_but_keeps_target_subcommand`, `replace_at_package_subcommand_resets_base_features`, `replace_at_target_subcommand_resets_all_broader_layers`, `replace_at_subcommand_disallows_add_remove` | M2 engine tests |
+| resolve.rs: `boolean_override_prune_implied`, `boolean_override_diagnostics_config`, `target_flag_layers_resolve_after_package_subcommand_layers`, `conflicting_target_subcommand_flags_error`, `target_override_prune_spelling_conflict_errors` | M2 engine tests (assert on `Resolved.flags`) |
+| flags.rs: all `resolve_flags` / gate / dedupe-interplay / section+subcommand replace / `resolve_command_config` / driver chain tests | M2 engine tests (`Chain` + `CliOverlay`); `flag_subset_macros_match_documented_special_cases` stays in flags.rs |
+| flags.rs: `combine_driver_trims_whitespace_and_rejects_empty` | trim/conflict half → engine sibling-combine test; empty half → M1 validation test (B-5) |
+| targets.rs: all planning tests | stay; only construction of `TargetPlan` in `execution.rs` tests changes (`ws_matched` instead of five fields) |
+| targets.rs: `workspace_target_subcommand_exclude_and_replace_apply`, `subcommand_exclude_packages_*`, `base_exclude_applies_to_all_targets`, `workspace_target_override_excludes_only_matching_targets` | retarget at `Chain::workspace(...).exclude_packages(...)` through `build_execution_plans` (same assertions) |
+| schema.rs serde-splitting tests | M4: retarget at `ScopeConfig` |
+| validate.rs tests | M1 per §5 |
+
+Expectation updates required by `B-*`:
+
+- B-1: extend `replace_disallows_add_remove`-style tests to `exclude_packages`
+  and `targets`.
+- B-2: new test — package `replace = true` with a workspace `targets` list
+  resolves to the fallback target.
+- B-3: delete the multiple-sibling-replace error assertion; add a test that
+  two matching resetting sections combine (with agreeing overrides).
+- B-4 (M4): `package_targets_add_patch_extends_workspace_list` and
+  `duplicate_targets_deduped_preserving_order` — adds/overrides now in
+  declaration order.
+- B-6: new test — command-layer `replace` resets a broader
+  `expand_targets = false` back to the default.
+- P-7: new test — package `replace = true` does not clear workspace
+  `exclude_packages`.
+
+Integration tests (`tests/`): must pass unchanged, except
+`tests/target_overrides.rs` (uses the public `resolve_config` and
+`Package::feature_combinations`/`feature_matrix`; it asserts only feature
+fields and the replace=true error, so it compiles against `ResolvedFeatures`
+with import changes only) and `tests/metadata_key_aliases.rs` (M4:
+`config_for_toml` returns `RootConfig`). No integration test constructs
+`TargetPlan` directly; only the unit tests in `plan/execution.rs` do.
+
+## 10. Expected outcome
+
+- `resolve.rs` ~1460 → ~450 lines; `flags.rs` ~1260 → ~450; `validate.rs`
+  ~550 → ~300; `targets.rs` loses ~350 lines of config plumbing; five schema
+  types → three; net ≈ −1000 lines.
+- Adding a future chain-resolved setting = one `ScopeConfig` field + one
+  `SettingKind` row (+ its fold call if it needs a dedicated output), instead
+  of ~seven touch points.
+- One `replace` implementation, one sibling-combine implementation, one
+  place that knows the chain order, and a validity matrix that can be
+  asserted against the README.
