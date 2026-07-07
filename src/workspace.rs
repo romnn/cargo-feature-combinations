@@ -81,15 +81,18 @@ impl Workspace for cargo_metadata::Metadata {
     }
 
     fn base_workspace_exclude_packages(&self) -> eyre::Result<HashSet<String>> {
-        let mut exclude = self.workspace_config()?.exclude_packages;
+        let workspace_config = self.workspace_config()?;
+        let mut exclude =
+            apply_string_patch_to_empty(workspace_config.base.settings.exclude_packages.as_ref());
 
         // Fold in the deprecated root-package exclude_packages without emitting
         // warnings here (warnings are emitted once in candidate discovery).
         if let Some(root_package) = self.root_package()
             && let Some((value, _key)) = find_metadata_value(&root_package.metadata)
             && let Ok(config) = serde_json::from_value::<Config>(value.clone())
+            && let Some(patch) = config.base.settings.exclude_packages.as_ref()
         {
-            exclude.extend(config.exclude_packages);
+            exclude.extend(apply_string_patch_to_empty(Some(patch)));
         }
 
         Ok(exclude)
@@ -118,7 +121,12 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
     // Root-package exclude_packages is deprecated in favor of workspace metadata.
     if let Some((value, _key)) = find_metadata_value(&root_package.metadata)
         && let Ok(config) = serde_json::from_value::<Config>(value.clone())
-        && !config.exclude_packages.is_empty()
+        && config
+            .base
+            .settings
+            .exclude_packages
+            .as_ref()
+            .is_some_and(string_patch_has_values)
     {
         print_warning!(
             "[{}].exclude_packages in the workspace root package is deprecated; use [{}].exclude_packages instead",
@@ -136,7 +144,12 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
         // [package.metadata.<alias>].exclude_packages in a non-root member is a no-op.
         if let Some((raw, key)) = find_metadata_value(&package.metadata)
             && let Ok(config) = serde_json::from_value::<Config>(raw.clone())
-            && !config.exclude_packages.is_empty()
+            && config
+                .base
+                .settings
+                .exclude_packages
+                .as_ref()
+                .is_some_and(string_patch_has_values)
         {
             print_warning!(
                 "[{}].exclude_packages in package `{}` has no effect; this field is only read from the workspace root Cargo.toml",
@@ -169,6 +182,30 @@ fn warn_workspace_metadata_misuse(metadata: &cargo_metadata::Metadata) {
             }
         }
     }
+}
+
+fn apply_string_patch_to_empty(
+    patch: Option<&crate::config::patch::StringSetPatch>,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if let Some(patch) = patch {
+        if let Some(values) = patch.override_value() {
+            out.extend(values.iter().cloned());
+        }
+        for value in patch.remove_values() {
+            out.remove(value);
+        }
+        out.extend(patch.add_values().iter().cloned());
+    }
+    out
+}
+
+fn string_patch_has_values(patch: &crate::config::patch::StringSetPatch) -> bool {
+    patch
+        .override_value()
+        .is_some_and(|values| !values.is_empty())
+        || !patch.add_values().is_empty()
+        || !patch.remove_values().is_empty()
 }
 
 /// Whether a JSON value carries meaningful (non-empty) configuration.
@@ -317,7 +354,10 @@ mod test {
 
         let config = metadata.workspace_config()?;
 
-        assert_eq!(config.flags.install_missing_targets, Some(true));
+        assert_eq!(
+            config.base.settings.flags.install_missing_targets,
+            Some(true)
+        );
         Ok(())
     }
 

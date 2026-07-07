@@ -550,7 +550,8 @@ Notes:
 - When multiple sections match, their `add`/`remove` sets are unioned.
   Conflicting `override` values result in an error.
 - `replace = true` starts from a fresh default config for that target.
-  When `replace = true` is set, patchable fields must not use `add`/`remove`.
+  When `replace = true` is set, patchable fields in that same section must not
+  use `add`/`remove`.
 - `cfg(feature = "...")` predicates are not supported in target override keys.
 - If `--target <triple>` or `CARGO_BUILD_TARGET` is set, it is used to select
   matching target overrides (this also applies to `cargo fc matrix`).
@@ -1052,7 +1053,7 @@ mod test {
         subcommands.insert(
             "build".to_string(),
             CommandCapabilities {
-                targets: Some(false),
+                expand_targets: Some(false),
                 ..CommandCapabilities::default()
             },
         );
@@ -1060,7 +1061,7 @@ mod test {
         let override_config = command_override_for_token(Some("b"), &subcommands);
 
         assert_eq!(
-            override_config.and_then(|config| config.targets),
+            override_config.and_then(|config| config.expand_targets),
             Some(false)
         );
     }
@@ -1071,14 +1072,14 @@ mod test {
         subcommands.insert(
             "build".to_string(),
             CommandCapabilities {
-                targets: Some(false),
+                expand_targets: Some(false),
                 ..CommandCapabilities::default()
             },
         );
         subcommands.insert(
             "b".to_string(),
             CommandCapabilities {
-                targets: Some(true),
+                expand_targets: Some(true),
                 ..CommandCapabilities::default()
             },
         );
@@ -1086,7 +1087,7 @@ mod test {
         let override_config = command_override_for_token(Some("b"), &subcommands);
 
         assert_eq!(
-            override_config.and_then(|config| config.targets),
+            override_config.and_then(|config| config.expand_targets),
             Some(true)
         );
     }

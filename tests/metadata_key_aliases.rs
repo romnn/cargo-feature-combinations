@@ -6,7 +6,7 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::Package as _;
+use cargo_feature_combinations::{Package as _, ResolvedFeatures};
 use color_eyre::eyre::{self, OptionExt};
 
 fn dummy_crate_with_toml(toml_body: &str) -> eyre::Result<TempDir> {
@@ -52,9 +52,13 @@ fn config_for_toml(toml_body: &str) -> eyre::Result<cargo_feature_combinations::
     pkg.config()
 }
 
+fn resolved_for_toml(toml_body: &str) -> eyre::Result<ResolvedFeatures> {
+    Ok(ResolvedFeatures::from_config(&config_for_toml(toml_body)?))
+}
+
 #[test]
 fn alias_cargo_feature_combinations() -> eyre::Result<()> {
-    let config = config_for_toml(indoc::indoc! {r#"
+    let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations]
         exclude_features = ["foo"]
     "#})?;
@@ -66,7 +70,7 @@ fn alias_cargo_feature_combinations() -> eyre::Result<()> {
 
 #[test]
 fn alias_cargo_fc() -> eyre::Result<()> {
-    let config = config_for_toml(indoc::indoc! {r#"
+    let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.cargo-fc]
         exclude_features = ["bar"]
     "#})?;
@@ -78,7 +82,7 @@ fn alias_cargo_fc() -> eyre::Result<()> {
 
 #[test]
 fn alias_fc() -> eyre::Result<()> {
-    let config = config_for_toml(indoc::indoc! {r#"
+    let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.fc]
         exclude_features = ["baz"]
         no_empty_feature_set = true
@@ -91,7 +95,7 @@ fn alias_fc() -> eyre::Result<()> {
 
 #[test]
 fn alias_feature_combinations() -> eyre::Result<()> {
-    let config = config_for_toml(indoc::indoc! {r#"
+    let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.feature-combinations]
         exclude_features = ["foo", "bar"]
     "#})?;
@@ -112,13 +116,13 @@ fn alias_cargo_fc_with_target_override() -> eyre::Result<()> {
         exclude_features = { add = ["bar"] }
     "#})?;
 
-    assert!(config.exclude_features.contains("foo"));
-    // Target overrides are stored in the config but not applied until resolve_config
     assert!(
-        config
-            .target_overrides
-            .contains_key("cfg(target_os = \"linux\")")
+        ResolvedFeatures::from_config(&config)
+            .exclude_features
+            .contains("foo")
     );
+    // Target overrides are stored in the config but not applied until resolve_config
+    assert!(config.targets.contains_key("cfg(target_os = \"linux\")"));
     Ok(())
 }
 
@@ -132,18 +136,18 @@ fn alias_fc_with_target_override() -> eyre::Result<()> {
         exclude_features = { add = ["bar"] }
     "#})?;
 
-    assert!(config.exclude_features.contains("foo"));
     assert!(
-        config
-            .target_overrides
-            .contains_key("cfg(target_os = \"linux\")")
+        ResolvedFeatures::from_config(&config)
+            .exclude_features
+            .contains("foo")
     );
+    assert!(config.targets.contains_key("cfg(target_os = \"linux\")"));
     Ok(())
 }
 
 #[test]
 fn no_metadata_produces_default_config() -> eyre::Result<()> {
-    let config = config_for_toml("")?;
+    let config = resolved_for_toml("")?;
 
     assert!(config.exclude_features.is_empty());
     assert!(config.only_features.is_empty());
@@ -171,7 +175,7 @@ fn alias_cargo_fc_affects_feature_matrix() -> eyre::Result<()> {
         .ok_or_eyre("test package should exist")?;
 
     let config = pkg.config()?;
-    let matrix = pkg.feature_matrix(&config)?;
+    let matrix = pkg.feature_matrix(&ResolvedFeatures::from_config(&config))?;
 
     // "foo" is excluded, so no combination should contain it
     assert!(

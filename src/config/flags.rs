@@ -1,6 +1,4 @@
-use super::schema::{CommandCapabilities, WorkspaceConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 
 macro_rules! for_each_flag_config_field {
     ($callback:ident) => {
@@ -105,14 +103,6 @@ pub struct FlagConfig {
     /// Whether packages without a library target should be skipped.
     #[serde(default)]
     pub only_packages_with_lib_target: Option<bool>,
-}
-
-impl CommandCapabilities {
-    /// Overlay explicitly configured values from `other`.
-    pub fn merge(&mut self, other: &Self) {
-        overlay_bool(&mut self.targets, other.targets);
-        self.flags.overlay(other.flags);
-    }
 }
 
 impl FlagConfig {
@@ -250,134 +240,7 @@ impl ResolvedFlags {
     }
 }
 
-/// Fully resolved flags plus warning metadata from flag resolution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ResolvedFlagResult {
-    flags: ResolvedFlags,
-    ignored_diagnostics_config: bool,
-}
-
-/// Named inputs for resolving cargo-fc behavior for one package/target command.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolveCommandConfigArgs<'a> {
-    pub(crate) workspace: &'a WorkspaceConfig,
-    pub(crate) workspace_target_flags: FlagConfig,
-    pub(crate) workspace_target_subcommands: &'a BTreeMap<String, CommandCapabilities>,
-    pub(crate) package_flags: FlagConfig,
-    pub(crate) package_subcommands: &'a BTreeMap<String, CommandCapabilities>,
-    pub(crate) package_target_flags: FlagConfig,
-    pub(crate) package_target_subcommands: &'a BTreeMap<String, CommandCapabilities>,
-    pub(crate) raw_command: Option<&'a str>,
-    pub(crate) resolved_command: Option<&'a str>,
-    pub(crate) cli_flags: FlagConfig,
-    pub(crate) default_diagnostics_allowed: bool,
-    pub(crate) default_targets_enabled: bool,
-}
-
-/// Fully resolved cargo-fc behavior for one package/target command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ResolvedCommandConfig {
-    pub(crate) flags: ResolvedFlags,
-    pub(crate) targets_enabled: bool,
-    pub(crate) targets_explicit: bool,
-    pub(crate) ignored_diagnostics_config: bool,
-}
-
-pub(crate) fn resolve_command_config(
-    args: ResolveCommandConfigArgs<'_>,
-) -> color_eyre::eyre::Result<ResolvedCommandConfig> {
-    let workspace_command = crate::cli::selected_command_override(
-        args.raw_command,
-        args.resolved_command,
-        &args.workspace.subcommand_overrides,
-    );
-    let workspace_target_command = crate::cli::selected_command_override(
-        args.raw_command,
-        args.resolved_command,
-        args.workspace_target_subcommands,
-    );
-    let package_command = crate::cli::selected_command_override(
-        args.raw_command,
-        args.resolved_command,
-        args.package_subcommands,
-    );
-    let package_target_command = crate::cli::selected_command_override(
-        args.raw_command,
-        args.resolved_command,
-        args.package_target_subcommands,
-    );
-
-    let flag_result = resolve_flags(
-        [
-            (args.workspace.flags, workspace_command),
-            (args.workspace_target_flags, workspace_target_command),
-            (args.package_flags, package_command),
-            (args.package_target_flags, package_target_command),
-        ],
-        args.cli_flags,
-        args.default_diagnostics_allowed,
-    )?;
-    let targets = resolve_target_capability(
-        args.default_targets_enabled,
-        [
-            workspace_command,
-            workspace_target_command,
-            package_command,
-            package_target_command,
-        ],
-    );
-
-    Ok(ResolvedCommandConfig {
-        flags: flag_result.flags,
-        targets_enabled: targets.enabled,
-        targets_explicit: targets.explicit,
-        ignored_diagnostics_config: flag_result.ignored_diagnostics_config,
-    })
-}
-
-/// Resolve ordered flag layers into one flat view.
-///
-/// Layers must be provided from broadest to narrowest scope. Config-driven
-/// diagnostics flags from plain config scopes are applied only to built-in
-/// diagnostics-safe commands. Diagnostics flags in a matching subcommand table
-/// are explicit command-local behavior and bypass that safety gate. Explicit
-/// CLI flags are overlaid after all config and therefore always win.
-fn resolve_flags<'a>(
-    layers: impl IntoIterator<Item = (FlagConfig, Option<&'a CommandCapabilities>)>,
-    cli_flags: FlagConfig,
-    default_diagnostics_allowed: bool,
-) -> color_eyre::eyre::Result<ResolvedFlagResult> {
-    let mut merged = FlagConfig::default();
-    let mut ignored_diagnostics_config = false;
-
-    for (flags, command) in layers {
-        flags.validate()?;
-        let plain_flags = if default_diagnostics_allowed {
-            flags
-        } else {
-            gated_plain_diagnostics(flags, &mut ignored_diagnostics_config)
-        };
-        merged.overlay(plain_flags);
-
-        if let Some(command) = command {
-            command.flags.validate()?;
-            if command.flags.mentions_diagnostics() {
-                ignored_diagnostics_config = false;
-            }
-            merged.overlay(command.flags);
-        }
-    }
-
-    merged.overlay(cli_flags);
-
-    let flags = ResolvedFlags::try_from_config(merged)?;
-    Ok(ResolvedFlagResult {
-        ignored_diagnostics_config: ignored_diagnostics_config && !flags.diagnostics_only,
-        flags,
-    })
-}
-
-fn gated_plain_diagnostics(
+pub(crate) fn gated_plain_diagnostics(
     mut flags: FlagConfig,
     ignored_diagnostics_config: &mut bool,
 ) -> FlagConfig {
@@ -395,27 +258,6 @@ fn gated_plain_diagnostics(
     }
 
     flags
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ResolvedTargetCapability {
-    enabled: bool,
-    explicit: bool,
-}
-
-fn resolve_target_capability<'a>(
-    default_enabled: bool,
-    commands: impl IntoIterator<Item = Option<&'a CommandCapabilities>>,
-) -> ResolvedTargetCapability {
-    let mut enabled = default_enabled;
-    let mut explicit = false;
-    for command in commands.into_iter().flatten() {
-        if let Some(targets) = command.targets {
-            enabled = targets;
-            explicit = true;
-        }
-    }
-    ResolvedTargetCapability { enabled, explicit }
 }
 
 pub(crate) fn combine_flag_configs<'a>(
@@ -449,18 +291,22 @@ pub(crate) fn combine_flag_configs<'a>(
     Ok(out)
 }
 
-fn combine_bool<T>(
+/// Fold a scalar field across the sibling entries that make up one precedence
+/// layer (e.g. several `target.'cfg(...)'` sections matching one triple),
+/// erroring if two siblings set differing values. Returns `None` when no sibling
+/// set the field.
+fn combine_scalar<'a, T, V: PartialEq>(
     name: &str,
     source_kind: &str,
-    entries: &[(&str, T)],
-    get: impl Fn(&T) -> Option<bool>,
-) -> color_eyre::eyre::Result<Option<bool>> {
-    let mut out = None;
+    entries: &'a [(&'a str, T)],
+    get: impl Fn(&'a T) -> Option<V>,
+) -> color_eyre::eyre::Result<Option<V>> {
+    let mut out: Option<V> = None;
     for (expr, item) in entries {
         if let Some(value) = get(item) {
-            match out {
+            match &out {
                 None => out = Some(value),
-                Some(existing) if existing == value => {}
+                Some(existing) if *existing == value => {}
                 Some(_) => {
                     color_eyre::eyre::bail!(
                         "conflicting values for `{name}` in {source_kind} `{expr}`"
@@ -472,59 +318,41 @@ fn combine_bool<T>(
     Ok(out)
 }
 
-pub(crate) fn combine_command_capability_maps<'a>(
+pub(crate) fn combine_bool<T>(
+    name: &str,
     source_kind: &str,
-    maps: impl IntoIterator<Item = (&'a str, &'a BTreeMap<String, CommandCapabilities>)>,
-) -> color_eyre::eyre::Result<BTreeMap<String, CommandCapabilities>> {
-    let maps: Vec<_> = maps.into_iter().collect();
-    let mut names = BTreeSet::new();
-    for (_expr, commands) in &maps {
-        names.extend(commands.keys().cloned());
-    }
-
-    let mut out = BTreeMap::new();
-    for name in names {
-        let entries: Vec<_> = maps
-            .iter()
-            .filter_map(|(expr, commands)| commands.get(&name).map(|command| (*expr, command)))
-            .collect();
-        out.insert(
-            name.clone(),
-            combine_command_capabilities(&name, source_kind, &entries)?,
-        );
-    }
-    Ok(out)
+    entries: &[(&str, T)],
+    get: impl Fn(&T) -> Option<bool>,
+) -> color_eyre::eyre::Result<Option<bool>> {
+    combine_scalar(name, source_kind, entries, get)
 }
 
-fn combine_command_capabilities(
-    command: &str,
+/// Combine the scalar `driver` across sibling entries that match one scope.
+/// Values are trimmed before comparison, so two siblings differing only in
+/// surrounding whitespace name the same program and do not conflict. An empty
+/// (or whitespace-only) driver is rejected here — matching `normalize_driver` at
+/// the other scopes — so `driver = ""` fails the same way at every scope rather
+/// than being silently dropped. Differing non-empty values conflict, mirroring
+/// [`combine_bool`].
+pub(crate) fn combine_driver<T>(
+    name: &str,
     source_kind: &str,
-    entries: &[(&str, &CommandCapabilities)],
-) -> color_eyre::eyre::Result<CommandCapabilities> {
-    let mut out = CommandCapabilities::default();
-    let target_name = format!("subcommands.{command}.targets");
-    out.targets = combine_bool(&target_name, source_kind, entries, |capability| {
-        capability.targets
-    })?;
-
-    let flag_prefix = format!("subcommands.{command}");
-    out.flags = combine_flag_configs(
-        Some(&flag_prefix),
-        source_kind,
-        entries
-            .iter()
-            .map(|(expr, capability)| (*expr, capability.flags)),
-    )?;
-    Ok(out)
+    entries: &[(&str, T)],
+    get: impl Fn(&T) -> Option<&str>,
+) -> color_eyre::eyre::Result<Option<String>> {
+    for (expr, item) in entries {
+        if get(item).is_some_and(|value| value.trim().is_empty()) {
+            color_eyre::eyre::bail!("`{name}` must not be empty in {source_kind} `{expr}`");
+        }
+    }
+    let combined = combine_scalar(name, source_kind, entries, |item| get(item).map(str::trim))?;
+    Ok(combined.map(ToString::to_string))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CommandCapabilities, FlagConfig, ResolveCommandConfigArgs, ResolvedFlags, WorkspaceConfig,
-        resolve_command_config, resolve_flags, resolve_target_capability,
-    };
-    use std::collections::{BTreeMap, BTreeSet};
+    use super::{FlagConfig, ResolvedFlags};
+    use std::collections::BTreeSet;
 
     #[test]
     fn flag_subset_macros_match_documented_special_cases() {
@@ -558,284 +386,62 @@ mod tests {
     }
 
     #[test]
-    fn resolve_flags_overlays_broad_to_narrow_then_cli() -> color_eyre::eyre::Result<()> {
-        let workspace = FlagConfig {
-            fail_fast: Some(true),
-            pedantic: Some(false),
-            ..FlagConfig::default()
-        };
-        let package = FlagConfig {
-            pedantic: Some(true),
-            errors_only: Some(false),
-            ..FlagConfig::default()
-        };
-        let command = CommandCapabilities {
-            flags: FlagConfig {
-                errors_only: Some(true),
-                ..FlagConfig::default()
-            },
-            ..CommandCapabilities::default()
-        };
-        let cli = FlagConfig {
-            fail_fast: Some(false),
-            ..FlagConfig::default()
-        };
-
-        let resolved =
-            resolve_flags([(workspace, None), (package, Some(&command))], cli, true)?.flags;
-
-        assert_eq!(
-            resolved,
-            ResolvedFlags {
-                fail_fast: false,
-                pedantic: true,
-                errors_only: true,
-                ..ResolvedFlags::default()
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn broad_config_diagnostics_are_gated_but_cli_flags_win() -> color_eyre::eyre::Result<()> {
-        let workspace = FlagConfig {
-            dedupe: Some(true),
-            ..FlagConfig::default()
-        };
-        let cli = FlagConfig {
-            diagnostics_only: Some(true),
-            ..FlagConfig::default()
-        };
-
-        let resolved = resolve_flags([(workspace, None)], cli, false)?;
-
-        assert!(!resolved.ignored_diagnostics_config);
-        assert!(resolved.flags.diagnostics_only);
-        assert!(!resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn broad_config_diagnostics_are_dropped_for_unsafe_commands() -> color_eyre::eyre::Result<()> {
-        let workspace = FlagConfig {
-            dedupe: Some(true),
-            ..FlagConfig::default()
-        };
-
-        let resolved = resolve_flags([(workspace, None)], FlagConfig::default(), false)?;
-
-        assert!(resolved.ignored_diagnostics_config);
-        assert!(!resolved.flags.diagnostics_only);
-        assert!(!resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn narrower_diagnostics_false_disables_broader_dedupe() -> color_eyre::eyre::Result<()> {
-        let workspace = FlagConfig {
-            dedupe: Some(true),
-            ..FlagConfig::default()
-        };
-        let package = FlagConfig {
+    fn flag_overlay_preserves_diagnostics_couplings() -> color_eyre::eyre::Result<()> {
+        // A narrower dedupe = true rescues a broader diagnostics_only = false.
+        let mut flags = FlagConfig {
             diagnostics_only: Some(false),
             ..FlagConfig::default()
         };
-
-        let resolved = resolve_flags(
-            [(workspace, None), (package, None)],
-            FlagConfig::default(),
-            true,
-        )?;
-
-        assert!(!resolved.flags.diagnostics_only);
-        assert!(!resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn narrower_dedupe_true_overrides_broader_diagnostics_false() -> color_eyre::eyre::Result<()> {
-        let workspace = FlagConfig {
-            diagnostics_only: Some(false),
+        flags.overlay(FlagConfig {
+            dedupe: Some(true),
             ..FlagConfig::default()
-        };
-        let package = FlagConfig {
+        });
+        let resolved = ResolvedFlags::try_from_config(flags)?;
+        assert!(resolved.diagnostics_only);
+        assert!(resolved.dedupe);
+
+        // A narrower diagnostics_only = false also turns off a broader
+        // dedupe = true (dedupe consumes the diagnostics-only stream).
+        let mut flags = FlagConfig {
             dedupe: Some(true),
             ..FlagConfig::default()
         };
-
-        let resolved = resolve_flags(
-            [(workspace, None), (package, None)],
-            FlagConfig::default(),
-            true,
-        )?;
-
-        assert!(resolved.flags.diagnostics_only);
-        assert!(resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn same_scope_dedupe_true_and_diagnostics_false_errors() {
-        let result = resolve_flags(
-            [(
-                FlagConfig {
-                    diagnostics_only: Some(false),
-                    dedupe: Some(true),
-                    ..FlagConfig::default()
-                },
-                None,
-            )],
-            FlagConfig::default(),
-            true,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn command_diagnostics_override_prevents_false_unsupported_warning()
-    -> color_eyre::eyre::Result<()> {
-        let workspace_command = CommandCapabilities {
-            flags: FlagConfig {
-                dedupe: Some(true),
-                ..FlagConfig::default()
-            },
-            ..CommandCapabilities::default()
-        };
-        let package = FlagConfig {
-            diagnostics_only: Some(true),
+        flags.overlay(FlagConfig {
+            diagnostics_only: Some(false),
             ..FlagConfig::default()
-        };
-
-        let resolved = resolve_flags(
-            [
-                (FlagConfig::default(), Some(&workspace_command)),
-                (package, None),
-            ],
-            FlagConfig::default(),
-            false,
-        )?;
-
-        assert!(!resolved.ignored_diagnostics_config);
-        assert!(resolved.flags.diagnostics_only);
-        assert!(resolved.flags.dedupe);
+        });
+        let resolved = ResolvedFlags::try_from_config(flags)?;
+        assert!(!resolved.diagnostics_only);
+        assert!(!resolved.dedupe);
         Ok(())
     }
 
     #[test]
-    fn broad_diagnostics_true_with_dedupe_false_still_warns() -> color_eyre::eyre::Result<()> {
-        let resolved = resolve_flags(
-            [(
-                FlagConfig {
-                    diagnostics_only: Some(true),
-                    dedupe: Some(false),
-                    ..FlagConfig::default()
-                },
-                None,
-            )],
-            FlagConfig::default(),
-            false,
-        )?;
-
-        assert!(resolved.ignored_diagnostics_config);
-        assert!(!resolved.flags.diagnostics_only);
-        assert!(!resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn command_diagnostics_request_opts_unknown_command_in() -> color_eyre::eyre::Result<()> {
-        let command = CommandCapabilities {
-            flags: FlagConfig {
-                dedupe: Some(true),
-                ..FlagConfig::default()
-            },
-            ..CommandCapabilities::default()
-        };
-
-        let resolved = resolve_flags(
-            [(FlagConfig::default(), Some(&command))],
-            FlagConfig::default(),
-            false,
-        )?;
-
-        assert!(!resolved.ignored_diagnostics_config);
-        assert!(resolved.flags.diagnostics_only);
-        assert!(resolved.flags.dedupe);
-        Ok(())
-    }
-
-    #[test]
-    fn no_prune_and_prune_spellings_in_one_scope_error() {
-        let err = resolve_flags(
-            [(
-                FlagConfig {
-                    no_prune_implied: Some(true),
-                    prune_implied: Some(true),
-                    ..FlagConfig::default()
-                },
-                None,
-            )],
-            FlagConfig::default(),
-            true,
-        )
+    fn contradictory_prune_spellings_in_one_scope_error() {
+        let err = FlagConfig {
+            no_prune_implied: Some(true),
+            prune_implied: Some(true),
+            ..FlagConfig::default()
+        }
+        .validate()
         .expect_err("contradictory prune spelling should fail");
 
         assert!(err.to_string().contains("no_prune_implied"));
     }
 
     #[test]
-    fn target_capability_overlays_command_scopes() {
-        let workspace = CommandCapabilities {
-            targets: Some(false),
-            ..CommandCapabilities::default()
-        };
-        let package = CommandCapabilities {
-            targets: Some(true),
-            ..CommandCapabilities::default()
-        };
+    fn combine_driver_trims_whitespace_and_conflicts() -> color_eyre::eyre::Result<()> {
+        let entries = [("cfg(a)", Some("cross")), ("cfg(b)", Some("cross "))];
+        let out = super::combine_driver("driver", "target override", &entries, |value| *value)?;
+        assert_eq!(out.as_deref(), Some("cross"));
 
-        let resolved = resolve_target_capability(true, [Some(&workspace), Some(&package)]);
-        assert!(resolved.enabled);
-        assert!(resolved.explicit);
-    }
-
-    #[test]
-    fn resolve_command_config_tracks_explicit_target_decisions() -> color_eyre::eyre::Result<()> {
-        let mut workspace = WorkspaceConfig::default();
-        workspace.subcommand_overrides.insert(
-            "lint".to_string(),
-            CommandCapabilities {
-                targets: Some(false),
-                ..CommandCapabilities::default()
-            },
+        let entries = [
+            ("cfg(a)", Some("cross")),
+            ("cfg(b)", Some("cargo-zigbuild")),
+        ];
+        assert!(
+            super::combine_driver("driver", "target override", &entries, |value| *value).is_err()
         );
-        workspace.subcommand_overrides.insert(
-            "clippy".to_string(),
-            CommandCapabilities {
-                targets: Some(true),
-                ..CommandCapabilities::default()
-            },
-        );
-        let empty = BTreeMap::new();
-
-        let resolved = resolve_command_config(ResolveCommandConfigArgs {
-            workspace: &workspace,
-            workspace_target_flags: FlagConfig::default(),
-            workspace_target_subcommands: &empty,
-            package_flags: FlagConfig::default(),
-            package_subcommands: &empty,
-            package_target_flags: FlagConfig::default(),
-            package_target_subcommands: &empty,
-            raw_command: Some("lint"),
-            resolved_command: Some("clippy"),
-            cli_flags: FlagConfig::default(),
-            default_diagnostics_allowed: true,
-            default_targets_enabled: true,
-        })?;
-
-        assert!(!resolved.targets_enabled);
-        assert!(resolved.targets_explicit);
         Ok(())
     }
 }

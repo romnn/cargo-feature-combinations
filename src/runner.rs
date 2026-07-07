@@ -480,6 +480,9 @@ struct Invocation<'a> {
     inject_targets: &'a [String],
     /// Display/attribution context for the header and summary entry.
     summary_target: &'a SummaryTarget,
+    /// Finalized build driver to spawn instead of `$CARGO`/`cargo` for this
+    /// invocation (e.g. `cargo-zigbuild`); `None` means plain `$CARGO`.
+    driver: Option<&'a str>,
 }
 
 /// One aggregate-mode Cargo invocation after transposing target plans by package
@@ -489,6 +492,10 @@ struct AggregateInvocationPlan<'a> {
     combo: Vec<String>,
     flags: ResolvedFlags,
     targets: Vec<EffectiveTarget>,
+    /// Build driver for this package's aggregated invocation. Aggregate mode is
+    /// only chosen when drivers resolve uniformly across targets, so all targets
+    /// in one aggregated invocation share this driver.
+    driver: Option<String>,
 }
 
 fn print_package_cmd(
@@ -563,8 +570,6 @@ fn print_package_cmd(
 /// Pre-computed state shared across all feature combinations in one execution.
 struct RunContext<'a> {
     invocation_args: &'a PreparedInvocationArgs<'a>,
-    /// Build driver to invoke instead of `$CARGO`/`cargo` (e.g. `cargo-zigbuild`).
-    driver: Option<&'a str>,
 }
 
 /// Result of [`run_single_combination`] for one feature combination.
@@ -607,7 +612,7 @@ fn run_single_combination(
         )
     };
 
-    let cargo: std::ffi::OsString = match ctx.driver {
+    let cargo: std::ffi::OsString = match inv.driver {
         Some(driver) => std::ffi::OsString::from(driver),
         None => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
     };
@@ -644,10 +649,10 @@ fn run_single_combination(
         generated_args.push(&features_flag);
     }
     let args = ctx.invocation_args.with_generated_args(generated_args);
-    print_package_cmd(inv, &args, diagnostics_only, ctx.driver, progress, stdout);
+    print_package_cmd(inv, &args, diagnostics_only, inv.driver, progress, stdout);
 
     cmd.args(&args).current_dir(working_dir);
-    let mut child = spawn_cargo_command(cmd, ctx.driver, diagnostics_only)?;
+    let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only)?;
 
     let mut result = if diagnostics_only {
         crate::diagnostics_only::process_output(
@@ -738,7 +743,6 @@ pub fn run_execution_plans(
     plan_set: &ExecutionPlanSet,
     cargo_args: Vec<&str>,
     mode: TargetExecutionMode,
-    driver: Option<&str>,
     generated_arg_placement: GeneratedArgPlacement,
 ) -> eyre::Result<ExitCode> {
     let start = Instant::now();
@@ -773,7 +777,6 @@ pub fn run_execution_plans(
 
     let ctx = RunContext {
         invocation_args: &invocation_args,
-        driver,
     };
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
@@ -831,6 +834,7 @@ fn execute_serial(
                         flags: pp.flags,
                         inject_targets: &inject,
                         summary_target: &summary_target,
+                        driver: pp.driver.as_deref(),
                     },
                     ctx,
                     Progress {
@@ -907,6 +911,7 @@ fn execute_aggregate(
                 flags: inv_plan.flags,
                 inject_targets: &inject,
                 summary_target: &summary_target,
+                driver: inv_plan.driver.as_deref(),
             },
             ctx,
             Progress {
@@ -979,6 +984,9 @@ fn aggregate_invocation_plans<'a>(
     let mut package_order: Vec<&cargo_metadata::Package> = Vec::new();
     let mut seen_packages: HashSet<String> = HashSet::new();
     let mut grouped: HashMap<String, BTreeMap<AggregateKey, Vec<EffectiveTarget>>> = HashMap::new();
+    // Aggregate mode is only chosen when the driver resolves uniformly across
+    // targets, so recording the first-seen driver per package is exact.
+    let mut package_driver: HashMap<String, Option<String>> = HashMap::new();
 
     for plan in &plan_set.plans {
         for pp in &plan.package_plans {
@@ -986,6 +994,9 @@ fn aggregate_invocation_plans<'a>(
             if seen_packages.insert(id.clone()) {
                 package_order.push(pp.package);
             }
+            package_driver
+                .entry(id.clone())
+                .or_insert_with(|| pp.driver.clone());
             let entry = grouped.entry(id).or_default();
             for combo in &pp.combinations {
                 entry
@@ -1004,12 +1015,17 @@ fn aggregate_invocation_plans<'a>(
         let Some(combos) = grouped.remove(&package.id.repr) else {
             continue;
         };
+        let driver = package_driver
+            .get(&package.id.repr)
+            .cloned()
+            .unwrap_or_default();
         for (key, targets) in combos {
             invocations.push(AggregateInvocationPlan {
                 package,
                 combo: key.combo,
                 flags: key.flags,
                 targets,
+                driver: driver.clone(),
             });
         }
     }
@@ -1108,6 +1124,7 @@ mod test {
             pruned: Vec::new(),
             matrix: serde_json::Map::new(),
             flags,
+            driver: None,
             ignored_diagnostics_config: false,
         }
     }

@@ -1,251 +1,224 @@
 use super::flags::FlagConfig;
-use super::patch::{FeatureSetVecPatch, StringSetPatch};
+use super::patch::{FeatureSetVecPatch, StringSetPatch, TargetListPatch};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
-/// Per-package configuration for `cargo-fc`.
-///
-/// This is read from `[package.metadata.cargo-fc]` (or any supported alias)
-/// in a package's `Cargo.toml`. For workspace-wide options such as
-/// `exclude_packages`, prefer using [`WorkspaceConfig`] via
-/// `[workspace.metadata.cargo-fc]` instead.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Config {
-    /// Package-level target triples to check by default.
-    ///
-    /// This is a target *selection* field, not a feature-matrix field:
-    ///
-    /// - `None` (key absent): inherit the workspace target list.
-    /// - `Some([])`: explicit opt-out of the workspace target list; use the
-    ///   single effective target (`CARGO_BUILD_TARGET` or host) instead.
-    /// - `Some([..])`: this package's own target list, overriding the workspace
-    ///   list.
-    ///
-    /// `targets` is never read by feature-combination generation. Target
-    /// override sections (`target.'cfg(...)'`) must not change it.
-    #[serde(default, rename = "targets")]
-    pub package_targets: Option<Vec<String>>,
-    /// Feature sets that must be tested in isolation.
+/// What one precedence-chain scope may say.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct ScopeConfig {
+    /// When enabled, discard everything broader in the precedence chain.
     #[serde(default)]
-    pub isolated_feature_sets: Vec<HashSet<String>>,
-    /// Formerly named `denylist`
+    pub replace: bool,
+    /// Build driver override.
     #[serde(default)]
-    pub exclude_features: HashSet<String>,
-    /// Include these features in every generated feature combination.
-    ///
-    /// This does not restrict which features are varied for the combinatorial
-    /// matrix. To restrict the matrix to a specific allowlist of features, use
-    /// [`Config::only_features`].
+    pub driver: Option<String>,
+    /// Whether this subcommand may expand configured target lists.
     #[serde(default)]
-    pub include_features: HashSet<String>,
-    /// Only consider these features when generating the combinatorial matrix.
-    ///
-    /// When empty, all package features are considered. Non-existent features
-    /// are ignored.
+    pub expand_targets: Option<bool>,
+    /// Ordered target-list patch.
     #[serde(default)]
-    pub only_features: HashSet<String>,
-    /// When enabled, exclude implicit features that correspond to optional
-    /// dependencies from the feature combination matrix.
-    ///
-    /// This mirrors `cargo-all-features`: only the implicit features that
-    /// Cargo generates for optional dependencies (of the form
-    /// `foo = ["dep:foo"]` in the feature graph) are skipped. Other
-    /// user-defined features that happen to enable optional dependencies via
-    /// `dep:NAME` remain part of the matrix.
-    ///
-    /// By default this is `false` to preserve the existing feature matrix.
+    pub targets: Option<TargetListPatch>,
+    /// Workspace package-selection patch.
     #[serde(default)]
-    pub skip_optional_dependencies: bool,
-    /// Deprecated TOML key. Prefer
-    /// [`WorkspaceConfig::exclude_packages`] via
-    /// `[workspace.metadata.cargo-fc].exclude_packages`.
-    #[serde(default)]
-    pub exclude_packages: HashSet<String>,
-    /// Formerly named `skip_feature_sets`
-    #[serde(default)]
-    pub exclude_feature_sets: Vec<HashSet<String>>,
-    /// Formerly named `exact_combinations`
-    #[serde(default)]
-    pub include_feature_sets: Vec<HashSet<String>>,
-    /// Explicitly allowed feature sets.
-    #[serde(default)]
-    pub allow_feature_sets: Vec<HashSet<String>>,
-    /// When enabled, disallow generating the empty feature set.
-    #[serde(default)]
-    pub no_empty_feature_set: bool,
-    /// Arbitrary user-defined matrix values forwarded to the runner.
-    #[serde(default)]
-    pub matrix: serde_json::Map<String, serde_json::Value>,
-    /// Package-level cargo-fc flag defaults.
+    pub exclude_packages: Option<StringSetPatch>,
+    /// Feature-matrix patches.
+    #[serde(default, flatten)]
+    pub features: FeatureMatrixPatch,
+    /// cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
-    /// Per-subcommand package-level cargo-fc flag defaults.
-    #[serde(default, rename = "subcommands")]
-    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
+}
 
-    /// Target-specific package configuration overrides.
-    ///
-    /// This is read from `[package.metadata.cargo-fc.target.'cfg(...)']`.
+/// Base or target section plus its command-local overrides.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct SectionConfig {
+    /// Settings declared directly in this base or target section.
+    #[serde(flatten)]
+    pub settings: ScopeConfig,
+    /// Command-local settings declared below this section.
+    #[serde(default, rename = "subcommands")]
+    pub subcommands: BTreeMap<String, ScopeConfig>,
+}
+
+/// Metadata root for both package and workspace cargo-fc config.
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct RootConfig {
+    /// Base settings and base command overrides.
+    #[serde(flatten)]
+    pub base: SectionConfig,
+    /// Target-specific sections keyed by Cargo-style cfg expressions.
     #[serde(default, rename = "target")]
-    pub target_overrides: BTreeMap<String, TargetOverride>,
+    pub targets: BTreeMap<String, SectionConfig>,
     /// Deprecated TOML keys accepted during config parsing.
     #[serde(flatten)]
     pub(crate) deprecated: DeprecatedTomlKeys,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            package_targets: None,
-            isolated_feature_sets: Vec::new(),
-            exclude_features: HashSet::new(),
-            include_features: HashSet::new(),
-            only_features: HashSet::new(),
-            skip_optional_dependencies: false,
-            exclude_packages: HashSet::new(),
-            exclude_feature_sets: Vec::new(),
-            include_feature_sets: Vec::new(),
-            allow_feature_sets: Vec::new(),
-            no_empty_feature_set: false,
-            matrix: serde_json::Map::new(),
-            flags: FlagConfig::default(),
-            subcommand_overrides: BTreeMap::new(),
-            target_overrides: BTreeMap::new(),
-            deprecated: DeprecatedTomlKeys::default(),
-        }
-    }
-}
+/// Back-compatible package-config type name.
+pub type Config = RootConfig;
+/// Back-compatible workspace-config type name.
+pub type WorkspaceConfig = RootConfig;
+/// Back-compatible package target-section type name.
+pub type TargetOverride = SectionConfig;
+/// Back-compatible workspace target-section type name.
+pub type WorkspaceTargetOverride = SectionConfig;
+/// Back-compatible subcommand-scope type name.
+pub type CommandCapabilities = ScopeConfig;
 
-/// Target-specific configuration override.
+/// Feature-matrix-shaping patch fields.
 ///
-/// These sections are keyed by Cargo-style cfg expressions, e.g.
-/// `cfg(target_os = "linux")`.
+/// Feature keys and flag keys share one flat TOML table through serde flatten;
+/// their names must stay disjoint or one side can silently capture the other.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct TargetOverride {
-    /// When enabled, start from a fresh default configuration instead of
-    /// inheriting values from the base config.
-    #[serde(default)]
-    pub replace: bool,
-
-    /// Patch operations for [`Config::isolated_feature_sets`].
+pub struct FeatureMatrixPatch {
+    /// Patch operations for isolated feature sets.
     #[serde(default)]
     pub isolated_feature_sets: Option<FeatureSetVecPatch>,
-    /// Patch operations for [`Config::exclude_features`].
+    /// Patch operations for excluded features.
     #[serde(default)]
     pub exclude_features: Option<StringSetPatch>,
-    /// Patch operations for [`Config::include_features`].
+    /// Patch operations for features included in every combination.
     #[serde(default)]
     pub include_features: Option<StringSetPatch>,
-    /// Patch operations for [`Config::only_features`].
+    /// Patch operations for the feature allowlist considered by the powerset.
     #[serde(default)]
     pub only_features: Option<StringSetPatch>,
-    /// Override for [`Config::skip_optional_dependencies`].
+    /// Override for skipping implicit optional-dependency features.
     #[serde(default)]
     pub skip_optional_dependencies: Option<bool>,
-    /// Patch operations for [`Config::exclude_feature_sets`].
+    /// Patch operations for excluded feature-set patterns.
     #[serde(default)]
     pub exclude_feature_sets: Option<FeatureSetVecPatch>,
-    /// Patch operations for [`Config::include_feature_sets`].
+    /// Patch operations for exact feature sets to include.
     #[serde(default)]
     pub include_feature_sets: Option<FeatureSetVecPatch>,
-    /// Patch operations for [`Config::allow_feature_sets`].
+    /// Patch operations for explicitly allowed feature sets.
     #[serde(default)]
     pub allow_feature_sets: Option<FeatureSetVecPatch>,
-    /// Override for [`Config::no_empty_feature_set`].
+    /// Override for omitting the empty feature set.
     #[serde(default)]
     pub no_empty_feature_set: Option<bool>,
-    /// Merge override for [`Config::matrix`].
+    /// Merge override for user-defined matrix metadata.
     #[serde(default)]
     pub matrix: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Target-specific cargo-fc flag defaults.
-    #[serde(default, flatten)]
-    pub flags: FlagConfig,
-    /// Per-subcommand target-specific cargo-fc flag defaults.
-    #[serde(default, rename = "subcommands")]
-    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
 }
 
-/// Workspace-wide configuration for `cargo-fc`.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct WorkspaceConfig {
-    /// List of package names to exclude from the workspace analysis.
-    #[serde(default)]
-    pub exclude_packages: HashSet<String>,
-    /// Target triples checked by default for the whole workspace.
-    ///
-    /// An empty list means "no configured target list"; behavior falls back to
-    /// the existing single effective target detection path. Package-level
-    /// `targets` override (do not merge with) this list.
-    #[serde(default, rename = "targets")]
-    pub workspace_targets: Vec<String>,
-    /// Target-specific workspace overrides keyed by Cargo-style cfg expressions.
-    ///
-    /// These select workspace packages and cargo-fc flags for one
-    /// already-selected target.
-    #[serde(default, rename = "target")]
-    pub target_overrides: BTreeMap<String, WorkspaceTargetOverride>,
-    /// Per-subcommand capability and flag overrides.
-    ///
-    /// Built-in Cargo subcommands default to their code-provided capabilities.
-    /// Unresolved aliases and custom subcommands default to denied. Entries in
-    /// this table override target capability and command-local cargo-fc flags.
-    #[serde(default, rename = "subcommands")]
-    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
-    /// Build driver to invoke in place of `cargo` for each combination.
-    ///
-    /// When unset, cargo-fc uses plain `cargo` for host-only runs and defaults
-    /// to `cargo-zigbuild` when any non-host target is planned (so native-C
-    /// dependencies cross-compile via zig). Set it to a wrapper such as
-    /// `cargo-zigbuild`, `cross`, or back to `cargo` to force plain cargo. The
-    /// `--driver` CLI flag overrides this.
-    #[serde(default)]
-    pub driver: Option<String>,
-    /// Workspace cargo-fc flag defaults.
-    #[serde(default, flatten)]
-    pub flags: FlagConfig,
-}
-
-/// Target-specific workspace override.
-///
-/// Keyed by Cargo-style cfg expressions, e.g. `cfg(target_arch = "wasm32")`.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct WorkspaceTargetOverride {
-    /// Patch operations for [`WorkspaceConfig::exclude_packages`].
-    #[serde(default)]
-    pub exclude_packages: Option<StringSetPatch>,
-    /// Target-specific workspace cargo-fc flag defaults.
-    #[serde(default, flatten)]
-    pub flags: FlagConfig,
-    /// Per-subcommand target-specific workspace cargo-fc flag defaults.
-    #[serde(default, rename = "subcommands")]
-    pub subcommand_overrides: BTreeMap<String, CommandCapabilities>,
-}
-
-/// Workspace-level capability and flag overrides for a single command token.
-///
-/// Unresolved aliases and custom subcommands default to deny capabilities,
-/// while built-ins default according to cargo-fc's registry.
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
-pub struct CommandCapabilities {
-    /// When `true`, cargo-fc may expand configured target lists and inject
-    /// `--target <triple>` for this command.
-    #[serde(default)]
-    pub targets: Option<bool>,
-    /// Per-command cargo-fc flag defaults.
-    #[serde(default, flatten)]
-    pub flags: FlagConfig,
-}
-
-/// Deprecated TOML keys kept as accepted input spellings.
+/// Deprecated package-level feature keys kept as accepted input spellings.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub(crate) struct DeprecatedTomlKeys {
-    /// Former name of [`Config::exclude_feature_sets`].
+    /// Former name of `exclude_feature_sets`.
     #[serde(default)]
     pub skip_feature_sets: Vec<HashSet<String>>,
-    /// Former name of [`Config::exclude_features`].
+    /// Former name of `exclude_features`.
     #[serde(default)]
     pub denylist: HashSet<String>,
-    /// Former name of [`Config::include_feature_sets`].
+    /// Former name of `include_feature_sets`.
     #[serde(default)]
     pub exact_combinations: Vec<HashSet<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FeatureMatrixPatch, ScopeConfig, SectionConfig};
+    use crate::config::FlagConfig;
+    use crate::config::patch::{StringSetPatch, TargetListPatch};
+    use serde::Serialize;
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn scope_config_splits_flattened_feature_and_flag_keys() {
+        let value = serde_json::json!({
+            "replace": true,
+            "exclude_features": ["gpu"],
+            "only_features": { "add": ["core"] },
+            "skip_optional_dependencies": true,
+            "matrix": { "kind": "ci" },
+            "pedantic": true,
+        });
+        let scope: ScopeConfig = serde_json::from_value(value).expect("deserialize ScopeConfig");
+        assert!(scope.replace);
+        assert_eq!(scope.flags.pedantic, Some(true));
+        assert_eq!(scope.features.skip_optional_dependencies, Some(true));
+        assert!(matches!(
+            scope.features.exclude_features,
+            Some(StringSetPatch::Override(_))
+        ));
+        assert!(matches!(
+            scope.features.only_features,
+            Some(StringSetPatch::Patch { .. })
+        ));
+        assert!(scope.features.matrix.is_some());
+    }
+
+    #[test]
+    fn section_config_splits_subcommands_from_settings() {
+        let value = serde_json::json!({
+            "targets": ["wasm", "linux"],
+            "subcommands": {
+                "test": { "expand_targets": false, "verbose": true },
+            },
+        });
+        let section: SectionConfig =
+            serde_json::from_value(value).expect("deserialize SectionConfig");
+
+        assert!(matches!(
+            section.settings.targets,
+            Some(TargetListPatch::Override(_))
+        ));
+        let command = section.subcommands.get("test").expect("test command");
+        assert_eq!(command.expand_targets, Some(false));
+        assert_eq!(command.flags.verbose, Some(true));
+    }
+
+    #[test]
+    fn absent_keys_default_to_none() {
+        let scope: ScopeConfig =
+            serde_json::from_value(serde_json::json!({})).expect("deserialize empty");
+        assert!(scope.expand_targets.is_none());
+        assert!(scope.features.exclude_features.is_none());
+        assert!(scope.features.skip_optional_dependencies.is_none());
+    }
+
+    #[test]
+    fn empty_override_array_is_a_replace_not_absent() {
+        let scope: ScopeConfig = serde_json::from_value(serde_json::json!({ "only_features": [] }))
+            .expect("deserialize empty override");
+        match scope.features.only_features {
+            Some(StringSetPatch::Override(set)) => assert!(set.is_empty()),
+            other => panic!("expected empty override, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flattened_schema_key_sets_are_disjoint() {
+        let scope = [
+            "replace",
+            "driver",
+            "expand_targets",
+            "targets",
+            "exclude_packages",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<BTreeSet<_>>();
+        let features = keys_for(FeatureMatrixPatch::default());
+        let flags = keys_for(FlagConfig::default());
+
+        assert_disjoint("scope", &scope, "features", &features);
+        assert_disjoint("scope", &scope, "flags", &flags);
+        assert_disjoint("features", &features, "flags", &flags);
+    }
+
+    fn keys_for<T: Serialize>(value: T) -> BTreeSet<String> {
+        match serde_json::to_value(value).expect("serialize default") {
+            Value::Object(map) => map.keys().cloned().collect(),
+            other => panic!("expected object, got {other:?}"),
+        }
+    }
+
+    fn assert_disjoint(a_name: &str, a: &BTreeSet<String>, b_name: &str, b: &BTreeSet<String>) {
+        let overlap = a.intersection(b).collect::<Vec<_>>();
+        assert!(overlap.is_empty(), "{a_name}/{b_name} overlap: {overlap:?}");
+    }
 }
