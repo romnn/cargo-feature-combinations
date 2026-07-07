@@ -161,8 +161,11 @@ accumulated warning state (S-6's ignored-diagnostics flag) restarts. A
 resetting layer may not use `add`/`remove` patch ops on any patch-typed
 setting it carries (`{source_kind} `{expr}` uses add/remove patch operations
 while replace=true: {fields}`) — validate all sibling entries of the
-resetting layer. `WsBase` cannot carry `replace` (validation rejects it).
-The CLI overlay is applied regardless of `replace`.
+resetting layer. **Superseded by F-1 (§11): the add/remove-under-replace rule
+becomes section-local and moves to validation time; this sentence described
+(and the initial implementation faithfully reproduced) the old layer-based
+check, which has two defects.** `WsBase` cannot carry `replace` (validation
+rejects it). The CLI overlay is applied regardless of `replace`.
 
 Interactions that must come out exactly as today:
 
@@ -948,3 +951,138 @@ with import changes only) and `tests/metadata_key_aliases.rs` (M4:
 - One `replace` implementation, one sibling-combine implementation, one
   place that knows the chain order, and a validity matrix that can be
   asserted against the README.
+
+## 11. Follow-up work (post-implementation review)
+
+The redesign is implemented. A review of the result surfaced three findings;
+this section is the normative spec for addressing them. Same ground rules as
+the main plan: `task test` and `task lint` green after each item, CHANGELOG
+entries for user-visible changes, no new façade layers.
+
+### F-1 (medium): make the add/remove-under-replace rule section-local, at validation time
+
+**Finding.** The implementation validates the rule per *layer*, not per
+*section*: `replace_start()` (`src/config/resolve.rs:157`) locates the
+narrowest layer containing any `replace = true` and calls
+`validate_reset_layer()` (`src/config/resolve.rs:170`), which checks **every
+sibling entry of that one layer**. Two defects follow:
+
+1. *Missed errors*: a broader section with `replace = true` + `add`/`remove`
+   is never validated when a narrower reset exists (the broader layer is
+   sliced away before the check), and never validated at all when its cfg
+   expression doesn't match the current target/command — so whether the
+   config errors depends on what you build.
+2. *False positives*: a sibling cfg section in the resetting layer that uses
+   `add`/`remove` is rejected even though it did **not** set
+   `replace = true` itself — and that same section may be perfectly
+   meaningful for other targets where no reset happens.
+
+The CHANGELOG (B-1 entry, CHANGELOG.md ~line 29) already states the intended
+rule: "`replace = true` combined with `add` or `remove` **in the same
+section**". The root cause is the main plan's S-3, which said "validate all
+sibling entries of the resetting layer" — that sentence encoded the old
+resolution-time behavior instead of the rule B-1 announced. The
+implementation followed the spec; the spec was wrong.
+
+**Decision.** Adopt the section-local rule, enforced in `validate.rs` at
+load time (not the "same combined layer" alternative — that rule is harder
+to state to a user, keeps the false-positive sibling rejection, and keeps
+error surfacing dependent on which cfg happens to match). The rule is purely
+syntactic — one TOML table, no chain context needed — which is exactly what
+the raw-JSON validation walk is for.
+
+**Normative rule.** A section (one TOML table = one scope) that sets
+`replace = true` may not use `add`/`remove` patch operations in any of its
+own patch-typed keys (`targets`, `exclude_packages`, and the feature-set
+keys). This constrains only that table's own keys: sibling cfg sections,
+broader/narrower sections, and nested `subcommands` tables (which are their
+own sections with their own `replace`) are unaffected. An `add`/`remove` in
+a *non-replacing* section that shares a layer with a replacing sibling is
+legal and applies onto the reset base (add onto defaults).
+
+**Implementation steps.**
+
+1. `validate.rs`: in the per-scope walk (which already visits every section
+   with its `ScopeId`), when the raw table has `"replace": true`, collect
+   every patch-typed key in the same table whose value is an object with a
+   non-empty `add` or `remove` array, and error listing the section path and
+   offending fields. Keep the substrings existing tests match
+   (`add/remove`, `replace`); a good shape:
+   `` `{field, …}` use add/remove patch operations in [{section}] with replace = true ``.
+   Check the raw JSON only — the deprecated feature spellings fold into
+   `add` *after* validation and must not retro-trigger this rule.
+2. `resolve.rs`: delete `validate_reset_layer` and
+   `collect_invalid_feature_patches`; `replace_start` reduces to the
+   `rposition` computation and becomes infallible (`fn(&[Layer]) -> usize`),
+   simplifying its three call sites (`resolve`, `exclude_packages`,
+   `targets_list`).
+3. Tests:
+   - Move the engine tests asserting the error
+     (`replace_disallows_add_remove`-family) to `validate.rs`, asserting at
+     `validate_package_metadata` / `validate_workspace_metadata` level.
+   - New: a broader section with `replace = true` + `add` errors even when a
+     narrower section also sets `replace = true`, and even when the broader
+     section's cfg would not match any planned target (deterministic,
+     load-time).
+   - New: a non-replacing sibling cfg with `add` alongside a replacing
+     sibling passes validation, and resolution applies the add onto the
+     reset base (assert the resolved outcome).
+   - New: `replace = true` on a section does not constrain patch ops inside
+     its nested `subcommands` tables (and vice versa).
+4. CHANGELOG: note the strictness increase — configs whose invalid
+   replacing section was previously shadowed (by a narrower reset or a
+   non-matching cfg) now error at load. This is the B-1 rule actually
+   enforced as worded.
+
+### F-2 (low): document the deprecated package-base `exclude_packages` carve-out
+
+**Finding.** The README matrix (README.md ~line 185) shows `—` for
+`exclude_packages` in all four package columns, but `validate.rs` accepts it
+at `PackageBase` (the deprecated root-package compatibility spelling, folded
+into the workspace base exclude set). The plan's own §5 matrix documents
+"`PkgBase` (deprecated)"; the README should say the same.
+
+**Steps.** Extend README footnote 2: the bare `pkg` scope accepts
+`exclude_packages` only as a **deprecated** root-package spelling kept for
+backwards compatibility — it is folded into the workspace base set (with a
+deprecation warning) and is rejected in `pkg·target`, `pkg·sub`, and
+`pkg·tgt·sub`. Optionally mark the `pkg` cell `—*`. The key stays accepted
+(no removal in this cycle); if it is ever removed, that is a separate
+breaking change. Docs only — no code.
+
+### F-3 (architecture): shrink and de-stabilize the public surface — no façade
+
+**Finding.** The raw nested schema (`ScopeConfig`/`SectionConfig`/root
+config) is re-exported as public API, partly at the crate root
+(`src/lib.rs:40-57`). The reviewer suggests separating raw config internals
+from a stable public resolved view.
+
+**Decision.** Agree with the concern, reject the façade. This crate is a
+CLI; the Rust API exists for its own two binaries and its integration-test
+suite, and nothing else consumes it. Building a stable public view (wrapper
+types, conversion layers, semver guarantees) would reintroduce exactly the
+kind of parallel-shape plumbing this redesign deleted. The resolved view
+already exists — `ResolvedFeatures` / `ResolvedFlags` — and needs no
+duplicate. Instead, make the API's status explicit and keep the root
+namespace small:
+
+1. `lib.rs`: remove crate-root re-exports of raw schema and patch types
+   (`config::patch::*`, the schema types, and any other internals not needed
+   by the binaries). Keep them `pub` **under their module paths** — the
+   integration tests in `tests/` compile against the public API and already
+   import module paths for most items. Retain a minimal root: `run`,
+   `Package`, `resolve_config`, `ResolvedFeatures`, `TargetTriple`,
+   `CfgEvaluator` (what tests use most and what a curious user would reach
+   for first). Update test imports mechanically.
+2. Crate-level docs (`lib.rs` `//!` header) and a one-line README note: the
+   Rust API is an implementation detail of the `cargo-fc` CLI with no
+   stability guarantees; the CLI is the interface. This removes the pressure
+   to design the schema types as if they were a contract.
+3. Explicitly out of scope: `#[doc(hidden)]` sprinkling, a separate
+   `api`/`facade` module, sealed wrappers, or making the schema types
+   `pub(crate)` (the external `tests/` directory needs them `pub`).
+
+**Acceptance for §11 overall.** `task test` and `task lint` green; the three
+new F-1 tests present; README footnote updated; crate root exports reduced
+with tests compiling against module paths; CHANGELOG entries for F-1
+(strictness) and F-3 (API surface note).
