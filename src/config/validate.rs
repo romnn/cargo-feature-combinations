@@ -16,6 +16,7 @@ const FEATURE_MATRIX_KEYS: &[&str] = &[
     "allow_feature_sets",
     "no_empty_feature_set",
     "matrix",
+    "max_combinations",
 ];
 
 const DEPRECATED_FEATURE_KEYS: &[&str] = &["skip_feature_sets", "denylist", "exact_combinations"];
@@ -31,6 +32,8 @@ const PATCH_TYPED_KEYS: &[&str] = &[
     "include_feature_sets",
     "allow_feature_sets",
 ];
+
+const PATCH_OP_KEYS: &[&str] = &["override", "add", "remove"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingKind {
@@ -117,8 +120,7 @@ fn validate_scope(value: &serde_json::Value, section: &str, scope: ScopeId) -> e
     };
     for (key, value) in map {
         let Some(kind) = setting_kind(key) else {
-            bail_unknown(key, section)?;
-            continue;
+            return bail_unknown(key, section);
         };
         if matches!(
             kind,
@@ -130,15 +132,98 @@ fn validate_scope(value: &serde_json::Value, section: &str, scope: ScopeId) -> e
         if let Err(reason) = valid_in(kind, scope) {
             eyre::bail!("`{key}` is not valid in [{section}]: {reason}");
         }
-        if kind == SettingKind::Driver
-            && value
-                .as_str()
-                .is_some_and(|driver| driver.trim().is_empty())
-        {
-            eyre::bail!("`driver` must not be empty in [{section}]");
-        }
+        validate_value_shape(key, value, kind, section)?;
     }
     validate_replace_patch_ops(map, section)?;
+    Ok(())
+}
+
+fn validate_value_shape(
+    key: &str,
+    value: &serde_json::Value,
+    kind: SettingKind,
+    section: &str,
+) -> eyre::Result<()> {
+    match value_shape(key, kind) {
+        ValueShape::Bool if !value.is_boolean() => {
+            eyre::bail!("`{key}` in [{section}] must be a boolean");
+        }
+        ValueShape::String => {
+            let Some(driver) = value.as_str() else {
+                eyre::bail!("`{key}` in [{section}] must be a string");
+            };
+            if driver.trim().is_empty() {
+                eyre::bail!("`driver` must not be empty in [{section}]");
+            }
+        }
+        ValueShape::Patch => validate_patch_shape(key, value, section)?,
+        ValueShape::Array if !value.is_array() => {
+            eyre::bail!("`{key}` in [{section}] must be an array");
+        }
+        ValueShape::Object if !value.is_object() => {
+            eyre::bail!("`{key}` in [{section}] must be a table/object");
+        }
+        ValueShape::PositiveInteger => {
+            let Some(value) = value.as_u64() else {
+                eyre::bail!("`{key}` in [{section}] must be a positive integer");
+            };
+            if value == 0 {
+                eyre::bail!("`{key}` in [{section}] must be greater than zero");
+            }
+        }
+        ValueShape::Bool | ValueShape::Array | ValueShape::Object => {}
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ValueShape {
+    Bool,
+    String,
+    Patch,
+    Array,
+    Object,
+    PositiveInteger,
+}
+
+fn value_shape(key: &str, kind: SettingKind) -> ValueShape {
+    match kind {
+        SettingKind::Flag | SettingKind::ExpandTargets | SettingKind::Replace => ValueShape::Bool,
+        SettingKind::Driver => ValueShape::String,
+        SettingKind::FeatureMatrix => match key {
+            "skip_optional_dependencies" | "no_empty_feature_set" => ValueShape::Bool,
+            "matrix" => ValueShape::Object,
+            "max_combinations" => ValueShape::PositiveInteger,
+            _ => ValueShape::Patch,
+        },
+        SettingKind::DeprecatedFeature => ValueShape::Array,
+        SettingKind::ExcludePackages | SettingKind::TargetsList => ValueShape::Patch,
+        SettingKind::TargetTable | SettingKind::SubcommandsTable => ValueShape::Object,
+    }
+}
+
+fn validate_patch_shape(key: &str, value: &serde_json::Value, section: &str) -> eyre::Result<()> {
+    if value.is_array() {
+        return Ok(());
+    }
+
+    let Some(map) = value.as_object() else {
+        eyre::bail!(
+            "`{key}` in [{section}] must be an array or a patch object with override/add/remove arrays"
+        );
+    };
+
+    for (op, op_value) in map {
+        if !PATCH_OP_KEYS.contains(&op.as_str()) {
+            eyre::bail!(
+                "`{key}` in [{section}] has unknown patch operation `{op}`; expected one of override, add, remove"
+            );
+        }
+        if !op_value.is_array() {
+            eyre::bail!("`{key}.{op}` in [{section}] must be an array");
+        }
+    }
+
     Ok(())
 }
 
@@ -261,7 +346,10 @@ fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str> {
             Ok(())
         }
         SettingKind::DeprecatedFeature if scope == ScopeId::PackageBase => Ok(()),
-        SettingKind::FeatureMatrix | SettingKind::DeprecatedFeature => {
+        SettingKind::DeprecatedFeature => Err(
+            "deprecated feature-matrix keys are accepted only at package base scope; use `exclude_feature_sets`, `exclude_features`, or `include_feature_sets` in target/subcommand scopes",
+        ),
+        SettingKind::FeatureMatrix => {
             Err("feature-matrix settings are per-package and are not valid in workspace scope")
         }
         SettingKind::TargetTable
@@ -288,6 +376,9 @@ fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str> {
 mod tests {
     use super::{SettingKind, setting_kind, valid_in};
     use crate::config::scope::ScopeId;
+    use serde::Serialize;
+    use serde_json::Value;
+    use std::collections::BTreeSet;
 
     fn scope_ids() -> [ScopeId; 8] {
         [
@@ -323,6 +414,17 @@ mod tests {
         {
             assert!(setting_kind(key).is_some(), "missing kind for {key}");
         }
+    }
+
+    #[test]
+    fn feature_matrix_key_list_matches_schema() {
+        let schema_keys = keys_for(crate::config::FeatureMatrixPatch::default());
+        let validation_keys = super::FEATURE_MATRIX_KEYS
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(validation_keys, schema_keys);
     }
 
     #[test]
@@ -442,6 +544,47 @@ mod tests {
         .expect_err("workspace subcommand should reject per-package feature-matrix keys");
 
         assert!(err.to_string().contains("per-package"));
+    }
+
+    #[test]
+    fn package_metadata_rejects_wrong_value_shapes_with_key_context() {
+        let err = super::validate_package_metadata(
+            &serde_json::json!({ "exclude_features": "gpu" }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("patch field should reject string value");
+        assert!(err.to_string().contains("exclude_features"), "{err}");
+        assert!(err.to_string().contains("must be an array"), "{err}");
+
+        let err = super::validate_package_metadata(
+            &serde_json::json!({ "pedantic": "true" }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("flag field should reject string value");
+        assert!(err.to_string().contains("pedantic"), "{err}");
+        assert!(err.to_string().contains("boolean"), "{err}");
+
+        let err = super::validate_package_metadata(
+            &serde_json::json!({ "exclude_features": { "append": ["gpu"] } }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("patch field should reject unknown operation");
+        assert!(err.to_string().contains("append"), "{err}");
+    }
+
+    #[test]
+    fn deprecated_feature_keys_have_specific_scope_error() {
+        let err = super::validate_package_metadata(
+            &serde_json::json!({
+                "target": { "cfg(unix)": { "denylist": ["gpu"] } },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("deprecated feature key should fail outside package base");
+
+        let message = err.to_string();
+        assert!(message.contains("deprecated"), "{message}");
+        assert!(message.contains("exclude_features"), "{message}");
     }
 
     #[test]
@@ -665,5 +808,12 @@ mod tests {
             "package.metadata.cargo-fc",
         )
         .expect("subcommand replace should not constrain parent patches");
+    }
+
+    fn keys_for<T: Serialize>(value: T) -> BTreeSet<String> {
+        match serde_json::to_value(value).expect("serialize default") {
+            Value::Object(map) => map.keys().cloned().collect(),
+            other => panic!("expected object, got {other:?}"),
+        }
     }
 }

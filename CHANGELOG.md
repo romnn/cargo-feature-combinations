@@ -8,8 +8,8 @@
   `[package.metadata.cargo-fc.subcommands.<command>]` table now accepts the same
   feature-shaping keys as a target override (`exclude_features`,
   `include_features`, `only_features`, `*_feature_sets`,
-  `skip_optional_dependencies`, `no_empty_feature_set`, `matrix`), so the feature
-  combinations built for one cargo subcommand can differ from another — for
+  `skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`,
+  `matrix`), so the feature combinations built for one cargo subcommand can differ from another — for
   example enabling a feature for `cargo fc build` but excluding it for
   `cargo fc test`. Target and subcommand overrides compose via
   `target.'cfg(...)'.subcommands.<command>`, and resolve broad-to-narrow
@@ -19,6 +19,8 @@
 - Patch-object forms are now accepted at base scopes that previously accepted
   only plain arrays, including package-base feature keys and workspace-base
   `exclude_packages` / `targets`.
+- Added `max_combinations` package feature-matrix config to override the
+  default 100000-combination safety limit.
 
 ### Changed
 
@@ -46,6 +48,20 @@
   points; raw config schema and patch types remain available under their module
   paths. The CLI is the supported interface, and the Rust API has no stability
   guarantees.
+- cargo-fc parser commands are now positional: bare `matrix` / `version` are
+  cargo-fc commands only at the cargo subcommand position, and `--help` /
+  `--version` after a cargo subcommand are forwarded to Cargo.
+- Repeated cargo-fc value flags such as `--driver` now resolve last-wins.
+- `--errors-only` now appends `-Awarnings` after ambient `RUSTFLAGS`, and
+  extends `CARGO_ENCODED_RUSTFLAGS` when that variable is present.
+- `CARGO_FC_VERBOSE` is now the preferred verbose-header environment variable;
+  `VERBOSE` remains as a deprecated fallback.
+- `cargo fc` with no subcommand prints help instead of running a matrix of
+  plain `cargo` invocations.
+- Child diagnostics and progress now stream on stderr; stdout is reserved for
+  summaries and matrix JSON.
+- Automatically selected `cargo-zigbuild` falls back to plain Cargo when the
+  driver is not installed. Explicitly configured drivers still fail if missing.
 
 ## [0.2.3]
 

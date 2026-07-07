@@ -243,10 +243,88 @@ fn selected_command_entry<'a>(
     resolved: Option<&str>,
     subcommands: &'a std::collections::BTreeMap<String, ScopeConfig>,
 ) -> Option<(&'a str, &'a ScopeConfig)> {
-    let scope = crate::cli::selected_command_override(raw, resolved, subcommands)?;
-    let name = subcommands
-        .iter()
-        .find_map(|(name, candidate)| std::ptr::eq(candidate, scope).then_some(name.as_str()))
-        .unwrap_or_default();
-    Some((name, scope))
+    if let Some(raw) = raw
+        && let Some(entry) = command_entry_for_token(raw, subcommands)
+    {
+        return Some(entry);
+    }
+    if resolved == raw {
+        None
+    } else {
+        resolved.and_then(|token| command_entry_for_token(token, subcommands))
+    }
+}
+
+fn command_entry_for_token<'a>(
+    token: &str,
+    subcommands: &'a std::collections::BTreeMap<String, ScopeConfig>,
+) -> Option<(&'a str, &'a ScopeConfig)> {
+    if let Some((name, scope)) = subcommands.get_key_value(token) {
+        return Some((name.as_str(), scope));
+    }
+    let canonical = crate::cli::builtin_canonical_command(token)?;
+    subcommands
+        .get_key_value(canonical)
+        .map(|(name, scope)| (name.as_str(), scope))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_entry_for_token;
+    use crate::config::ScopeConfig;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn builtin_short_alias_inherits_long_command_policy() {
+        let subcommands = BTreeMap::from([(
+            "build".to_string(),
+            ScopeConfig {
+                expand_targets: Some(false),
+                ..ScopeConfig::default()
+            },
+        )]);
+
+        let override_config = command_entry_for_token("b", &subcommands);
+
+        assert_eq!(
+            override_config.and_then(|(_name, config)| config.expand_targets),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn builtin_short_alias_exact_policy_wins_over_long_command_policy() {
+        let subcommands = BTreeMap::from([
+            (
+                "build".to_string(),
+                ScopeConfig {
+                    expand_targets: Some(false),
+                    ..ScopeConfig::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                ScopeConfig {
+                    expand_targets: Some(true),
+                    ..ScopeConfig::default()
+                },
+            ),
+        ]);
+
+        let override_config = command_entry_for_token("b", &subcommands);
+
+        assert_eq!(
+            override_config.and_then(|(_name, config)| config.expand_targets),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn command_entry_returns_matched_name() {
+        let subcommands = BTreeMap::from([("test".to_string(), ScopeConfig::default())]);
+
+        let (name, _config) = command_entry_for_token("t", &subcommands).expect("alias match");
+
+        assert_eq!(name, "test");
+    }
 }

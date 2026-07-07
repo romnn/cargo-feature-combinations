@@ -33,6 +33,8 @@ pub struct ResolvedFeatures {
     pub no_empty_feature_set: bool,
     /// Arbitrary user-defined matrix metadata.
     pub matrix: serde_json::Map<String, serde_json::Value>,
+    /// Maximum generated feature combinations before failing.
+    pub max_combinations: Option<u128>,
 }
 
 impl ResolvedFeatures {
@@ -267,59 +269,40 @@ fn apply_single_feature_patch(out: &mut ResolvedFeatures, features: &FeatureMatr
     if let Some(value) = features.no_empty_feature_set {
         out.no_empty_feature_set = value;
     }
+    if let Some(value) = features.max_combinations {
+        out.max_combinations = Some(value);
+    }
 
     if let Some(patch) = &features.exclude_features {
-        apply_single_string_patch(&mut out.exclude_features, patch);
+        out.exclude_features = SetPatchOps::from_single(patch).apply_to(&out.exclude_features);
     }
     if let Some(patch) = &features.include_features {
-        apply_single_string_patch(&mut out.include_features, patch);
+        out.include_features = SetPatchOps::from_single(patch).apply_to(&out.include_features);
     }
     if let Some(patch) = &features.only_features {
-        apply_single_string_patch(&mut out.only_features, patch);
+        out.only_features = SetPatchOps::from_single(patch).apply_to(&out.only_features);
     }
 
     if let Some(patch) = &features.isolated_feature_sets {
-        apply_single_feature_set_patch(&mut out.isolated_feature_sets, patch);
+        out.isolated_feature_sets =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.isolated_feature_sets);
     }
     if let Some(patch) = &features.exclude_feature_sets {
-        apply_single_feature_set_patch(&mut out.exclude_feature_sets, patch);
+        out.exclude_feature_sets =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.exclude_feature_sets);
     }
     if let Some(patch) = &features.include_feature_sets {
-        apply_single_feature_set_patch(&mut out.include_feature_sets, patch);
+        out.include_feature_sets =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.include_feature_sets);
     }
     if let Some(patch) = &features.allow_feature_sets {
-        apply_single_feature_set_patch(&mut out.allow_feature_sets, patch);
+        out.allow_feature_sets =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.allow_feature_sets);
     }
 
     if let Some(matrix) = &features.matrix {
         merge_matrix(&mut out.matrix, matrix);
     }
-}
-
-fn apply_single_string_patch(out: &mut HashSet<String>, patch: &StringSetPatch) {
-    let mut next = patch
-        .override_value()
-        .cloned()
-        .unwrap_or_else(|| out.clone());
-    for value in patch.remove_values() {
-        next.remove(value);
-    }
-    next.extend(patch.add_values().iter().cloned());
-    *out = next;
-}
-
-fn apply_single_feature_set_patch(out: &mut Vec<HashSet<String>>, patch: &FeatureSetVecPatch) {
-    let mut next = patch
-        .override_value()
-        .cloned()
-        .unwrap_or_else(|| out.clone());
-    next.retain(|set| !patch.remove_values().contains(set));
-    for set in patch.add_values() {
-        if !next.contains(set) {
-            next.push(set.clone());
-        }
-    }
-    *out = next;
 }
 
 fn apply_feature_patches<'a>(
@@ -343,6 +326,13 @@ fn apply_feature_patches<'a>(
         })?
     {
         out.no_empty_feature_set = value;
+    }
+    if let Some(value) =
+        super::combine_u128("max_combinations", source_kind, &patches, |features| {
+            features.max_combinations
+        })?
+    {
+        out.max_combinations = Some(value);
     }
 
     macro_rules! resolve_string_set {

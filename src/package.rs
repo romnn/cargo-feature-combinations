@@ -4,12 +4,12 @@ use crate::config::patch::{FeatureSetVecPatch, StringSetPatch};
 use crate::config::{Config, ResolvedFeatures, validate_package_metadata};
 use crate::print_warning;
 use crate::{DEFAULT_METADATA_KEY, find_metadata_value, pkg_metadata_section};
-use color_eyre::eyre;
+use color_eyre::eyre::{self, WrapErr};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
-const MAX_FEATURE_COMBINATIONS: u128 = 100_000;
+const DEFAULT_MAX_FEATURE_COMBINATIONS: u128 = 100_000;
 
 /// Errors that can occur while generating feature combinations.
 #[derive(Debug)]
@@ -97,7 +97,16 @@ impl Package for cargo_metadata::Package {
         let (mut config, key) = match find_metadata_value(&self.metadata) {
             Some((value, key)) => {
                 validate_package_metadata(value, &pkg_metadata_section(key))?;
-                (serde_json::from_value(value.clone())?, key)
+                (
+                    serde_json::from_value(value.clone()).wrap_err_with(|| {
+                        format!(
+                            "invalid [{}] configuration in package `{}`",
+                            pkg_metadata_section(key),
+                            self.name
+                        )
+                    })?,
+                    key,
+                )
             }
             None => (Config::default(), DEFAULT_METADATA_KEY),
         };
@@ -241,6 +250,9 @@ impl Package for cargo_metadata::Package {
                 &effective_exclude_features,
                 &config.include_features,
                 &config.only_features,
+                config
+                    .max_combinations
+                    .unwrap_or(DEFAULT_MAX_FEATURE_COMBINATIONS),
             )?
         } else {
             generate_isolated_base_powerset(
@@ -250,6 +262,9 @@ impl Package for cargo_metadata::Package {
                 &effective_exclude_features,
                 &config.include_features,
                 &config.only_features,
+                config
+                    .max_combinations
+                    .unwrap_or(DEFAULT_MAX_FEATURE_COMBINATIONS),
             )?
         };
 
@@ -373,10 +388,11 @@ fn checked_num_combinations(num_features: usize) -> Option<u128> {
 fn ensure_within_combination_limit(
     package_name: &str,
     num_features: usize,
+    limit: u128,
 ) -> Result<(), FeatureCombinationError> {
     let num_configurations = checked_num_combinations(num_features);
     let exceeds = match num_configurations {
-        Some(n) => n > MAX_FEATURE_COMBINATIONS,
+        Some(n) => n > limit,
         None => true,
     };
 
@@ -385,7 +401,7 @@ fn ensure_within_combination_limit(
             package: package_name.to_string(),
             num_features,
             num_configurations,
-            limit: MAX_FEATURE_COMBINATIONS,
+            limit,
         });
     }
 
@@ -404,6 +420,7 @@ fn generate_global_base_powerset<'a>(
     exclude_features: &HashSet<String>,
     include_features: &HashSet<String>,
     only_features: &HashSet<String>,
+    max_combinations: u128,
 ) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
     let included = include_features
         .iter()
@@ -417,7 +434,7 @@ fn generate_global_base_powerset<'a>(
         .filter(|ft| only_features.is_empty() || only_features.contains(*ft))
         .collect::<BTreeSet<_>>();
 
-    ensure_within_combination_limit(package_name, features.len())?;
+    ensure_within_combination_limit(package_name, features.len(), max_combinations)?;
 
     Ok(features
         .into_iter()
@@ -445,6 +462,7 @@ fn generate_isolated_base_powerset<'a>(
     exclude_features: &HashSet<String>,
     include_features: &HashSet<String>,
     only_features: &HashSet<String>,
+    max_combinations: u128,
 ) -> Result<BTreeSet<BTreeSet<&'a String>>, FeatureCombinationError> {
     // Collect known package features for easy querying
     let known_features = package_features.keys().collect::<HashSet<_>>();
@@ -467,17 +485,17 @@ fn generate_isolated_base_powerset<'a>(
                 package: package_name.to_string(),
                 num_features,
                 num_configurations: None,
-                limit: MAX_FEATURE_COMBINATIONS,
+                limit: max_combinations,
             });
         };
 
         worst_case_total = worst_case_total.saturating_add(n);
-        if worst_case_total > MAX_FEATURE_COMBINATIONS {
+        if worst_case_total > max_combinations {
             return Err(FeatureCombinationError::TooManyConfigurations {
                 package: package_name.to_string(),
                 num_features,
                 num_configurations: Some(worst_case_total),
-                limit: MAX_FEATURE_COMBINATIONS,
+                limit: max_combinations,
             });
         }
     }
@@ -594,6 +612,26 @@ pub(crate) mod test {
         let have = package.feature_combinations(&config)?;
 
         sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_respects_configured_max_combinations() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["foo", "bar"])?;
+        let config = ResolvedFeatures {
+            max_combinations: Some(3),
+            ..ResolvedFeatures::default()
+        };
+
+        let err = package
+            .feature_combinations(&config)
+            .expect_err("2 features produce 4 combinations and should exceed limit 3");
+
+        assert!(matches!(
+            err.downcast_ref::<FeatureCombinationError>(),
+            Some(FeatureCombinationError::TooManyConfigurations { limit: 3, .. })
+        ));
         Ok(())
     }
 

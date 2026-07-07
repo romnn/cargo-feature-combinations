@@ -50,49 +50,6 @@ pub struct Options {
     pub flags: FlagConfig,
 }
 
-/// Helper trait to provide simple argument parsing over `Vec<String>`.
-trait ArgumentParser {
-    /// Extract all occurrences of an argument and their values.
-    ///
-    /// When `has_value` is `true`, this matches `--flag value` and
-    /// `--flag=value` forms and returns the value part. When `has_value` is
-    /// `false`, it matches bare flags like `--flag`. In both modes, `--`
-    /// remains the forwarded-argument boundary and is never consumed as a flag
-    /// value.
-    fn get_all(&self, arg: &str, has_value: bool)
-    -> Vec<(std::ops::RangeInclusive<usize>, String)>;
-}
-
-impl ArgumentParser for Vec<String> {
-    fn get_all(
-        &self,
-        arg: &str,
-        has_value: bool,
-    ) -> Vec<(std::ops::RangeInclusive<usize>, String)> {
-        let mut matched = Vec::new();
-        for (idx, a) in self.iter().enumerate() {
-            if a == "--" {
-                break;
-            }
-            match (a, self.get(idx + 1)) {
-                (key, Some(value)) if key == arg && has_value && value != "--" => {
-                    matched.push((idx..=idx + 1, value.clone()));
-                }
-                (key, _) if key == arg && !has_value => {
-                    matched.push((idx..=idx, key.clone()));
-                }
-                (key, _) if has_value && key.starts_with(&format!("{arg}=")) => {
-                    let value = key.trim_start_matches(&format!("{arg}="));
-                    matched.push((idx..=idx, value.to_string()));
-                }
-                _ => {}
-            }
-        }
-        matched.reverse();
-        matched
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum CargoSubcommand {
     Build,
@@ -134,34 +91,6 @@ pub(crate) fn cargo_subcommand_token(args: &[impl AsRef<str>]) -> Option<String>
 /// [`cargo_subcommand_token`]. Used by alias expansion to replace the token in
 /// place.
 pub(crate) fn subcommand_token_index(args: &[impl AsRef<str>]) -> Option<usize> {
-    fn is_no_value_flag(arg: &str) -> bool {
-        matches!(
-            arg,
-            "-q" | "--quiet"
-                | "--frozen"
-                | "--locked"
-                | "--offline"
-                | "-h"
-                | "--help"
-                | "-V"
-                | "--version"
-                | "--list"
-                | "--verbose"
-        ) || arg.starts_with("-v")
-    }
-
-    fn takes_value(arg: &str) -> bool {
-        matches!(arg, "--color" | "--config" | "--explain" | "-C" | "-Z")
-    }
-
-    fn has_inline_value(arg: &str) -> bool {
-        arg.starts_with("--color=")
-            || arg.starts_with("--config=")
-            || arg.starts_with("--explain=")
-            || (arg.starts_with("-C") && arg.len() > 2)
-            || (arg.starts_with("-Z") && arg.len() > 2)
-    }
-
     let mut skip_next = false;
     for (idx, arg) in args.iter().map(AsRef::as_ref).enumerate() {
         if skip_next {
@@ -177,14 +106,14 @@ pub(crate) fn subcommand_token_index(args: &[impl AsRef<str>]) -> Option<usize> 
         if arg.starts_with('+') {
             continue;
         }
-        if is_no_value_flag(arg) {
+        if is_cargo_no_value_flag(arg) {
             continue;
         }
-        if takes_value(arg) {
+        if cargo_flag_takes_value(arg) {
             skip_next = true;
             continue;
         }
-        if has_inline_value(arg) {
+        if cargo_flag_has_inline_value(arg) {
             continue;
         }
 
@@ -200,6 +129,34 @@ pub(crate) fn subcommand_token_index(args: &[impl AsRef<str>]) -> Option<usize> 
     }
 
     None
+}
+
+fn is_cargo_no_value_flag(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-q" | "--quiet"
+            | "--frozen"
+            | "--locked"
+            | "--offline"
+            | "-h"
+            | "--help"
+            | "-V"
+            | "--version"
+            | "--list"
+            | "--verbose"
+    ) || arg.starts_with("-v")
+}
+
+fn cargo_flag_takes_value(arg: &str) -> bool {
+    matches!(arg, "--color" | "--config" | "--explain" | "-C" | "-Z")
+}
+
+fn cargo_flag_has_inline_value(arg: &str) -> bool {
+    arg.starts_with("--color=")
+        || arg.starts_with("--config=")
+        || arg.starts_with("--explain=")
+        || (arg.starts_with("-C") && arg.len() > 2)
+        || (arg.starts_with("-Z") && arg.len() > 2)
 }
 
 /// Extract a rustup toolchain override from forwarded Cargo args.
@@ -242,6 +199,12 @@ fn builtin_command(token: &str) -> Option<BuiltinCommand> {
         diagnostics_safe,
         subcommand,
     })
+}
+
+/// Return the canonical built-in command name for a token or short alias.
+#[must_use]
+pub(crate) fn builtin_canonical_command(token: &str) -> Option<&'static str> {
+    builtin_command(token).map(|command| command.canonical)
 }
 
 /// Whether cargo-fc's built-in registry knows this command accepts `--target`.
@@ -353,39 +316,6 @@ pub(crate) fn known_quiet_cargo_subcommand(token: Option<&str>) -> bool {
     )
 }
 
-/// Return a command override for one token, including built-in short aliases.
-#[must_use]
-pub(crate) fn command_override_for_token<'a>(
-    token: Option<&str>,
-    subcommands: &'a std::collections::BTreeMap<String, crate::config::CommandCapabilities>,
-) -> Option<&'a crate::config::CommandCapabilities> {
-    let token = token?;
-    if let Some(capability) = subcommands.get(token) {
-        return Some(capability);
-    }
-    builtin_command(token).and_then(|command| subcommands.get(command.canonical))
-}
-
-/// Return the command override for the user's token, falling back to the
-/// resolved alias target only when the raw token has no explicit entry.
-#[must_use]
-pub(crate) fn selected_command_override<'a>(
-    raw_token: Option<&str>,
-    resolved_token: Option<&str>,
-    subcommands: &'a std::collections::BTreeMap<String, crate::config::CommandCapabilities>,
-) -> Option<&'a crate::config::CommandCapabilities> {
-    if let Some(raw) = raw_token
-        && let Some(capability) = command_override_for_token(Some(raw), subcommands)
-    {
-        return Some(capability);
-    }
-    if resolved_token == raw_token {
-        None
-    } else {
-        command_override_for_token(resolved_token, subcommands)
-    }
-}
-
 static VALID_BOOLS: [&str; 6] = ["yes", "true", "y", "t", "1", "on"];
 static FALSE_BOOLS: [&str; 6] = ["no", "false", "n", "f", "0", "off"];
 
@@ -398,20 +328,35 @@ USAGE:
 SUBCOMMAND:
     matrix                  Print JSON feature combination matrix to stdout
         --pretty            Print pretty JSON
+    version                 Print version information
 
 OPTIONS:
-    --help                  Print help information
+    -h, --help              Print help information
+    -V, --version           Print version information
+    --manifest-path <path>  Path to Cargo.toml to inspect
+    -p, --package <name>    Include only this workspace package (repeatable)
+    --exclude-package <name>
+    --exclude <name>        Exclude a workspace package from feature
+                            combinations (repeatable). `--exclude` is accepted
+                            with `--workspace` for Cargo-compatible workspace
+                            package selection.
     --diagnostics-only      Show only diagnostics (warnings/errors) per
                             feature combination. Subcommand must accept
                             --message-format=... and emit rustc JSON
                             diagnostics (e.g. build, check, clippy, doc,
                             or any alias/wrapper that does the same)
-    --dedupe                Like --diagnostics-only, but also deduplicate
+    --dedupe, --dedup       Like --diagnostics-only, but also deduplicate
                             identical diagnostics across feature combinations
-    --summary-only          Hide cargo output and only show the final summary
+    --summary-only
+    --summary
+    --silent                Hide cargo output and only show the final summary
     --fail-fast             Fail fast on the first bad feature combination
-    --errors-only           Allow all warnings, show errors only (-Awarnings)
-    --exclude-package       Exclude a package from feature combinations
+    --errors-only           Allow all warnings, show errors only (-Awarnings).
+                            This appends to RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS;
+                            like any RUSTFLAGS env override, it shadows
+                            config-file target rustflags.
+    --packages-only         In matrix mode, emit one row per package-target
+                            instead of one row per feature combination
     --only-packages-with-lib-target
                             Only consider packages with a library target
     --pedantic              Treat warnings like errors in summary and
@@ -439,6 +384,12 @@ OPTIONS:
                             dependencies cross-compile. Also settable via
                             [workspace.metadata.cargo-fc].driver; pass `cargo` to
                             force plain cargo.
+
+ENVIRONMENT:
+    CARGO                   Program used for plain Cargo invocations
+    CARGO_DRIVER            Set in child processes to the resolved driver
+    CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
+    VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
 
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
@@ -509,6 +460,9 @@ allow_feature_sets = [
 # it would otherwise be generated.
 no_empty_feature_set = true
 
+# Override the default safety limit of 100000 generated feature combinations.
+max_combinations = 250000
+
 # Automatically prune redundant feature combinations whose resolved feature
 # set (after Cargo's feature unification) matches a smaller combination.
 # Enabled by default. Disable with `prune_implied = false`.
@@ -574,16 +528,17 @@ pub(crate) fn print_help() {
     println!("{HELP_TEXT}");
 }
 
-fn mark_flag(args: &mut Vec<String>, flag: &str, slot: &mut Option<bool>) {
-    for (span, _) in args.get_all(flag, false) {
-        *slot = Some(true);
-        args.drain(span);
-    }
-}
-
 fn verbose_from_env() -> Option<bool> {
-    let value = std::env::var("VERBOSE").ok()?;
-    verbose_from_env_value(&value)
+    std::env::var("CARGO_FC_VERBOSE")
+        .ok()
+        .as_deref()
+        .and_then(verbose_from_env_value)
+        .or_else(|| {
+            std::env::var("VERBOSE")
+                .ok()
+                .as_deref()
+                .and_then(verbose_from_env_value)
+        })
 }
 
 fn verbose_from_env_value(value: &str) -> Option<bool> {
@@ -606,12 +561,8 @@ fn verbose_from_env_value(value: &str) -> Option<bool> {
 ///
 /// Returns an error if the manifest path passed via `--manifest-path` does
 /// not exist or can not be canonicalized.
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear CLI argument parser; splitting it into fragments hurts readability more than its length"
-)]
 pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
-    let mut args: Vec<String> = std::env::args_os()
+    let args: Vec<String> = std::env::args_os()
         // Skip executable name
         .skip(1)
         // Skip our own cargo-* command name
@@ -622,6 +573,10 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         .map(|s| s.to_string_lossy().to_string())
         .collect();
 
+    parse_normalized_args(&args)
+}
+
+fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)> {
     let verbose_from_env = verbose_from_env();
     let mut options = Options {
         flags: FlagConfig {
@@ -631,144 +586,281 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
         ..Options::default()
     };
 
-    // Every cargo-fc option extracted below must use `get_all` or `mark_flag`.
-    // Those helpers stop at the first `--`, so `cargo fc run -- --help` keeps
-    // `--help` as a binary argument instead of turning into cargo-fc help.
-    // Extract path to manifest to operate on
-    for (span, manifest_path) in args.get_all("--manifest-path", true) {
-        let manifest_path = PathBuf::from(manifest_path);
+    let mut forwarded = Vec::with_capacity(args.len());
+    let mut index = 0usize;
+    let mut subcommand_seen = false;
+    let mut subcommand_blocked = false;
+    let mut raw_manifest_path: Option<PathBuf> = None;
+
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            if let Some(rest) = args.get(index..) {
+                forwarded.extend(rest.iter().cloned());
+            }
+            break;
+        }
+
+        if let Some(flag) = cargo_fc_bool_inline_flag(arg) {
+            eyre::bail!(
+                "{flag} does not accept an inline value; configure false values in Cargo.toml"
+            );
+        }
+
+        if let Some(consumed) =
+            consume_value_option(args, index, &mut options, &mut raw_manifest_path)?
+        {
+            index += consumed;
+            continue;
+        }
+
+        if consume_flag_or_command(arg, &mut options, &mut subcommand_seen, subcommand_blocked) {
+            index += 1;
+            continue;
+        }
+
+        if !subcommand_seen && !subcommand_blocked {
+            if let Some(consumed) =
+                forward_leading_cargo_arg(args, index, arg, &mut forwarded, &mut subcommand_blocked)
+            {
+                index += consumed;
+                continue;
+            }
+            subcommand_seen = true;
+        }
+
+        forwarded.push(arg.clone());
+        index += 1;
+    }
+
+    if let Some(manifest_path) = raw_manifest_path {
         let manifest_path = manifest_path
             .canonicalize()
             .wrap_err_with(|| format!("manifest {} does not exist", manifest_path.display()))?;
         options.manifest_path = Some(manifest_path);
-        args.drain(span);
     }
 
-    // Extract packages to operate on
-    for flag in ["--package", "-p"] {
-        for (span, package) in args.get_all(flag, true) {
-            options.packages.insert(package);
-            args.drain(span);
+    Ok((options, forwarded))
+}
+
+fn consume_value_option(
+    args: &[String],
+    index: usize,
+    options: &mut Options,
+    raw_manifest_path: &mut Option<PathBuf>,
+) -> eyre::Result<Option<usize>> {
+    let Some(arg) = args.get(index).map(String::as_str) else {
+        return Ok(None);
+    };
+
+    if let Some(value) = inline_value(arg, "--manifest-path") {
+        *raw_manifest_path = Some(PathBuf::from(value));
+        return Ok(Some(1));
+    }
+    if arg == "--manifest-path" {
+        *raw_manifest_path = Some(PathBuf::from(next_value(args, index, arg)?));
+        return Ok(Some(2));
+    }
+
+    if let Some(value) = inline_value(arg, "--package") {
+        insert_trimmed(&mut options.packages, value);
+        return Ok(Some(1));
+    }
+    if arg == "--package" || arg == "-p" {
+        insert_trimmed(&mut options.packages, &next_value(args, index, arg)?);
+        return Ok(Some(2));
+    }
+    if let Some(value) = arg.strip_prefix("-p")
+        && !value.is_empty()
+    {
+        insert_trimmed(&mut options.packages, value);
+        return Ok(Some(1));
+    }
+
+    if let Some(value) =
+        inline_value(arg, "--exclude-package").or_else(|| inline_value(arg, "--exclude"))
+    {
+        insert_trimmed(&mut options.exclude_packages, value);
+        return Ok(Some(1));
+    }
+    if arg == "--exclude-package" || arg == "--exclude" {
+        insert_trimmed(
+            &mut options.exclude_packages,
+            &next_value(args, index, arg)?,
+        );
+        return Ok(Some(2));
+    }
+
+    if let Some(value) = inline_value(arg, "--driver") {
+        options.driver = Some(value.to_string());
+        return Ok(Some(1));
+    }
+    if arg == "--driver" {
+        options.driver = Some(next_value(args, index, arg)?);
+        return Ok(Some(2));
+    }
+
+    Ok(None)
+}
+
+fn next_value(args: &[String], index: usize, flag: &str) -> eyre::Result<String> {
+    let Some(value) = args.get(index + 1).filter(|value| value.as_str() != "--") else {
+        eyre::bail!("{flag} requires a value");
+    };
+    Ok(value.clone())
+}
+
+fn consume_flag_or_command(
+    arg: &str,
+    options: &mut Options,
+    subcommand_seen: &mut bool,
+    subcommand_blocked: bool,
+) -> bool {
+    match arg {
+        "--only-packages-with-lib-target" => {
+            options.flags.only_packages_with_lib_target = Some(true);
         }
-    }
-
-    for (span, package) in args.get_all("--exclude-package", true) {
-        options.exclude_packages.insert(package.trim().to_string());
-        args.drain(span);
-    }
-    for (span, driver) in args.get_all("--driver", true) {
-        options.driver = Some(driver);
-        args.drain(span);
-    }
-
-    mark_flag(
-        &mut args,
-        "--only-packages-with-lib-target",
-        &mut options.flags.only_packages_with_lib_target,
-    );
-
-    // Check for matrix command
-    for (span, _) in args.get_all("matrix", false) {
-        options.command = Some(Command::FeatureMatrix { pretty: false });
-        args.drain(span);
-    }
-    // Check for pretty matrix option
-    for (span, _) in args.get_all("--pretty", false) {
-        if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
-            *pretty = true;
-        }
-        args.drain(span);
-    }
-
-    // Check for help command
-    for (span, _) in args.get_all("--help", false) {
-        options.command = Some(Command::Help);
-        args.drain(span);
-    }
-
-    // Check for version flag
-    for (span, _) in args.get_all("--version", false) {
-        options.command = Some(Command::Version);
-        args.drain(span);
-    }
-
-    // Check for version command
-    for (span, _) in args.get_all("version", false) {
-        options.command = Some(Command::Version);
-        args.drain(span);
-    }
-
-    mark_flag(&mut args, "--pedantic", &mut options.flags.pedantic);
-    mark_flag(&mut args, "--errors-only", &mut options.flags.errors_only);
-    mark_flag(
-        &mut args,
-        "--packages-only",
-        &mut options.flags.packages_only,
-    );
-    mark_flag(
-        &mut args,
-        "--diagnostics-only",
-        &mut options.flags.diagnostics_only,
-    );
-    mark_flag(&mut args, "--fail-fast", &mut options.flags.fail_fast);
-    mark_flag(
-        &mut args,
-        "--no-prune-implied",
-        &mut options.flags.no_prune_implied,
-    );
-    mark_flag(&mut args, "--show-pruned", &mut options.flags.show_pruned);
-    mark_flag(
-        &mut args,
-        "--aggregate-targets",
-        &mut options.flags.aggregate_targets,
-    );
-    mark_flag(&mut args, "--no-targets", &mut options.flags.no_targets);
-    mark_flag(
-        &mut args,
-        "--install-missing-targets",
-        &mut options.flags.install_missing_targets,
-    );
-
-    // --dedupe implies --diagnostics-only
-    for flag in ["--dedupe", "--dedup"] {
-        for (span, _) in args.get_all(flag, false) {
+        "--pedantic" => options.flags.pedantic = Some(true),
+        "--errors-only" => options.flags.errors_only = Some(true),
+        "--packages-only" => options.flags.packages_only = Some(true),
+        "--diagnostics-only" => options.flags.diagnostics_only = Some(true),
+        "--fail-fast" => options.flags.fail_fast = Some(true),
+        "--no-prune-implied" => options.flags.no_prune_implied = Some(true),
+        "--show-pruned" => options.flags.show_pruned = Some(true),
+        "--aggregate-targets" => options.flags.aggregate_targets = Some(true),
+        "--no-targets" => options.flags.no_targets = Some(true),
+        "--install-missing-targets" => options.flags.install_missing_targets = Some(true),
+        "--dedupe" | "--dedup" => {
             options.flags.dedupe = Some(true);
             options.flags.diagnostics_only = Some(true);
-            args.drain(span);
         }
-    }
-
-    // --summary-only aliases
-    for flag in ["--summary-only", "--summary", "--silent"] {
-        for (span, _) in args.get_all(flag, false) {
-            options.flags.summary_only = Some(true);
-            args.drain(span);
+        "--summary-only" | "--summary" | "--silent" => options.flags.summary_only = Some(true),
+        "--workspace" => {}
+        "--pretty" if matches!(options.command, Some(Command::FeatureMatrix { .. })) => {
+            if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
+                *pretty = true;
+            }
         }
+        "--help" | "-h" if !*subcommand_seen => options.command = Some(Command::Help),
+        "--version" | "-V" if !*subcommand_seen => options.command = Some(Command::Version),
+        "matrix" if !*subcommand_seen && !subcommand_blocked => {
+            options.command = Some(Command::FeatureMatrix { pretty: false });
+            *subcommand_seen = true;
+        }
+        "version" if !*subcommand_seen && !subcommand_blocked => {
+            options.command = Some(Command::Version);
+            *subcommand_seen = true;
+        }
+        _ => return false,
     }
+    true
+}
 
-    // Ignore `--workspace`. This tool already discovers the relevant workspace
-    // packages via `cargo metadata` and then runs cargo separately in each
-    // package's directory. Forwarding `--workspace` to those per-package
-    // invocations would re-enable workspace-level feature application and can
-    // cause spurious errors when some workspace members do not define a
-    // particular feature.
-    for (span, _) in args.get_all("--workspace", false) {
-        args.drain(span);
+fn forward_leading_cargo_arg(
+    args: &[String],
+    index: usize,
+    arg: &str,
+    forwarded: &mut Vec<String>,
+    subcommand_blocked: &mut bool,
+) -> Option<usize> {
+    if arg.starts_with('+') || is_cargo_no_value_flag(arg) || cargo_flag_has_inline_value(arg) {
+        forwarded.push(arg.to_string());
+        return Some(1);
     }
+    if cargo_flag_takes_value(arg) {
+        forwarded.push(arg.to_string());
+        if let Some(value) = args.get(index + 1) {
+            forwarded.push(value.clone());
+            return Some(2);
+        }
+        return Some(1);
+    }
+    if arg.starts_with('-') {
+        *subcommand_blocked = true;
+        forwarded.push(arg.to_string());
+        return Some(1);
+    }
+    None
+}
 
-    Ok((options, args))
+fn inline_value<'a>(arg: &'a str, flag: &str) -> Option<&'a str> {
+    arg.strip_prefix(flag)?.strip_prefix('=')
+}
+
+fn insert_trimmed(values: &mut HashSet<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        values.insert(value.to_string());
+    }
+}
+
+fn cargo_fc_bool_inline_flag(arg: &str) -> Option<&'static str> {
+    [
+        "--only-packages-with-lib-target",
+        "--pedantic",
+        "--errors-only",
+        "--packages-only",
+        "--diagnostics-only",
+        "--fail-fast",
+        "--no-prune-implied",
+        "--show-pruned",
+        "--aggregate-targets",
+        "--no-targets",
+        "--install-missing-targets",
+        "--dedupe",
+        "--dedup",
+        "--summary-only",
+        "--summary",
+        "--silent",
+        "--workspace",
+        "--pretty",
+    ]
+    .into_iter()
+    .find(|flag| {
+        arg.strip_prefix(*flag)
+            .is_some_and(|rest| rest.starts_with('='))
+    })
 }
 
 #[cfg(test)]
 mod test {
     use super::{
-        ArgumentParser, CargoSubcommand, builtin_diagnostics_safe, cargo_subcommand,
-        cargo_subcommand_token, command_override_for_token, known_quiet_cargo_subcommand,
+        CargoSubcommand, Command, HELP_TEXT, builtin_diagnostics_safe, cargo_subcommand,
+        cargo_subcommand_token, known_quiet_cargo_subcommand, parse_normalized_args,
         rustup_toolchain, verbose_from_env_value,
     };
-    use crate::config::{CommandCapabilities, FlagConfig};
+    use crate::config::FlagConfig;
+    use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
-    use std::collections::BTreeMap;
+
+    fn parse_args(values: &[&str]) -> eyre::Result<(super::Options, Vec<String>)> {
+        let args = values.iter().copied().map(String::from).collect::<Vec<_>>();
+        parse_normalized_args(&args)
+    }
+
+    #[test]
+    fn readme_help_excerpt_matches_cli_help() -> eyre::Result<()> {
+        let readme = include_str!("../README.md");
+        let marker = "```bash\n$ cargo fc --help\n\n";
+        let Some((_, after_marker)) = readme.split_once(marker) else {
+            eyre::bail!("README help block marker missing");
+        };
+        let Some((readme_help, _)) = after_marker.split_once("\n```") else {
+            eyre::bail!("README help block terminator missing");
+        };
+        let Some(help_without_title) =
+            HELP_TEXT.strip_prefix("Run cargo commands for all feature combinations\n\n")
+        else {
+            eyre::bail!("CLI help title changed");
+        };
+        let Some((cli_help_excerpt, _)) = help_without_title
+            .split_once("\n\nFeature sets can be configured in your Cargo.toml configuration.")
+        else {
+            eyre::bail!("CLI help configuration section marker missing");
+        };
+
+        sim_assert_eq!(readme_help, cli_help_excerpt);
+        Ok(())
+    }
 
     #[test]
     fn cargo_subcommand_detects_build_and_short_build() {
@@ -838,118 +930,6 @@ mod test {
         let subcommand = cargo_subcommand(&["--mystery-flag", "clippy"]);
 
         sim_assert_eq!(subcommand, CargoSubcommand::Other);
-    }
-
-    #[test]
-    fn argument_parser_ignores_cargo_fc_flags_after_double_dash() {
-        let args = vec![
-            "run".to_string(),
-            "--".to_string(),
-            "--manifest-path".to_string(),
-            "Cargo.toml".to_string(),
-            "--package".to_string(),
-            "pkg".to_string(),
-            "-p".to_string(),
-            "pkg".to_string(),
-            "--exclude-package".to_string(),
-            "pkg".to_string(),
-            "--help".to_string(),
-            "matrix".to_string(),
-            "--pretty".to_string(),
-            "--driver".to_string(),
-            "cross".to_string(),
-            "--only-packages-with-lib-target".to_string(),
-            "--pedantic".to_string(),
-            "--errors-only".to_string(),
-            "--packages-only".to_string(),
-            "--diagnostics-only".to_string(),
-            "--fail-fast".to_string(),
-            "--no-prune-implied".to_string(),
-            "--show-pruned".to_string(),
-            "--aggregate-targets".to_string(),
-            "--no-targets".to_string(),
-            "--install-missing-targets".to_string(),
-            "--dedupe".to_string(),
-            "--dedup".to_string(),
-            "--summary-only".to_string(),
-            "--summary".to_string(),
-            "--silent".to_string(),
-            "--workspace".to_string(),
-        ];
-
-        for flag in [
-            "--manifest-path",
-            "--package",
-            "-p",
-            "--exclude-package",
-            "--driver",
-        ] {
-            assert!(args.get_all(flag, true).is_empty(), "{flag}");
-        }
-        for flag in [
-            "--help",
-            "matrix",
-            "--pretty",
-            "--only-packages-with-lib-target",
-            "--pedantic",
-            "--errors-only",
-            "--packages-only",
-            "--diagnostics-only",
-            "--fail-fast",
-            "--no-prune-implied",
-            "--show-pruned",
-            "--aggregate-targets",
-            "--no-targets",
-            "--install-missing-targets",
-            "--dedupe",
-            "--dedup",
-            "--summary-only",
-            "--summary",
-            "--silent",
-            "--workspace",
-        ] {
-            assert!(args.get_all(flag, false).is_empty(), "{flag}");
-        }
-    }
-
-    #[test]
-    fn argument_parser_keeps_matches_before_double_dash() {
-        let args = vec![
-            "--driver".to_string(),
-            "cargo".to_string(),
-            "--".to_string(),
-            "--driver".to_string(),
-            "cross".to_string(),
-        ];
-
-        let matches = args.get_all("--driver", true);
-
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].1, "cargo");
-    }
-
-    #[test]
-    fn argument_parser_does_not_treat_inline_values_as_boolean_flags() {
-        let args = vec![
-            "--summary-only=false".to_string(),
-            "--driver=cargo".to_string(),
-        ];
-
-        assert!(args.get_all("--summary-only", false).is_empty());
-        let matches = args.get_all("--driver", true);
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].1, "cargo");
-    }
-
-    #[test]
-    fn argument_parser_does_not_consume_double_dash_as_value() {
-        let args = vec![
-            "--driver".to_string(),
-            "--".to_string(),
-            "program-arg".to_string(),
-        ];
-
-        assert!(args.get_all("--driver", true).is_empty());
     }
 
     #[test]
@@ -1048,51 +1028,6 @@ mod test {
     }
 
     #[test]
-    fn builtin_short_alias_inherits_long_command_policy() {
-        let mut subcommands = BTreeMap::new();
-        subcommands.insert(
-            "build".to_string(),
-            CommandCapabilities {
-                expand_targets: Some(false),
-                ..CommandCapabilities::default()
-            },
-        );
-
-        let override_config = command_override_for_token(Some("b"), &subcommands);
-
-        assert_eq!(
-            override_config.and_then(|config| config.expand_targets),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn builtin_short_alias_exact_policy_wins_over_long_command_policy() {
-        let mut subcommands = BTreeMap::new();
-        subcommands.insert(
-            "build".to_string(),
-            CommandCapabilities {
-                expand_targets: Some(false),
-                ..CommandCapabilities::default()
-            },
-        );
-        subcommands.insert(
-            "b".to_string(),
-            CommandCapabilities {
-                expand_targets: Some(true),
-                ..CommandCapabilities::default()
-            },
-        );
-
-        let override_config = command_override_for_token(Some("b"), &subcommands);
-
-        assert_eq!(
-            override_config.and_then(|config| config.expand_targets),
-            Some(true)
-        );
-    }
-
-    #[test]
     fn parsed_flags_use_structured_flag_config() {
         let options = super::Options {
             flags: FlagConfig {
@@ -1118,5 +1053,109 @@ mod test {
         };
 
         assert_eq!(options.flags.verbose, Some(false));
+    }
+
+    #[test]
+    fn parse_keeps_cargo_fc_flags_after_double_dash() -> eyre::Result<()> {
+        let (options, forwarded) =
+            parse_args(&["run", "--", "--help", "matrix", "--driver", "cross"])?;
+
+        assert!(options.command.is_none());
+        assert!(options.driver.is_none());
+        sim_assert_eq!(
+            forwarded,
+            vec![
+                "run".to_string(),
+                "--".to_string(),
+                "--help".to_string(),
+                "matrix".to_string(),
+                "--driver".to_string(),
+                "cross".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_matrix_only_at_subcommand_position() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["test", "--features", "matrix"])?;
+
+        assert!(options.command.is_none());
+        sim_assert_eq!(
+            forwarded,
+            vec![
+                "test".to_string(),
+                "--features".to_string(),
+                "matrix".to_string()
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_version_only_at_subcommand_position() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["test", "version"])?;
+
+        assert!(options.command.is_none());
+        sim_assert_eq!(forwarded, vec!["test".to_string(), "version".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_pretty_only_for_matrix_command() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["nextest", "run", "--pretty"])?;
+
+        assert!(options.command.is_none());
+        sim_assert_eq!(
+            forwarded,
+            vec![
+                "nextest".to_string(),
+                "run".to_string(),
+                "--pretty".to_string()
+            ],
+        );
+
+        let (options, forwarded) = parse_args(&["matrix", "--pretty"])?;
+        assert!(matches!(
+            options.command,
+            Some(Command::FeatureMatrix { pretty: true })
+        ));
+        assert!(forwarded.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn parse_help_after_subcommand_is_forwarded() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["clippy", "--help"])?;
+
+        assert!(options.command.is_none());
+        sim_assert_eq!(forwarded, vec!["clippy".to_string(), "--help".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_value_options_are_last_wins() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["--driver", "cross", "--driver=cargo", "check"])?;
+
+        assert_eq!(options.driver.as_deref(), Some("cargo"));
+        sim_assert_eq!(forwarded, vec!["check".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_exclude_alias_strips_cargo_workspace_exclude() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["check", "--workspace", "--exclude", " skip "])?;
+
+        assert!(options.exclude_packages.contains("skip"));
+        sim_assert_eq!(forwarded, vec!["check".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_rejects_inline_values_for_cargo_fc_bool_flags() {
+        let err = parse_args(&["check", "--summary-only=false"])
+            .expect_err("inline bool values should fail clearly");
+
+        assert!(err.to_string().contains("--summary-only"));
     }
 }

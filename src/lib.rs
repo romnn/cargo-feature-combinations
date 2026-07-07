@@ -17,6 +17,10 @@ mod cli;
 pub mod config;
 /// Diagnostics-only output mode (JSON parsing and deduplication).
 mod diagnostics_only;
+/// Build-driver finalization.
+mod driver;
+/// User-facing hints and no-op warnings.
+mod hints;
 /// Feature implication graph and redundant-combination pruning.
 pub mod implication;
 /// Forwarded Cargo argument splitting and generated-argument placement.
@@ -48,6 +52,7 @@ use cfg_eval::RustcCfgEvaluator;
 use cli::{Command, Options, cargo_subcommand, parse_arguments};
 use color_eyre::eyre;
 use invocation_args::GeneratedArgPlacement;
+use itertools::Itertools;
 use package::FeatureCombinationError;
 use runner::{ExitCode, print_feature_combination_error};
 use std::process;
@@ -70,20 +75,27 @@ static NOTE_COLOR: std::sync::LazyLock<termcolor::ColorSpec> = std::sync::LazyLo
     spec
 });
 
+macro_rules! print_labeled {
+    ($label:literal, $color:expr, $($arg:tt)*) => {{
+        use std::io::Write as _;
+        use termcolor::WriteColor as _;
+        let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
+        let _ = stderr.set_color(&$color);
+        let _ = write!(&mut stderr, $label);
+        let _ = stderr.reset();
+        let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
+    }};
+}
+pub(crate) use print_labeled;
+
 /// Print a colored warning to stderr.
 ///
 /// Formats as `warning: <message>` with the `warning:` prefix in yellow.
 /// Accepts the same arguments as [`format!`].
 macro_rules! print_warning {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        use termcolor::WriteColor as _;
-        let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
-        let _ = stderr.set_color(&$crate::WARNING_COLOR);
-        let _ = write!(&mut stderr, "warning");
-        let _ = stderr.reset();
-        let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
-    }};
+    ($($arg:tt)*) => {
+        $crate::print_labeled!("warning", $crate::WARNING_COLOR, $($arg)*)
+    };
 }
 pub(crate) use print_warning;
 
@@ -92,23 +104,11 @@ pub(crate) use print_warning;
 /// Formats as `note: <message>` with the `note:` prefix in cyan. Used for
 /// non-fatal mode fallbacks/no-ops such as `--aggregate-targets` adjustments.
 macro_rules! print_note {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        use termcolor::WriteColor as _;
-        let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
-        let _ = stderr.set_color(&$crate::NOTE_COLOR);
-        let _ = write!(&mut stderr, "note");
-        let _ = stderr.reset();
-        let _ = writeln!(&mut stderr, ": {}", format_args!($($arg)*));
-    }};
+    ($($arg:tt)*) => {
+        $crate::print_labeled!("note", $crate::NOTE_COLOR, $($arg)*)
+    };
 }
 pub(crate) use print_note;
-
-/// Whether to warn when the cargo subcommand is not one of the known commands
-/// (`build`, `test`, `run`, `check`, `doc`, `clippy`). Disabled by default
-/// because cargo aliases and custom subcommands are common and the tool handles
-/// unresolved commands gracefully via best-effort output parsing.
-const WARN_UNKNOWN_SUBCOMMAND: bool = false;
 
 /// Expands to the default metadata key literal.
 macro_rules! default_metadata_key {
@@ -161,7 +161,6 @@ impl PreparedCargoCommand {
 }
 
 struct CargoCommandDispatch<'a> {
-    bin_name: &'a str,
     target_plans: &'a plan::targets::TargetPlans<'a>,
     options: &'a Options,
     cargo_args: Vec<&'a str>,
@@ -225,6 +224,11 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         return Ok(());
     }
 
+    if options.command.is_none() && cargo_args.is_empty() {
+        cli::print_help();
+        return Ok(());
+    }
+
     // Get metadata for cargo package
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
@@ -245,7 +249,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         .map(|package| package.config())
         .collect::<eyre::Result<Vec<_>>>()?;
 
-    let prepared = prepare_cargo_command(cargo_args, metadata.workspace_root.as_std_path());
+    let prepared = prepare_cargo_command(cargo_args, metadata.workspace_root.as_std_path())?;
     let tokens = prepared.tokens();
     let selected =
         selected_packages_for_target_planning(&packages, &configs, &options, &ws_config, tokens)?;
@@ -253,7 +257,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     // Echo the user's own metadata alias in capability hints/warnings.
     let ws_key = find_metadata_value(&metadata.workspace_metadata)
         .map_or(DEFAULT_METADATA_KEY, |(_, key)| key);
-    warn_if_configured_targets_ignored(
+    hints::warn_if_configured_targets_ignored(
         &options,
         tokens.raw,
         tokens.resolved,
@@ -265,6 +269,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let env = RustcTargetEnvironment;
     let mut evaluator = RustcCfgEvaluator::default();
     let base_exclude = metadata.base_workspace_exclude_packages()?;
+    hints::warn_unmatched_config_exclude_packages(&base_exclude, &metadata);
 
     let expansion = match prepared.cli_target.as_deref() {
         Some(cli) => plan::targets::TargetExpansion::Explicit(cli),
@@ -289,19 +294,18 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         &mut evaluator,
     )?;
 
-    let result = match options.command {
-        Some(Command::Help | Command::Version) => Ok(None),
-        Some(Command::FeatureMatrix { pretty }) => print_matrix_command(
+    let result = if let Some(Command::FeatureMatrix { pretty }) = options.command {
+        print_matrix_command(
             &target_plans,
             &options,
             &ws_config,
             tokens,
             pretty,
             &mut evaluator,
-        ),
-        None => run_cargo_command(
+        )
+    } else {
+        run_cargo_command(
             CargoCommandDispatch {
-                bin_name,
                 target_plans: &target_plans,
                 options: &options,
                 cargo_args: prepared.args.iter().map(String::as_str).collect(),
@@ -312,7 +316,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             },
             &env,
             &mut evaluator,
-        ),
+        )
     };
 
     match result {
@@ -331,9 +335,9 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 fn prepare_cargo_command(
     args: Vec<String>,
     workspace_root: &std::path::Path,
-) -> PreparedCargoCommand {
+) -> eyre::Result<PreparedCargoCommand> {
     let raw_token = cli::cargo_subcommand_token(&args);
-    let raw_cli_target = target::parse_cli_target(&args);
+    let raw_cli_target = target::parse_cli_target(&args)?;
     // Resolve cargo command aliases so target policy and build-driver dispatch
     // see the underlying built-in subcommand when one is configured.
     let alias_expansion = cargo_alias::expand_aliases_with_info(args, workspace_root);
@@ -360,18 +364,18 @@ fn prepare_cargo_command(
     // (`cargo run --target host -- ...`) and must not collapse cargo-fc's
     // configured target matrix.
     let expanded_cli_target = match generated_arg_placement {
-        GeneratedArgPlacement::CargoCommand => target::parse_cli_target(&expanded_args),
+        GeneratedArgPlacement::CargoCommand => target::parse_cli_target(&expanded_args)?,
         GeneratedArgPlacement::AliasWrapper => None,
     };
     let cli_target = raw_cli_target.or(expanded_cli_target);
 
-    PreparedCargoCommand {
+    Ok(PreparedCargoCommand {
         args: expanded_args,
         raw_token,
         resolved_token,
         cli_target,
         generated_arg_placement,
-    }
+    })
 }
 
 fn selected_packages_for_target_planning<'a>(
@@ -432,7 +436,7 @@ fn print_matrix_command(
     };
     let plan_set =
         plan::execution::build_execution_plans(target_plans, options.flags, &context, evaluator)?;
-    note_matrix_noop_flags(options);
+    hints::note_matrix_noop_flags(options);
     matrix::print_matrix_for_execution_plans(&plan_set, pretty)?;
     Ok(None)
 }
@@ -442,15 +446,6 @@ fn run_cargo_command(
     env: &impl target::TargetEnvironment,
     evaluator: &mut impl cfg_eval::CfgEvaluator,
 ) -> eyre::Result<ExitCode> {
-    if WARN_UNKNOWN_SUBCOMMAND
-        && cargo_subcommand(dispatch.cargo_args.as_slice()) == cli::CargoSubcommand::Other
-    {
-        print_warning!(
-            "`cargo {}` only supports cargo's `build`, `test`, `run`, `check`, `doc`, and `clippy` subcommands",
-            dispatch.bin_name,
-        );
-    }
-
     let options = dispatch.options;
     let default_diagnostics_allowed =
         cli::builtin_diagnostics_safe(dispatch.tokens.resolved.or(dispatch.tokens.raw));
@@ -468,14 +463,14 @@ fn run_cargo_command(
         &context,
         evaluator,
     )?;
-    finalize_plan_drivers(&mut plan_set, env)?;
+    driver::finalize_plan_drivers(&mut plan_set, env)?;
     maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
-    let mode = resolve_execution_mode(
+    let mode = runner::resolve_execution_mode(
         &dispatch.cargo_args,
         &plan_set,
         dispatch.generated_arg_placement,
     );
-    warn_ignored_diagnostics_config(
+    hints::warn_ignored_diagnostics_config(
         options,
         dispatch.tokens.raw,
         dispatch.tokens.resolved,
@@ -499,6 +494,34 @@ fn select_candidate_packages<'a>(
     options: &Options,
 ) -> eyre::Result<Vec<&'a cargo_metadata::Package>> {
     let mut packages = metadata.candidate_packages_for_fc()?;
+    let available = packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let unknown_packages = options
+        .packages
+        .iter()
+        .filter(|package| !available.contains(package.as_str()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if !unknown_packages.is_empty() {
+        eyre::bail!(
+            "unknown package{} `{}`; available packages: {}",
+            if unknown_packages.len() == 1 { "" } else { "s" },
+            unknown_packages.iter().join("`, `"),
+            available.iter().join(", "),
+        );
+    }
+
+    for package in options
+        .exclude_packages
+        .iter()
+        .filter(|package| !available.contains(package.as_str()))
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        print_warning!("excluded package `{package}` did not match any workspace member");
+    }
 
     // When `--manifest-path` points to a workspace member, `cargo metadata`
     // still returns the entire workspace. Unless the user explicitly selected
@@ -539,295 +562,6 @@ fn maybe_install_missing_targets(
     Ok(())
 }
 
-/// Warn once when configured targets were skipped only because of the built-in
-/// unknown-command default.
-///
-/// `matrix` is not a forwarded cargo command: it always uses configured target
-/// planning.
-fn warn_if_configured_targets_ignored(
-    options: &Options,
-    raw_token: Option<&str>,
-    resolved_token: Option<&str>,
-    ws_config: &config::WorkspaceConfig,
-    ws_key: &str,
-    selected: &[plan::targets::SelectedPackage<'_>],
-) {
-    // `--no-targets` deliberately ignores configured target lists and falls back
-    // to Cargo's default single target, so it should not also warn.
-    if options.flags.no_targets == Some(true) {
-        return;
-    }
-
-    if selected
-        .iter()
-        .any(|package| !package.ignore_configured_targets)
-    {
-        return;
-    }
-
-    // `matrix` is not a forwarded cargo command: it always uses configured
-    // target planning.
-    if matches!(options.command, Some(Command::FeatureMatrix { .. })) {
-        return;
-    }
-
-    let has_implicitly_skipped_configured_targets = selected.iter().any(|package| {
-        !package.target_decision_explicit
-            && (target_patch_configures_non_empty_list(ws_config.base.settings.targets.as_ref())
-                || target_patch_configures_non_empty_list(
-                    package.config.base.settings.targets.as_ref(),
-                ))
-    });
-    let warning_token = raw_token.or(resolved_token);
-    if cli::known_quiet_cargo_subcommand(raw_token)
-        || cli::known_quiet_cargo_subcommand(resolved_token)
-    {
-        return;
-    }
-    if has_implicitly_skipped_configured_targets
-        && let Some(token) = warning_token.filter(|t| !t.is_empty())
-    {
-        print_warning!(
-            "not passing configured targets to cargo command `{token}` because it has no targets capability"
-        );
-        eprintln!(
-            "hint: add [{}.subcommands.{token}] expand_targets = true if this command accepts --target, or expand_targets = false to silence this warning",
-            ws_metadata_section(ws_key),
-        );
-    }
-}
-
-fn target_patch_configures_non_empty_list(patch: Option<&config::patch::TargetListPatch>) -> bool {
-    patch.is_some_and(|patch| {
-        // A non-empty override or any added targets means this configures
-        // targets that a no-expand command could skip.
-        patch
-            .override_value()
-            .is_some_and(|targets| !targets.is_empty())
-            || !patch.add_values().is_empty()
-    })
-}
-
-fn warn_ignored_diagnostics_config(
-    options: &Options,
-    raw_token: Option<&str>,
-    resolved_token: Option<&str>,
-    ws_key: &str,
-    plan_set: &plan::execution::ExecutionPlanSet<'_>,
-) {
-    let cli_flags = options.flags;
-    if cli::known_quiet_cargo_subcommand(raw_token)
-        || cli::known_quiet_cargo_subcommand(resolved_token)
-    {
-        return;
-    }
-    if cli_flags.diagnostics_only != Some(true)
-        && cli_flags.dedupe != Some(true)
-        && plan_set.plans.iter().any(|plan| {
-            plan.package_plans.iter().any(|package_plan| {
-                package_plan.ignored_diagnostics_config && !package_plan.flags.diagnostics_only
-            })
-        })
-        && let Some(token) = raw_token.or(resolved_token).filter(|t| !t.is_empty())
-    {
-        print_warning!(
-            "not enabling configured diagnostics-only/dedupe for cargo command `{token}` because it is not diagnostics-safe by default"
-        );
-        eprintln!(
-            "hint: set [{}.subcommands.{token}] diagnostics_only = true or dedupe = true to force diagnostics mode for this command, or diagnostics_only = false to silence this warning",
-            ws_metadata_section(ws_key),
-        );
-    }
-}
-
-/// Emit one note per run-only flag that has no effect on `cargo fc matrix`
-/// output, so the silent no-op is visible to the user.
-fn note_matrix_noop_flags(options: &Options) {
-    let flags = options.flags;
-    if flags.install_missing_targets == Some(true) {
-        print_note!(
-            "--install-missing-targets has no effect for matrix output; matrix only prints planned targets"
-        );
-    }
-    if flags.aggregate_targets == Some(true) {
-        print_note!(
-            "--aggregate-targets has no effect for matrix output; matrix rows are always per target"
-        );
-    }
-    if options.driver.is_some() {
-        print_note!("--driver has no effect for matrix output; matrix only prints planned targets");
-    }
-}
-
-/// Finalize the spawned build driver for every package-target plan.
-///
-/// Config + `--driver` are already resolved per (package × target × command)
-/// into [`plan::execution::PackageExecutionPlan::driver`]. This pass turns each
-/// into the program actually spawned: an explicit config/CLI driver is
-/// normalized (`"cargo"` → plain `$CARGO`), while an *unset* driver falls back
-/// to cargo-fc's cross-target default (`cargo-zigbuild` when any planned target
-/// is a cross target, else plain `cargo`).
-fn finalize_plan_drivers(
-    plan_set: &mut plan::execution::ExecutionPlanSet,
-    env: &impl target::TargetEnvironment,
-) -> eyre::Result<()> {
-    let needs_default = plan_set
-        .plans
-        .iter()
-        .flat_map(|plan| &plan.package_plans)
-        .any(|pp| pp.driver.is_none());
-    // Only detect the host — which can fail — when some plan actually needs the
-    // cross-target fallback. If every plan set `driver` explicitly, skip it.
-    let default = if needs_default {
-        cross_target_default_driver(plan_set, env)
-    } else {
-        None
-    };
-
-    for plan in &mut plan_set.plans {
-        for pp in &mut plan.package_plans {
-            pp.driver = finalize_driver(pp.driver.as_deref(), default.as_deref())?;
-        }
-    }
-    Ok(())
-}
-
-/// cargo-fc's built-in driver default: `cargo-zigbuild` when any planned target
-/// is a cross target (so native-C build deps cross-compile via zig), else plain
-/// `cargo`. Host detection failure degrades to plain cargo with a warning,
-/// mirroring how missing-target installation degrades on the same failure.
-fn cross_target_default_driver(
-    plan_set: &plan::execution::ExecutionPlanSet,
-    env: &impl target::TargetEnvironment,
-) -> Option<String> {
-    if plan_set.plans.is_empty() {
-        return None;
-    }
-    let host = match env.host_target() {
-        Ok(host) => host,
-        Err(err) => {
-            print_warning!(
-                "could not detect host target to select a build driver: {err}; using plain cargo"
-            );
-            return None;
-        }
-    };
-    let cross = plan_set.plans.iter().any(|plan| plan.target != host);
-    cross.then(|| "cargo-zigbuild".to_string())
-}
-
-/// Turn a resolved per-plan driver into the spawned program: an explicit value
-/// is normalized (`"cargo"` → plain `$CARGO`), an unset value uses `default`.
-fn finalize_driver(
-    configured: Option<&str>,
-    default: Option<&str>,
-) -> eyre::Result<Option<String>> {
-    match configured {
-        Some(driver) => normalize_driver(driver),
-        None => Ok(default.map(ToString::to_string)),
-    }
-}
-
-fn normalize_driver(driver: &str) -> eyre::Result<Option<String>> {
-    let driver = driver.trim();
-    if driver.is_empty() {
-        eyre::bail!("build driver (`--driver` or `driver`) must not be empty");
-    }
-    // `driver = "cargo"` selects plain Cargo; resolve it to `None` so the spawn
-    // still honors `$CARGO` (e.g. a rustup or CI override), matching the default
-    // host-only path rather than forcing the literal `cargo` on `PATH`.
-    if driver == "cargo" {
-        Ok(None)
-    } else {
-        Ok(Some(driver.to_string()))
-    }
-}
-
-/// Resolve the effective target execution mode, emitting a note when an
-/// explicitly requested `--aggregate-targets` falls back to serial or is a
-/// no-op.
-fn resolve_execution_mode(
-    cargo_args: &[&str],
-    plan_set: &plan::execution::ExecutionPlanSet<'_>,
-    generated_arg_placement: GeneratedArgPlacement,
-) -> runner::TargetExecutionMode {
-    use runner::TargetExecutionMode;
-
-    let mut requested = 0usize;
-    let mut total = 0usize;
-    for plan in &plan_set.plans {
-        for package_plan in &plan.package_plans {
-            total += 1;
-            requested += usize::from(package_plan.flags.aggregate_targets);
-        }
-    }
-
-    if requested == 0 {
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    if requested != total {
-        print_note!(
-            "aggregate target execution is disabled because it resolves differently across package-targets; running targets serially"
-        );
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    // Aggregation batches one package's targets into a single Cargo invocation,
-    // so those targets must share one build driver. If any package resolves
-    // different drivers per target, aggregation is impossible — fall back to
-    // serial per-target execution.
-    let mut first_driver: std::collections::HashMap<&str, Option<&str>> =
-        std::collections::HashMap::new();
-    let driver_differs_within_a_package = plan_set
-        .plans
-        .iter()
-        .flat_map(|plan| &plan.package_plans)
-        .any(|package_plan| {
-            let driver = package_plan.driver.as_deref();
-            *first_driver
-                .entry(package_plan.package.id.repr.as_str())
-                .or_insert(driver)
-                != driver
-        });
-    if driver_differs_within_a_package {
-        print_note!(
-            "aggregate target execution is disabled because the build driver resolves differently across a package's targets; running targets serially"
-        );
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    if plan_set.plans.len() <= 1 {
-        if !plan_set.show_target {
-            return TargetExecutionMode::SerialPerTarget;
-        }
-        print_note!("--aggregate-targets has no effect for a single target; running normally");
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    // Direct `cargo run --target A --target B` is invalid, so aggregate mode
-    // must fall back. For `lint = "run --package wrapper -- lint"`, aggregate
-    // produces `... -- lint --target A --target B`; Cargo's outer `run` still
-    // sees one target while the wrapped command receives the target group.
-    if generated_arg_placement == GeneratedArgPlacement::CargoCommand
-        && cargo_subcommand(cargo_args) == cli::CargoSubcommand::Run
-    {
-        print_note!(
-            "--aggregate-targets does not apply to `run` (cargo runs one target at a time); running targets serially"
-        );
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    if plan_set.show_pruned {
-        print_note!(
-            "--aggregate-targets is disabled because pruned summaries are target-specific; running targets serially"
-        );
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    TargetExecutionMode::Aggregate
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -842,23 +576,6 @@ mod test {
         tmp.child(".cargo").create_dir_all()?;
         tmp.child(".cargo/config.toml").write_str(body)?;
         Ok(tmp)
-    }
-
-    fn execution_plan_set(
-        targets: &[&str],
-        show_pruned: bool,
-    ) -> plan::execution::ExecutionPlanSet<'static> {
-        plan::execution::ExecutionPlanSet {
-            plans: targets
-                .iter()
-                .map(|target| plan::execution::ExecutionPlan {
-                    target: target::TargetTriple((*target).to_string()),
-                    package_plans: Vec::new(),
-                })
-                .collect(),
-            show_pruned,
-            show_target: targets.len() > 1,
-        }
     }
 
     fn execution_plan_set_with_flags<'a>(
@@ -892,23 +609,6 @@ mod test {
                 .collect(),
             show_pruned,
             show_target: targets.len() > 1,
-        }
-    }
-
-    struct DriverTestEnv {
-        host: Option<&'static str>,
-    }
-
-    impl target::TargetEnvironment for DriverTestEnv {
-        fn cargo_build_target(&self) -> Option<String> {
-            None
-        }
-
-        fn host_target(&self) -> eyre::Result<target::TargetTriple> {
-            let Some(host) = self.host else {
-                eyre::bail!("host failed");
-            };
-            Ok(target::TargetTriple(host.to_string()))
         }
     }
 
@@ -948,7 +648,7 @@ mod test {
             "#,
         )?;
 
-        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path());
+        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
 
         // Nested aliases still need wrapper placement once the final expansion
         // is `cargo run ... -- <wrapped-command>`.
@@ -972,7 +672,7 @@ mod test {
         let prepared = prepare_cargo_command(
             vec!["run".to_string(), "--".to_string(), "lint".to_string()],
             workspace.path(),
-        );
+        )?;
 
         // A user-provided `--` for direct `cargo run` is program argv, not an
         // alias wrapper boundary.
@@ -997,7 +697,7 @@ mod test {
         let prepared = prepare_cargo_command(
             vec!["serve".to_string(), "--".to_string(), "lint".to_string()],
             workspace.path(),
-        );
+        )?;
 
         // The alias did not provide `--`; the user's trailing args remain the
         // app's argv, so cargo-fc generated args still belong before `--`.
@@ -1020,7 +720,7 @@ mod test {
             "#,
         )?;
 
-        let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path());
+        let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path())?;
 
         // A `--` inside the alias body owns the argument boundary; generated
         // args must preserve that alias-defined position.
@@ -1054,7 +754,7 @@ mod test {
                 "wasm32-unknown-unknown".to_string(),
             ],
             workspace.path(),
-        );
+        )?;
 
         // The user's explicit `--target` still wins even when the alias expands
         // into a wrapper command.
@@ -1091,7 +791,7 @@ mod test {
             "#,
         )?;
 
-        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path());
+        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
 
         // The expanded `--target` configures the wrapper package, not the
         // command behind `--`, so target planning must ignore it.
@@ -1124,7 +824,7 @@ mod test {
             "#,
         )?;
 
-        let prepared = prepare_cargo_command(vec!["wasm-check".to_string()], workspace.path());
+        let prepared = prepare_cargo_command(vec!["wasm-check".to_string()], workspace.path())?;
 
         // Non-wrapper aliases still expose their expanded Cargo `--target` as
         // an explicit target override.
@@ -1144,71 +844,6 @@ mod test {
     }
 
     #[test]
-    fn cross_target_default_is_plain_cargo_for_host_only_plan() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["host"], false),
-            &DriverTestEnv { host: Some("host") },
-        );
-
-        assert_eq!(default, None);
-    }
-
-    #[test]
-    fn cross_target_default_is_zigbuild_for_cross_plan() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["host", "wasm"], false),
-            &DriverTestEnv { host: Some("host") },
-        );
-
-        assert_eq!(default, Some("cargo-zigbuild".to_string()));
-    }
-
-    #[test]
-    fn finalize_driver_treats_explicit_cargo_as_plain_cargo() -> eyre::Result<()> {
-        // An explicit `cargo` selects plain Cargo and ignores the cross default.
-        assert_eq!(
-            finalize_driver(Some("cargo"), Some("cargo-zigbuild"))?,
-            None
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_driver_uses_explicit_custom_driver() -> eyre::Result<()> {
-        assert_eq!(
-            finalize_driver(Some("cross"), None)?,
-            Some("cross".to_string())
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_driver_uses_default_only_when_unset() -> eyre::Result<()> {
-        // Unset → the cross default; a configured value shadows it.
-        assert_eq!(
-            finalize_driver(None, Some("cargo-zigbuild"))?,
-            Some("cargo-zigbuild".to_string())
-        );
-        assert_eq!(finalize_driver(None, None)?, None);
-        Ok(())
-    }
-
-    #[test]
-    fn finalize_driver_rejects_empty_driver() {
-        assert!(finalize_driver(Some("   "), None).is_err());
-    }
-
-    #[test]
-    fn cross_target_default_falls_back_to_plain_cargo_when_host_detection_fails() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["wasm"], false),
-            &DriverTestEnv { host: None },
-        );
-
-        assert_eq!(default, None);
-    }
-
-    #[test]
     fn aggregate_execution_mode_selected_for_supported_multi_target_command() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -1218,7 +853,11 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
+            runner::resolve_execution_mode(
+                &["check"],
+                &plan_set,
+                GeneratedArgPlacement::CargoCommand
+            ),
             runner::TargetExecutionMode::Aggregate
         );
         Ok(())
@@ -1258,7 +897,11 @@ mod test {
         };
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
+            runner::resolve_execution_mode(
+                &["check"],
+                &plan_set,
+                GeneratedArgPlacement::CargoCommand
+            ),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1274,7 +917,11 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["run"], &plan_set, GeneratedArgPlacement::CargoCommand),
+            runner::resolve_execution_mode(
+                &["run"],
+                &plan_set,
+                GeneratedArgPlacement::CargoCommand
+            ),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1290,7 +937,7 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(
+            runner::resolve_execution_mode(
                 &["run", "--package", "clippy-wrapper", "--", "lint"],
                 &plan_set,
                 GeneratedArgPlacement::AliasWrapper,
@@ -1310,7 +957,11 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1", "t2"], true, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
+            runner::resolve_execution_mode(
+                &["check"],
+                &plan_set,
+                GeneratedArgPlacement::CargoCommand
+            ),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())
@@ -1326,7 +977,11 @@ mod test {
         let plan_set = execution_plan_set_with_flags(&["t1"], false, &package, flags);
 
         assert_eq!(
-            resolve_execution_mode(&["check"], &plan_set, GeneratedArgPlacement::CargoCommand),
+            runner::resolve_execution_mode(
+                &["check"],
+                &plan_set,
+                GeneratedArgPlacement::CargoCommand
+            ),
             runner::TargetExecutionMode::SerialPerTarget
         );
         Ok(())

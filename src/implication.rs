@@ -81,46 +81,9 @@ fn resolved_set<'a>(combo: &[&'a String], graph: &DiGraphMap<&'a str, ()>) -> BT
     resolved
 }
 
-/// Apply implied-feature pruning if the config enables it, otherwise return
-/// combos unchanged.
-///
-/// Callers that only need the kept combinations can use `.keep` on the result
-/// and ignore `.pruned`.
+/// Apply pruning when the caller already resolved features and pruning flags.
 #[must_use]
-pub fn maybe_prune<'a>(
-    combos: Vec<Vec<&'a String>>,
-    features: &'a BTreeMap<String, Vec<String>>,
-    config: &crate::config::Config,
-    no_prune: bool,
-) -> PruneResult<'a> {
-    // allow_feature_sets is an explicit allowlist where the user declared the
-    // exact sets they care about — pruning would silently drop entries they
-    // asked for.
-    let no_prune_implied = config
-        .base
-        .settings
-        .flags
-        .no_prune_implied
-        .or_else(|| {
-            config
-                .base
-                .settings
-                .flags
-                .prune_implied
-                .map(|enabled| !enabled)
-        })
-        .unwrap_or(false);
-    let resolved_features = crate::config::ResolvedFeatures::from_config(config);
-    let active = !no_prune_implied && !no_prune && resolved_features.allow_feature_sets.is_empty();
-    maybe_prune_active(combos, features, active)
-}
-
-/// Apply pruning when the caller already resolved the pruning flags.
-///
-/// Execution-plan construction uses this variant so one fully merged flag view
-/// controls pruning. The public [`maybe_prune`] keeps its standalone contract
-/// for callers that pass an unresolved package config directly.
-pub(crate) fn maybe_prune_with_resolved_flag<'a>(
+pub fn prune_with_resolved_features<'a>(
     combos: Vec<Vec<&'a String>>,
     features: &'a BTreeMap<String, Vec<String>>,
     config: &crate::config::ResolvedFeatures,
@@ -283,7 +246,7 @@ mod test {
         };
         let resolved = ResolvedFeatures::from_config(&config);
         let combos = pkg.feature_combinations(&resolved)?;
-        let result = maybe_prune_with_resolved_flag(combos, &pkg.features, &resolved, false);
+        let result = prune_with_resolved_features(combos, &pkg.features, &resolved, false);
 
         sim_assert_eq!(result.keep.len(), 3);
         sim_assert_eq!(result.pruned.len(), 1);

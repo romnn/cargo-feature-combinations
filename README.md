@@ -103,22 +103,37 @@ USAGE:
 SUBCOMMAND:
     matrix                  Print JSON feature combination matrix to stdout
         --pretty            Print pretty JSON
+    version                 Print version information
 
 OPTIONS:
-    --help                  Print help information
+    -h, --help              Print help information
+    -V, --version           Print version information
+    --manifest-path <path>  Path to Cargo.toml to inspect
+    -p, --package <name>    Include only this workspace package (repeatable)
+    --exclude-package <name>
+    --exclude <name>        Exclude a workspace package from feature
+                            combinations (repeatable). `--exclude` is accepted
+                            with `--workspace` for Cargo-compatible workspace
+                            package selection.
     --diagnostics-only      Show only diagnostics (warnings/errors) per
                             feature combination. Subcommand must accept
                             --message-format=... and emit rustc JSON
                             diagnostics (e.g. build, check, clippy, doc,
                             or any alias/wrapper that does the same)
-    --dedupe                Like --diagnostics-only, but also deduplicate
+    --dedupe, --dedup       Like --diagnostics-only, but also deduplicate
                             identical diagnostics across feature combinations
-    --summary-only          Hide cargo output and only show the final summary
+    --summary-only
+    --summary
+    --silent                Hide cargo output and only show the final summary
     --fail-fast             Fail fast on the first bad feature combination
-    --exclude-package       Exclude a package from feature combinations
+    --errors-only           Allow all warnings, show errors only (-Awarnings).
+                            This appends to RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS;
+                            like any RUSTFLAGS env override, it shadows
+                            config-file target rustflags.
+    --packages-only         In matrix mode, emit one row per package-target
+                            instead of one row per feature combination
     --only-packages-with-lib-target
                             Only consider packages with a library target
-    --errors-only           Allow all warnings, show errors only (-Awarnings)
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
     --no-prune-implied      Disable automatic pruning of redundant feature
@@ -144,6 +159,12 @@ OPTIONS:
                             dependencies cross-compile. Also settable via
                             [workspace.metadata.cargo-fc].driver; pass `cargo` to
                             force plain cargo.
+
+ENVIRONMENT:
+    CARGO                   Program used for plain Cargo invocations
+    CARGO_DRIVER            Set in child processes to the resolved driver
+    CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
+    VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
 ```
 
 ### Configuration
@@ -194,7 +215,8 @@ scopes where it does not apply (`—`):
 The places a setting is *not* overridable, and why:
 
 1. **feature matrix** (`exclude_features`, `only_features`, `*_feature_sets`,
-   `skip_optional_dependencies`, `no_empty_feature_set`, `matrix`) — a workspace
+   `skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`,
+   `matrix`) — a workspace
    isn't a crate, so it has no features to shape.
 2. **`exclude_packages`** — a package can't exclude its *sibling* packages; run
    membership is a workspace-level decision. The bare `pkg` scope accepts
@@ -277,6 +299,9 @@ allow_feature_sets = [
 # When enabled, never include the empty feature set (no `--features`), even if
 # it would otherwise be generated.
 no_empty_feature_set = true
+
+# Override the default safety limit of 100000 generated feature combinations.
+max_combinations = 250000
 
 # When at least one isolated feature set is configured, stop taking all project 
 # features as a whole, and instead take them in these isolated sets. Build a 

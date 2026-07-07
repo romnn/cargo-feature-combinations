@@ -6,7 +6,7 @@ use crate::{
     DEFAULT_METADATA_KEY, METADATA_KEYS, find_metadata_value, pkg_metadata_section,
     ws_metadata_section,
 };
-use color_eyre::eyre;
+use color_eyre::eyre::{self, WrapErr};
 use std::collections::HashSet;
 
 /// Workspace-only non-flag metadata keys read solely from the workspace root.
@@ -51,16 +51,6 @@ pub trait Workspace {
     ///
     /// Returns an error if workspace metadata can not be parsed.
     fn base_workspace_exclude_packages(&self) -> eyre::Result<HashSet<String>>;
-
-    /// Return the packages that should be considered for feature combinations.
-    ///
-    /// This combines candidate discovery with the base target-independent
-    /// workspace exclude set.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if per-package configuration can not be parsed.
-    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>>;
 }
 
 impl Workspace for cargo_metadata::Metadata {
@@ -68,7 +58,12 @@ impl Workspace for cargo_metadata::Metadata {
         let config: WorkspaceConfig = match find_metadata_value(&self.workspace_metadata) {
             Some((value, key)) => {
                 validate_workspace_metadata(value, &ws_metadata_section(key))?;
-                serde_json::from_value(value.clone())?
+                serde_json::from_value(value.clone()).wrap_err_with(|| {
+                    format!(
+                        "invalid [{}] configuration in workspace metadata",
+                        ws_metadata_section(key)
+                    )
+                })?
             }
             None => WorkspaceConfig::default(),
         };
@@ -96,13 +91,6 @@ impl Workspace for cargo_metadata::Metadata {
         }
 
         Ok(exclude)
-    }
-
-    fn packages_for_fc(&self) -> eyre::Result<Vec<&cargo_metadata::Package>> {
-        let mut packages = self.candidate_packages_for_fc()?;
-        let exclude = self.base_workspace_exclude_packages()?;
-        packages.retain(|p| !exclude.contains(p.name.as_str()));
-        Ok(packages)
     }
 }
 
@@ -243,7 +231,7 @@ mod test {
             .workspace_members(vec![package.id.clone()])
             .build()?;
 
-        let have = metadata.packages_for_fc()?;
+        let have = packages_after_base_exclude(&metadata)?;
         similar_asserts::assert_eq!(have: have, want: vec![&package]);
         Ok(())
     }
@@ -263,7 +251,7 @@ mod test {
             }))
             .build()?;
 
-        let have = metadata.packages_for_fc()?;
+        let have = packages_after_base_exclude(&metadata)?;
         assert!(have.is_empty(), "expected no packages after exclusion");
         Ok(())
     }
@@ -283,7 +271,7 @@ mod test {
             }))
             .build()?;
 
-        let have = metadata.packages_for_fc()?;
+        let have = packages_after_base_exclude(&metadata)?;
         assert!(
             have.is_empty(),
             "expected no packages after exclusion via cargo-fc alias"
@@ -306,7 +294,7 @@ mod test {
             }))
             .build()?;
 
-        let have = metadata.packages_for_fc()?;
+        let have = packages_after_base_exclude(&metadata)?;
         assert!(
             have.is_empty(),
             "expected no packages after exclusion via fc alias"
@@ -329,7 +317,7 @@ mod test {
             }))
             .build()?;
 
-        let have = metadata.packages_for_fc()?;
+        let have = packages_after_base_exclude(&metadata)?;
         assert!(
             have.is_empty(),
             "expected no packages after exclusion via feature-combinations alias"
@@ -402,5 +390,14 @@ mod test {
             .workspace_metadata(json!({}))
             .build_directory(None)
             .target_directory("")
+    }
+
+    fn packages_after_base_exclude(
+        metadata: &cargo_metadata::Metadata,
+    ) -> eyre::Result<Vec<&cargo_metadata::Package>> {
+        let mut packages = metadata.candidate_packages_for_fc()?;
+        let exclude = metadata.base_workspace_exclude_packages()?;
+        packages.retain(|package| !exclude.contains(package.name.as_str()));
+        Ok(packages)
     }
 }

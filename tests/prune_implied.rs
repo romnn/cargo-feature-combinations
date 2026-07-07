@@ -2,9 +2,8 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::config::patch::FeatureSetVecPatch;
-use cargo_feature_combinations::config::{Config, FlagConfig, WorkspaceConfig};
-use cargo_feature_combinations::implication::maybe_prune;
+use cargo_feature_combinations::config::{FlagConfig, ResolvedFlags, WorkspaceConfig};
+use cargo_feature_combinations::implication::prune_with_resolved_features;
 use cargo_feature_combinations::plan::execution::{PlanBuildContext, build_execution_plans};
 use cargo_feature_combinations::plan::targets::build_target_plans;
 use cargo_feature_combinations::target::{TargetEnvironment, TargetTriple};
@@ -112,7 +111,9 @@ fn run_prune_in_dir(temp: &TempDir) -> eyre::Result<PruneTestResult> {
     let config = pkg.config()?;
     let resolved = ResolvedFeatures::from_config(&config);
     let combos = pkg.feature_combinations(&resolved)?;
-    let result = maybe_prune(combos, &pkg.features, &config, false);
+    let flags = ResolvedFlags::from_config(config.base.settings.flags);
+    let result =
+        prune_with_resolved_features(combos, &pkg.features, &resolved, flags.no_prune_implied);
 
     let mut kept: Vec<Vec<String>> = result
         .keep
@@ -469,11 +470,7 @@ fn resolve_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
     let config = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     let combos = pkg.feature_combinations(&config)?;
-    let mut prune_config = Config::default();
-    prune_config.base.settings.features.allow_feature_sets = Some(FeatureSetVecPatch::Override(
-        config.allow_feature_sets.clone(),
-    ));
-    let result = maybe_prune(combos, &pkg.features, &prune_config, false);
+    let result = prune_with_resolved_features(combos, &pkg.features, &config, false);
 
     let mut kept: Vec<Vec<String>> = result
         .keep

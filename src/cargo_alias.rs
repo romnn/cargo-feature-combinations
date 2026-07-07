@@ -13,6 +13,7 @@
 use crate::print_warning;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 const MAX_ALIAS_EXPANSIONS: usize = 50;
@@ -193,11 +194,26 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
 fn load_aliases(workspace_root: &Path) -> BTreeMap<String, Vec<String>> {
     let mut aliases: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for path in config_paths(workspace_root) {
-        let Ok(contents) = std::fs::read_to_string(&path) else {
-            continue;
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                print_warning!(
+                    "failed to read cargo alias config {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
         };
-        let Ok(config) = toml::from_str::<CargoConfig>(&contents) else {
-            continue;
+        let config = match toml::from_str::<CargoConfig>(&contents) {
+            Ok(config) => config,
+            Err(err) => {
+                print_warning!(
+                    "failed to parse cargo alias config {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
         };
         for (name, value) in config.alias {
             aliases.insert(name, value.into_tokens());

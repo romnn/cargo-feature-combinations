@@ -101,6 +101,9 @@ pub struct FeatureMatrixPatch {
     /// Merge override for user-defined matrix metadata.
     #[serde(default)]
     pub matrix: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Maximum generated feature combinations before cargo-fc fails.
+    #[serde(default)]
+    pub max_combinations: Option<u128>,
 }
 
 /// Deprecated package-level feature keys kept as accepted input spellings.

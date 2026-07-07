@@ -126,8 +126,13 @@ pub fn host_triple() -> eyre::Result<TargetTriple> {
 ///
 /// Arguments after `--` belong to the test binary or run target and must not
 /// affect cargo-fc target planning, e.g. `cargo fc run -- --target value`.
-#[must_use]
-pub fn parse_cli_target(cargo_args: &[String]) -> Option<String> {
+/// # Errors
+///
+/// Returns an error when more than one explicit target is present. Cargo
+/// accepts repeated targets for some commands, but cargo-fc currently plans
+/// one explicit target; silently choosing one would make summaries misleading.
+pub fn parse_cli_target(cargo_args: &[String]) -> eyre::Result<Option<String>> {
+    let mut target = None;
     let mut it = cargo_args.iter();
     while let Some(arg) = it.next() {
         if arg == "--" {
@@ -139,15 +144,26 @@ pub fn parse_cli_target(cargo_args: &[String]) -> Option<String> {
             if v == "--" {
                 break;
             }
-            return Some(v.clone());
+            set_cli_target(&mut target, v.clone())?;
+            continue;
         }
         if let Some(v) = arg.strip_prefix("--target=")
             && !v.is_empty()
         {
-            return Some(v.to_string());
+            set_cli_target(&mut target, v.to_string())?;
         }
     }
-    None
+    Ok(target)
+}
+
+fn set_cli_target(target: &mut Option<String>, value: String) -> eyre::Result<()> {
+    if let Some(existing) = target {
+        eyre::bail!(
+            "cargo-fc supports only one explicit --target at a time; got `{existing}` and `{value}`"
+        );
+    }
+    *target = Some(value);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -161,7 +177,7 @@ mod test {
     #[test]
     fn parse_cli_target_separate_value() {
         assert_eq!(
-            parse_cli_target(&owned(&["check", "--target", "wasm32-unknown-unknown"])),
+            parse_cli_target(&owned(&["check", "--target", "wasm32-unknown-unknown"])).unwrap(),
             Some("wasm32-unknown-unknown".to_string())
         );
     }
@@ -169,7 +185,7 @@ mod test {
     #[test]
     fn parse_cli_target_equals_form() {
         assert_eq!(
-            parse_cli_target(&owned(&["check", "--target=wasm32-unknown-unknown"])),
+            parse_cli_target(&owned(&["check", "--target=wasm32-unknown-unknown"])).unwrap(),
             Some("wasm32-unknown-unknown".to_string())
         );
     }
@@ -179,14 +195,17 @@ mod test {
         // `cargo fc run -- --target value-for-the-binary` must not be treated as
         // cargo's target triple.
         assert_eq!(
-            parse_cli_target(&owned(&["run", "--", "--target", "binary-arg"])),
+            parse_cli_target(&owned(&["run", "--", "--target", "binary-arg"])).unwrap(),
             None
         );
     }
 
     #[test]
     fn parse_cli_target_does_not_consume_double_dash_as_value() {
-        assert_eq!(parse_cli_target(&owned(&["check", "--target", "--"])), None);
+        assert_eq!(
+            parse_cli_target(&owned(&["check", "--target", "--"])).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -199,13 +218,25 @@ mod test {
                 "--",
                 "--target",
                 "binary-arg",
-            ])),
+            ]))
+            .unwrap(),
             Some("x86_64-unknown-linux-gnu".to_string())
         );
     }
 
     #[test]
     fn parse_cli_target_absent() {
-        assert_eq!(parse_cli_target(&owned(&["check", "--all-features"])), None);
+        assert_eq!(
+            parse_cli_target(&owned(&["check", "--all-features"])).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_cli_target_rejects_repeated_targets() {
+        let err = parse_cli_target(&owned(&["check", "--target=a", "--target", "b"]))
+            .expect_err("repeated targets should fail");
+
+        assert!(err.to_string().contains("only one explicit --target"));
     }
 }

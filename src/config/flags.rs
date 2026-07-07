@@ -327,6 +327,15 @@ pub(crate) fn combine_bool<T>(
     combine_scalar(name, source_kind, entries, get)
 }
 
+pub(crate) fn combine_u128<T>(
+    name: &str,
+    source_kind: &str,
+    entries: &[(&str, T)],
+    get: impl Fn(&T) -> Option<u128>,
+) -> color_eyre::eyre::Result<Option<u128>> {
+    combine_scalar(name, source_kind, entries, get)
+}
+
 /// Combine the scalar `driver` across sibling entries that match one scope.
 /// Values are trimmed before comparison, so two siblings differing only in
 /// surrounding whitespace name the same program and do not conflict. An empty

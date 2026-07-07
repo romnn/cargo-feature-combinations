@@ -128,7 +128,7 @@ pub(crate) fn process_output(
     summary_only: bool,
     dedupe: bool,
     seen: &mut HashSet<String>,
-    stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
 ) -> io::Result<crate::runner::ProcessResult> {
     let mut output_buf = Vec::<u8>::new();
     let proc_stderr = child.stderr.take();
@@ -162,8 +162,8 @@ pub(crate) fn process_output(
                 counts = process_lines(reader, &mut output_buf, dedupe, seen);
             } else {
                 // Stream diagnostics directly to the terminal.
-                counts = process_lines(reader, stdout, dedupe, seen);
-                let _ = stdout.flush();
+                counts = process_lines(reader, stderr, dedupe, seen);
+                let _ = stderr.flush();
             }
         }
 

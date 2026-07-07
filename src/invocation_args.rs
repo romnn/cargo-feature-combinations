@@ -88,20 +88,6 @@ impl<'a> PreparedInvocationArgs<'a> {
         }
     }
 
-    pub(crate) fn is_missing_command(&self) -> bool {
-        match self {
-            Self::CargoCommand {
-                cargo_args,
-                extra_args,
-                ..
-            } => cargo_args.is_empty() && extra_args.is_empty(),
-            Self::AliasWrapper {
-                cargo_args,
-                after_separator_args,
-            } => cargo_args.is_empty() && after_separator_args.is_empty(),
-        }
-    }
-
     pub(crate) fn has_message_format_arg_for_generated_args(&self) -> bool {
         match self {
             Self::CargoCommand { cargo_args, .. } => has_message_format_arg(cargo_args),

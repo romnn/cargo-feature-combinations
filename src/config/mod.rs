@@ -7,7 +7,9 @@ mod schema;
 pub(crate) mod scope;
 mod validate;
 
-pub(crate) use flags::{FLAG_KEYS, combine_bool, combine_driver, combine_flag_configs};
+pub(crate) use flags::{
+    FLAG_KEYS, combine_bool, combine_driver, combine_flag_configs, combine_u128,
+};
 pub use flags::{FlagConfig, ResolvedFlags};
 pub use resolve::ResolvedFeatures;
 pub use schema::{

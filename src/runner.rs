@@ -7,14 +7,15 @@ use crate::implication::PrunedCombination;
 use crate::invocation_args::{GeneratedArgPlacement, PreparedInvocationArgs};
 use crate::package::FeatureCombinationError;
 use crate::plan::execution::ExecutionPlanSet;
-use crate::print_warning;
 use crate::target::{EffectiveTarget, TargetTriple};
+use crate::{print_note, print_warning};
 
 use color_eyre::eyre;
 use itertools::Itertools;
 use regex::Regex;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{self, Write};
+use std::ffi::OsString;
+use std::io::{self, IsTerminal as _, Write};
 use std::process;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -61,8 +62,19 @@ fn color_spec(color: Color, bold: bool) -> ColorSpec {
 /// `portable-pty`) so that `isatty()` returns true in the subprocess, but the
 /// env-var approach covers the vast majority of real-world cases.
 fn force_color(cmd: &mut process::Command) {
-    cmd.env("CARGO_TERM_COLOR", "always");
-    cmd.env("FORCE_COLOR", "1");
+    // Gate on stderr: captured child compiler output is re-streamed to our
+    // stderr, and cargo itself keys auto-color off stderr. This can still put
+    // ANSI into a redirected stdout for `run`/`test` program output (child
+    // stdout is inherited), but favors the dominant check/build/clippy case.
+    if !std::io::stderr().is_terminal() || std::env::var_os("NO_COLOR").is_some() {
+        return;
+    }
+    if std::env::var_os("CARGO_TERM_COLOR").is_none() {
+        cmd.env("CARGO_TERM_COLOR", "always");
+    }
+    if std::env::var_os("FORCE_COLOR").is_none() {
+        cmd.env("FORCE_COLOR", "1");
+    }
 }
 
 fn driver_label(driver: Option<&str>) -> &str {
@@ -204,11 +216,11 @@ pub(crate) struct ProcessResult {
 /// Capture cargo stderr, optionally tee-ing it to the terminal.
 ///
 /// In summary-only mode the output is buffered only; otherwise it is streamed
-/// to `stdout` while also being captured for later analysis.
+/// to stderr while also being captured for later analysis.
 fn capture_stderr(
     child: &mut process::Child,
     summary_only: bool,
-    stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
 ) -> io::Result<ProcessResult> {
     let output_buffer = Vec::<u8>::new();
     let mut output_cursor = io::Cursor::new(output_buffer);
@@ -218,11 +230,11 @@ fn capture_stderr(
         if summary_only {
             io::copy(&mut proc_reader, &mut output_cursor)?;
         } else {
-            let mut tee_reader = crate::tee::Reader::new(proc_reader, stdout, true);
+            let mut tee_reader = crate::tee::Reader::new(proc_reader, stderr, true);
             io::copy(&mut tee_reader, &mut output_cursor)?;
         }
     } else {
-        eprintln!("ERROR: failed to redirect stderr");
+        print_warning!("failed to redirect child stderr");
     }
 
     let stripped = strip_ansi_escapes::strip(output_cursor.get_ref());
@@ -348,30 +360,32 @@ fn print_summary(
         String::new()
     };
 
-    println!();
+    let _ = writeln!(stdout);
     stdout.set_color(&CYAN).ok();
-    print!("    Finished ");
+    let _ = write!(stdout, "    Finished ");
     stdout.reset().ok();
     if num_pruned > 0 {
-        print!(
+        let _ = write!(
+            stdout,
             "{num_executed} of {num_total} feature combination{} for {num_packages} package{}{targets_clause} in {:.2}s",
-            if num_total > 1 { "s" } else { "" },
-            if num_packages > 1 { "s" } else { "" },
+            if num_total == 1 { "" } else { "s" },
+            if num_packages == 1 { "" } else { "s" },
             elapsed.as_secs_f64(),
         );
         stdout.set_color(&DIMMED).ok();
-        print!(" ({num_pruned} pruned)");
+        let _ = write!(stdout, " ({num_pruned} pruned)");
         stdout.reset().ok();
     } else {
-        print!(
+        let _ = write!(
+            stdout,
             "{num_total} feature combination{} for {num_packages} package{}{targets_clause} in {:.2}s",
-            if num_total > 1 { "s" } else { "" },
-            if num_packages > 1 { "s" } else { "" },
+            if num_total == 1 { "" } else { "s" },
+            if num_packages == 1 { "" } else { "s" },
             elapsed.as_secs_f64(),
         );
     }
-    println!();
-    println!();
+    let _ = writeln!(stdout);
+    let _ = writeln!(stdout);
 
     let max_errors = summary.iter().map(|s| s.num_errors).max().unwrap_or(0);
     let max_warnings = summary.iter().map(|s| s.num_warnings).max().unwrap_or(0);
@@ -402,7 +416,7 @@ fn print_summary(
             first_bad_exit_code = first_bad_exit_code.or(Some(exit_code));
         }
     }
-    println!();
+    let _ = writeln!(stdout);
 
     first_bad_exit_code
 }
@@ -418,17 +432,17 @@ struct SummaryFormat {
 fn print_summary_entry(s: &Summary, stdout: &mut termcolor::StandardStream, fmt: &SummaryFormat) {
     if s.is_pruned() {
         stdout.set_color(&DIMMED).ok();
-        print!("        SKIP ");
+        let _ = write!(stdout, "        SKIP ");
         stdout.reset().ok();
     } else if !s.pedantic_success {
         stdout.set_color(&RED).ok();
-        print!("        FAIL ");
+        let _ = write!(stdout, "        FAIL ");
     } else if s.num_warnings > 0 {
         stdout.set_color(&YELLOW).ok();
-        print!("        WARN ");
+        let _ = write!(stdout, "        WARN ");
     } else {
         stdout.set_color(&GREEN).ok();
-        print!("        PASS ");
+        let _ = write!(stdout, "        PASS ");
     }
     stdout.reset().ok();
 
@@ -441,12 +455,14 @@ fn print_summary_entry(s: &Summary, stdout: &mut termcolor::StandardStream, fmt:
     let nw = s.num_warnings;
     let ns = s.num_suppressed;
     if fmt.show_suppressed {
-        print!(
+        let _ = write!(
+            stdout,
             "{} ( {target}{ne:>ew$} errors, {nw:>ww$} warnings, {ns:>sw$} suppressed, features = [{feat}] )",
             s.package_name,
         );
     } else {
-        print!(
+        let _ = write!(
+            stdout,
             "{} ( {target}{ne:>ew$} errors, {nw:>ww$} warnings, features = [{feat}] )",
             s.package_name,
         );
@@ -455,10 +471,10 @@ fn print_summary_entry(s: &Summary, stdout: &mut termcolor::StandardStream, fmt:
     if let Some(equiv) = &s.equivalent_to {
         let equiv = equiv.iter().join(", ");
         stdout.set_color(&DIMMED).ok();
-        println!(" \u{2190} equivalent to [{equiv}]");
+        let _ = writeln!(stdout, " \u{2190} equivalent to [{equiv}]");
         stdout.reset().ok();
     } else {
-        println!();
+        let _ = writeln!(stdout);
     }
 }
 
@@ -485,6 +501,25 @@ struct Invocation<'a> {
     driver: Option<&'a str>,
 }
 
+struct InvocationStep<'a> {
+    package: &'a cargo_metadata::Package,
+    features: Vec<String>,
+    flags: ResolvedFlags,
+    inject_targets: Vec<String>,
+    summary_target: SummaryTarget,
+    driver: Option<String>,
+}
+
+enum Step<'a> {
+    StartSerialBlock,
+    Run(InvocationStep<'a>),
+    AppendPruned {
+        package_name: String,
+        summary_target: SummaryTarget,
+        pruned: Vec<PrunedCombination>,
+    },
+}
+
 /// One aggregate-mode Cargo invocation after transposing target plans by package
 /// and feature combination.
 struct AggregateInvocationPlan<'a> {
@@ -504,66 +539,68 @@ fn print_package_cmd(
     diagnostics_only: bool,
     driver: Option<&str>,
     progress: Progress,
-    stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
 ) {
     let compact = inv.flags.summary_only || diagnostics_only;
     if !compact {
-        println!();
+        let _ = writeln!(stderr);
     }
     let subcommand = cargo_subcommand(all_args);
-    stdout.set_color(&CYAN).ok();
+    stderr.set_color(&CYAN).ok();
     match subcommand {
         CargoSubcommand::Test => {
-            print!("     Testing ");
+            let _ = write!(stderr, "     Testing ");
         }
         CargoSubcommand::Doc => {
-            print!("     Documenting ");
+            let _ = write!(stderr, "     Documenting ");
         }
         CargoSubcommand::Lint => {
-            print!("     Linting ");
+            let _ = write!(stderr, "     Linting ");
         }
         CargoSubcommand::Check => {
-            print!("     Checking ");
+            let _ = write!(stderr, "     Checking ");
         }
         CargoSubcommand::Run => {
-            print!("     Running ");
+            let _ = write!(stderr, "     Running ");
         }
         CargoSubcommand::Build => {
-            print!("     Building ");
+            let _ = write!(stderr, "     Building ");
         }
         CargoSubcommand::Other => {
-            print!("     ");
+            let _ = write!(stderr, "     ");
         }
     }
     // The progress counter sits immediately to the left of the package name.
     // It is always dimmed; for known subcommands only the verb is cyan, while
     // for unknown subcommands (Other) the rest of the line stays cyan so the
     // header remains visually distinct.
-    stdout.set_color(&DIMMED).ok();
-    print!(
+    stderr.set_color(&DIMMED).ok();
+    let _ = write!(
+        stderr,
         "[{idx:>width$}/{total}]",
         idx = progress.index,
         total = progress.total,
         width = progress.width,
     );
     if subcommand == CargoSubcommand::Other {
-        stdout.set_color(&CYAN).ok();
+        stderr.set_color(&CYAN).ok();
     } else {
-        stdout.reset().ok();
+        stderr.reset().ok();
     }
-    print!(
+    let _ = write!(
+        stderr,
         " {} ( {}features = [{}] )",
         inv.package.name,
         inv.summary_target.field_prefix(),
         inv.features.iter().join(", ")
     );
     if inv.flags.verbose {
-        print!(" [{} {}]", driver_label(driver), all_args.join(" "));
+        let _ = write!(stderr, " [{} {}]", driver_label(driver), all_args.join(" "));
     }
-    stdout.reset().ok();
-    println!();
+    stderr.reset().ok();
+    let _ = writeln!(stderr);
     if !compact {
-        println!();
+        let _ = writeln!(stderr);
     }
 }
 
@@ -587,7 +624,7 @@ fn run_single_combination(
     ctx: &RunContext<'_>,
     progress: Progress,
     seen_diagnostics: &mut HashSet<String>,
-    stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
 ) -> eyre::Result<CombinationResult> {
     let package = inv.package;
     let features = inv.features;
@@ -626,13 +663,7 @@ fn run_single_combination(
     force_color(&mut cmd);
 
     if inv.flags.errors_only {
-        cmd.env(
-            "RUSTFLAGS",
-            format!(
-                "-Awarnings {}", // allows all warnings
-                std::env::var("RUSTFLAGS").unwrap_or_default()
-            ),
-        );
+        apply_errors_only_rustflags(&mut cmd);
     }
 
     let features_flag = format!("--features={}", features.iter().join(","));
@@ -644,12 +675,10 @@ fn run_single_combination(
         generated_args.push("--target");
         generated_args.push(triple.as_str());
     }
-    if !ctx.invocation_args.is_missing_command() {
-        generated_args.push("--no-default-features");
-        generated_args.push(&features_flag);
-    }
+    generated_args.push("--no-default-features");
+    generated_args.push(&features_flag);
     let args = ctx.invocation_args.with_generated_args(generated_args);
-    print_package_cmd(inv, &args, diagnostics_only, inv.driver, progress, stdout);
+    print_package_cmd(inv, &args, diagnostics_only, inv.driver, progress, stderr);
 
     cmd.args(&args).current_dir(working_dir);
     let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only)?;
@@ -660,20 +689,21 @@ fn run_single_combination(
             inv.flags.summary_only,
             dedupe,
             seen_diagnostics,
-            stdout,
+            stderr,
         )?
     } else {
-        capture_stderr(&mut child, inv.flags.summary_only, stdout)?
+        capture_stderr(&mut child, inv.flags.summary_only, stderr)?
     };
 
     let exit_status = child.wait()?;
 
     // Print per-combination dedup note after diagnostics
     if result.num_suppressed > 0 && !inv.flags.summary_only {
-        stdout.set_color(&CYAN).ok();
-        print!("       Note ");
-        stdout.reset().ok();
-        println!(
+        stderr.set_color(&CYAN).ok();
+        let _ = write!(stderr, "       Note ");
+        stderr.reset().ok();
+        let _ = writeln!(
+            stderr,
             "{} duplicate diagnostic{} suppressed",
             result.num_suppressed,
             if result.num_suppressed > 1 { "s" } else { "" },
@@ -689,8 +719,8 @@ fn run_single_combination(
     // the only clue about what went wrong. Print it unconditionally (even in
     // --summary-only mode) so the failure is never silent.
     if diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
-        stdout.write_all(&result.output)?;
-        stdout.flush().ok();
+        stderr.write_all(&result.output)?;
+        stderr.flush().ok();
         // Clear the buffer so the --fail-fast dump does not print it a
         // second time.
         result.output.clear();
@@ -717,6 +747,35 @@ fn run_single_combination(
     })
 }
 
+fn apply_errors_only_rustflags(cmd: &mut process::Command) {
+    let (key, value) = errors_only_rustflags_env(
+        std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
+        std::env::var_os("RUSTFLAGS"),
+    );
+    cmd.env(key, value);
+}
+
+fn errors_only_rustflags_env(
+    encoded: Option<OsString>,
+    rustflags: Option<OsString>,
+) -> (&'static str, OsString) {
+    const ALLOW_WARNINGS: &str = "-Awarnings";
+    if let Some(mut value) = encoded {
+        if !value.is_empty() {
+            value.push("\x1f");
+        }
+        value.push(ALLOW_WARNINGS);
+        return ("CARGO_ENCODED_RUSTFLAGS", value);
+    }
+
+    let mut value = rustflags.unwrap_or_default();
+    if !value.is_empty() {
+        value.push(" ");
+    }
+    value.push(ALLOW_WARNINGS);
+    ("RUSTFLAGS", value)
+}
+
 /// Execution mode over the same execution plans.
 ///
 /// Both modes are single-threaded and stream live output; they differ only in
@@ -730,6 +789,80 @@ pub enum TargetExecutionMode {
     /// that combo's targets as repeated `--target` flags, group-level
     /// attribution.
     Aggregate,
+}
+
+/// Resolve the effective target execution mode, emitting a note when an
+/// explicitly requested `--aggregate-targets` falls back to serial or is a
+/// no-op.
+pub(crate) fn resolve_execution_mode(
+    cargo_args: &[&str],
+    plan_set: &ExecutionPlanSet<'_>,
+    generated_arg_placement: GeneratedArgPlacement,
+) -> TargetExecutionMode {
+    let mut requested = 0usize;
+    let mut total = 0usize;
+    for plan in &plan_set.plans {
+        for package_plan in &plan.package_plans {
+            total += 1;
+            requested += usize::from(package_plan.flags.aggregate_targets);
+        }
+    }
+
+    if requested == 0 {
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if requested != total {
+        print_note!(
+            "aggregate target execution is disabled because it resolves differently across package-targets; running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    let mut first_driver: HashMap<&str, Option<&str>> = HashMap::new();
+    let driver_differs_within_a_package = plan_set
+        .plans
+        .iter()
+        .flat_map(|plan| &plan.package_plans)
+        .any(|package_plan| {
+            let driver = package_plan.driver.as_deref();
+            *first_driver
+                .entry(package_plan.package.id.repr.as_str())
+                .or_insert(driver)
+                != driver
+        });
+    if driver_differs_within_a_package {
+        print_note!(
+            "aggregate target execution is disabled because the build driver resolves differently across a package's targets; running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if plan_set.plans.len() <= 1 {
+        if !plan_set.show_target {
+            return TargetExecutionMode::SerialPerTarget;
+        }
+        print_note!("--aggregate-targets has no effect for a single target; running normally");
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if generated_arg_placement == GeneratedArgPlacement::CargoCommand
+        && cargo_subcommand(cargo_args) == CargoSubcommand::Run
+    {
+        print_note!(
+            "--aggregate-targets does not apply to `run` (cargo runs one target at a time); running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    if plan_set.show_pruned {
+        print_note!(
+            "--aggregate-targets is disabled because pruned summaries are target-specific; running targets serially"
+        );
+        return TargetExecutionMode::SerialPerTarget;
+    }
+
+    TargetExecutionMode::Aggregate
 }
 
 /// Set up shared Cargo invocation context and run the execution plans in the
@@ -780,37 +913,33 @@ pub fn run_execution_plans(
     };
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);
+    let mut stderr = StandardStream::stderr(ColorChoice::Auto);
     let mut seen_diagnostics: HashSet<String> = HashSet::new();
 
+    let steps = execution_steps(plan_set, mode);
+    execute_steps(
+        plan_set,
+        &steps,
+        &ctx,
+        &mut seen_diagnostics,
+        &mut stdout,
+        &mut stderr,
+        start,
+    )
+}
+
+fn execution_steps<'a>(
+    plan_set: &'a ExecutionPlanSet<'a>,
+    mode: TargetExecutionMode,
+) -> Vec<Step<'a>> {
     match mode {
-        TargetExecutionMode::SerialPerTarget => {
-            execute_serial(plan_set, &ctx, &mut seen_diagnostics, &mut stdout, start)
-        }
-        TargetExecutionMode::Aggregate => {
-            execute_aggregate(plan_set, &ctx, &mut seen_diagnostics, &mut stdout, start)
-        }
+        TargetExecutionMode::SerialPerTarget => serial_steps(plan_set),
+        TargetExecutionMode::Aggregate => aggregate_steps(plan_set),
     }
 }
 
-/// Serial per-target execution: one Cargo invocation per
-/// `(package, target, combo)`.
-fn execute_serial(
-    plan_set: &ExecutionPlanSet,
-    ctx: &RunContext<'_>,
-    seen_diagnostics: &mut HashSet<String>,
-    stdout: &mut StandardStream,
-    start: Instant,
-) -> eyre::Result<ExitCode> {
-    let mut summary: Vec<Summary> = Vec::new();
-    let total: usize = plan_set
-        .plans
-        .iter()
-        .flat_map(|plan| plan.package_plans.iter())
-        .map(|pp| pp.combinations.len())
-        .sum();
-    let width = total.to_string().len();
-    let mut index = 0;
-
+fn serial_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
+    let mut steps = Vec::new();
     for plan in &plan_set.plans {
         for pp in &plan.package_plans {
             let summary_target = if plan_set.show_target {
@@ -818,23 +947,95 @@ fn execute_serial(
             } else {
                 SummaryTarget::Hidden
             };
-            let inject: Vec<String> = if pp.target.source.should_inject_target_arg() {
+            let inject_targets = if pp.target.source.should_inject_target_arg() {
                 vec![pp.target.triple.0.clone()]
             } else {
                 Vec::new()
             };
 
-            let pkg_start = summary.len();
+            steps.push(Step::StartSerialBlock);
             for combo in &pp.combinations {
+                steps.push(Step::Run(InvocationStep {
+                    package: pp.package,
+                    features: combo.clone(),
+                    flags: pp.flags,
+                    inject_targets: inject_targets.clone(),
+                    summary_target: summary_target.clone(),
+                    driver: pp.driver.clone(),
+                }));
+            }
+            steps.push(Step::AppendPruned {
+                package_name: pp.package.name.to_string(),
+                summary_target,
+                pruned: pp.pruned.clone(),
+            });
+        }
+    }
+    steps
+}
+
+fn aggregate_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
+    aggregate_invocation_plans(plan_set)
+        .into_iter()
+        .map(|inv_plan| {
+            let triples: Vec<TargetTriple> =
+                inv_plan.targets.iter().map(|t| t.triple.clone()).collect();
+            let summary_target = match triples.as_slice() {
+                [single] => SummaryTarget::Single(single.clone()),
+                _ => SummaryTarget::Group(triples),
+            };
+            let inject_targets = inv_plan
+                .targets
+                .iter()
+                .filter(|t| t.source.should_inject_target_arg())
+                .map(|t| t.triple.0.clone())
+                .collect();
+
+            Step::Run(InvocationStep {
+                package: inv_plan.package,
+                features: inv_plan.combo,
+                flags: inv_plan.flags,
+                inject_targets,
+                summary_target,
+                driver: inv_plan.driver,
+            })
+        })
+        .collect()
+}
+
+fn execute_steps(
+    plan_set: &ExecutionPlanSet,
+    steps: &[Step<'_>],
+    ctx: &RunContext<'_>,
+    seen_diagnostics: &mut HashSet<String>,
+    stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
+    start: Instant,
+) -> eyre::Result<ExitCode> {
+    let mut summary: Vec<Summary> = Vec::new();
+    let total = steps
+        .iter()
+        .filter(|step| matches!(step, Step::Run(_)))
+        .count();
+    let width = total.to_string().len();
+    let mut index = 0;
+    let mut block_start = 0usize;
+
+    for step in steps {
+        match step {
+            Step::StartSerialBlock => {
+                block_start = summary.len();
+            }
+            Step::Run(inv_step) => {
                 index += 1;
                 let result = run_single_combination(
                     &Invocation {
-                        package: pp.package,
-                        features: combo,
-                        flags: pp.flags,
-                        inject_targets: &inject,
-                        summary_target: &summary_target,
-                        driver: pp.driver.as_deref(),
+                        package: inv_step.package,
+                        features: &inv_step.features,
+                        flags: inv_step.flags,
+                        inject_targets: &inv_step.inject_targets,
+                        summary_target: &inv_step.summary_target,
+                        driver: inv_step.driver.as_deref(),
                     },
                     ctx,
                     Progress {
@@ -843,7 +1044,7 @@ fn execute_serial(
                         width,
                     },
                     seen_diagnostics,
-                    stdout,
+                    stderr,
                 )?;
                 if let Some(code) = record_result_and_maybe_stop(
                     &mut summary,
@@ -851,86 +1052,25 @@ fn execute_serial(
                     plan_set.show_pruned,
                     ctx,
                     stdout,
+                    stderr,
                     start,
                 )? {
                     return Ok(Some(code));
                 }
             }
-
-            append_pruned_summaries(
-                &mut summary,
-                pkg_start,
-                pp.package.name.as_ref(),
-                &summary_target,
-                pp.pruned.clone(),
-            );
-        }
-    }
-
-    Ok(print_summary(
-        &summary,
-        plan_set.show_pruned,
-        stdout,
-        start.elapsed(),
-    ))
-}
-
-/// Aggregate execution: one Cargo invocation per `(package, combo)` carrying
-/// every target that shares the combo as repeated `--target` flags.
-fn execute_aggregate(
-    plan_set: &ExecutionPlanSet,
-    ctx: &RunContext<'_>,
-    seen_diagnostics: &mut HashSet<String>,
-    stdout: &mut StandardStream,
-    start: Instant,
-) -> eyre::Result<ExitCode> {
-    let invocations = aggregate_invocation_plans(plan_set);
-    let total = invocations.len();
-    let width = total.to_string().len();
-    let mut summary: Vec<Summary> = Vec::new();
-
-    for (zero_index, inv_plan) in invocations.iter().enumerate() {
-        let index = zero_index + 1;
-        let triples: Vec<TargetTriple> =
-            inv_plan.targets.iter().map(|t| t.triple.clone()).collect();
-        let summary_target = match triples.as_slice() {
-            [single] => SummaryTarget::Single(single.clone()),
-            _ => SummaryTarget::Group(triples.clone()),
-        };
-        let inject: Vec<String> = inv_plan
-            .targets
-            .iter()
-            .filter(|t| t.source.should_inject_target_arg())
-            .map(|t| t.triple.0.clone())
-            .collect();
-
-        let result = run_single_combination(
-            &Invocation {
-                package: inv_plan.package,
-                features: &inv_plan.combo,
-                flags: inv_plan.flags,
-                inject_targets: &inject,
-                summary_target: &summary_target,
-                driver: inv_plan.driver.as_deref(),
-            },
-            ctx,
-            Progress {
-                index,
-                total,
-                width,
-            },
-            seen_diagnostics,
-            stdout,
-        )?;
-        if let Some(code) = record_result_and_maybe_stop(
-            &mut summary,
-            result,
-            plan_set.show_pruned,
-            ctx,
-            stdout,
-            start,
-        )? {
-            return Ok(Some(code));
+            Step::AppendPruned {
+                package_name,
+                summary_target,
+                pruned,
+            } => {
+                append_pruned_summaries(
+                    &mut summary,
+                    block_start,
+                    package_name,
+                    summary_target,
+                    pruned.clone(),
+                );
+            }
         }
     }
 
@@ -948,6 +1088,7 @@ fn record_result_and_maybe_stop(
     show_pruned: bool,
     _ctx: &RunContext<'_>,
     stdout: &mut StandardStream,
+    stderr: &mut StandardStream,
     start: Instant,
 ) -> eyre::Result<ExitCode> {
     let CombinationResult {
@@ -964,8 +1105,8 @@ fn record_result_and_maybe_stop(
     }
 
     if flags.summary_only {
-        io::copy(&mut io::Cursor::new(colored_output), stdout)?;
-        stdout.flush().ok();
+        io::copy(&mut io::Cursor::new(colored_output), stderr)?;
+        stderr.flush().ok();
     }
     Ok(Some(
         print_summary(summary, show_pruned, stdout, start.elapsed())
@@ -1083,8 +1224,8 @@ fn append_pruned_summaries(
 #[cfg(test)]
 mod test {
     use super::{
-        Summary, SummaryTarget, aggregate_invocation_plans, error_counts, print_summary,
-        warning_counts,
+        Summary, SummaryTarget, aggregate_invocation_plans, error_counts,
+        errors_only_rustflags_env, print_summary, warning_counts,
     };
     use crate::config::ResolvedFlags;
     use crate::package::test::{effective_target, package};
@@ -1092,6 +1233,7 @@ mod test {
     use crate::target::TargetTriple;
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
+    use std::ffi::OsString;
 
     fn string_vec(values: &[&str]) -> Vec<String> {
         values.iter().copied().map(String::from).collect()
@@ -1109,6 +1251,37 @@ mod test {
             num_suppressed: 0,
             equivalent_to: None,
         }
+    }
+
+    #[test]
+    fn errors_only_appends_after_plain_rustflags() {
+        let (key, value) =
+            errors_only_rustflags_env(None, Some(OsString::from("-Dwarnings --cfg ci")));
+
+        sim_assert_eq!(key, "RUSTFLAGS");
+        sim_assert_eq!(value, OsString::from("-Dwarnings --cfg ci -Awarnings"));
+    }
+
+    #[test]
+    fn errors_only_extends_encoded_rustflags_when_present() {
+        let (key, value) = errors_only_rustflags_env(
+            Some(OsString::from("-Dwarnings\x1f--cfg=ci")),
+            Some(OsString::from("-Dwarnings")),
+        );
+
+        sim_assert_eq!(key, "CARGO_ENCODED_RUSTFLAGS");
+        sim_assert_eq!(
+            value,
+            OsString::from("-Dwarnings\x1f--cfg=ci\x1f-Awarnings")
+        );
+    }
+
+    #[test]
+    fn errors_only_handles_empty_encoded_rustflags() {
+        let (key, value) = errors_only_rustflags_env(Some(OsString::new()), None);
+
+        sim_assert_eq!(key, "CARGO_ENCODED_RUSTFLAGS");
+        sim_assert_eq!(value, OsString::from("-Awarnings"));
     }
 
     fn package_plan<'a>(

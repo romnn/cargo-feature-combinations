@@ -210,7 +210,7 @@ fn resolve_package_execution_plan<'a>(
         (Vec::new(), Vec::new())
     } else {
         let all_combos = planned.package.feature_combinations(&resolved.features)?;
-        let prune_result = crate::implication::maybe_prune_with_resolved_flag(
+        let prune_result = crate::implication::prune_with_resolved_features(
             all_combos,
             &planned.package.features,
             &resolved.features,

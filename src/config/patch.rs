@@ -332,6 +332,19 @@ pub(crate) struct SetPatchOps<E: Ord + Clone> {
 }
 
 impl<E: Ord + Clone> SetPatchOps<E> {
+    /// Build operations from one patch. A single patch cannot have conflicting
+    /// overrides, so this is infallible.
+    pub(crate) fn from_single<P>(patch: &P) -> Self
+    where
+        P: SetPatchInput<Elem = E>,
+    {
+        Self {
+            override_value: patch.override_elems(),
+            add: patch.add_elems().collect(),
+            remove: patch.remove_elems().collect(),
+        }
+    }
+
     /// `base` is only materialized when this patch is not a full override, so a
     /// pure-override layer skips converting the base value it would discard.
     fn apply(&self, base: impl FnOnce() -> BTreeSet<E>) -> BTreeSet<E> {
