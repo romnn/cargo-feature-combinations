@@ -1,6 +1,7 @@
 .DS_Store
 /target
 /goreleaser-dist
+/plan
 
 # build artifacts from the example workspaces used to generate screenshots
 examples/*/target
@@ -19,3 +20,7 @@ examples/*/target
 *.njsproj
 *.sln
 *.sw?
+
+# cooldown
+.cooldown.lock
+.cooldown-versions-*
