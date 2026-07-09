@@ -6,6 +6,7 @@ ast-grep = "latest"
 typos = "latest"
 actionlint = "latest"
 goreleaser = "latest"
+"aqua:jqlang/jq" = "latest"
 "aqua:charmbracelet/freeze" = "latest"
 
 # Documentation site (website/, Hugo + hugo-book theme).

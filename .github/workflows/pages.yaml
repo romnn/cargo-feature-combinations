@@ -3,11 +3,16 @@ on:
   push:
     branches: [main]
     paths:
-      - "website/**"
-      # The docs render these example workspaces' Cargo.toml files verbatim.
+      - "docs/**"
+      # The docs render these example workspaces' Cargo.toml verbatim and their
+      # cargo-fc output as screenshots/terminal snippets.
       - "examples/**"
+      - "src/**"
+      - "scripts/screenshots.sh"
+      - "scripts/terminals.sh"
       - "mise.toml"
       - "mise.lock"
+      - "taskfile.yaml"
       - ".github/workflows/pages.yaml"
   workflow_dispatch: {}
 
@@ -17,9 +22,9 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+# Allow only one concurrent deployment; don't cancel an in-progress production deploy.
 concurrency:
-  group: pages
+  group: "pages"
   cancel-in-progress: false
 
 jobs:
@@ -27,31 +32,38 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # Tooling comes from mise (mise.toml): go + extended Hugo. Only install
-      # what the docs build needs, not the whole workspace toolchain.
+      # cargo-fc is built from source (docs render its live output); wasm32 is
+      # needed for the multi-target example.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Everything else (go, extended Hugo, task, freeze, terminal-to-html, jq)
+      # comes from mise.
       - uses: jdx/mise-action@v4
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
         with:
           install: false
           cache: true
-      - name: Install go + hugo (extended)
-        run: mise install go "asdf:NeoHsu/asdf-hugo"
+      - name: Install docs toolchain
+        run: >-
+          mise install
+          go "asdf:NeoHsu/asdf-hugo" task
+          "aqua:charmbracelet/freeze" "aqua:jqlang/jq"
+          "go:github.com/buildkite/terminal-to-html/v3/cmd/terminal-to-html"
+      - name: Install ImageMagick
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
-      - name: Build
-        # The hugo-book theme is a Hugo module, fetched via go at build time.
-        run: >-
-          mise exec -- hugo
-          --source website
-          --minify
-          --gc
-          --baseURL "${{ steps.pages.outputs.base_url }}/"
+      # Regenerates screenshots + terminal snippets from the current source, then
+      # builds the site — the same `task docs:build` used locally.
+      - name: Build docs
+        run: mise exec -- task docs:build -- --baseURL "${{ steps.pages.outputs.base_url }}/"
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website/public
+          path: docs/public
 
   deploy:
     needs: build
