@@ -15,6 +15,35 @@ integration tests and has no stability guarantees.
   <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="500">
 </p>
 
+<details>
+<summary>More screenshots</summary>
+
+1. **`--diagnostics-only`** — only warnings/errors, no build noise
+
+   <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500">
+
+2. **`--dedupe`** — fold identical diagnostics across combinations
+
+   <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500">
+
+3. **`--summary-only`** — just the per-combination result table
+
+   <img src="docs/summary.png" alt="cargo fc --summary-only check" width="500">
+
+4. **`--show-pruned`** — redundant combinations implied by other features are pruned
+
+   <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500">
+
+5. **`matrix`** — machine-readable feature matrix (one row per combination)
+
+   <img src="docs/matrix.png" alt="cargo fc matrix piped to jq" width="500">
+
+6. **configured `targets`** — every feature combination checked across each target triple
+
+   <img src="docs/targets.png" alt="cargo fc check across multiple target triples" width="500">
+
+</details>
+
 ### Installation
 
 ```bash
@@ -46,7 +75,7 @@ cargo fc build
 cargo fc check -p <my-crate> --all-targets
 ```
 
-In addition, cargo-fc provides these flags and the `matrix` subcommand.
+In addition, cargo-fc accepts new flags and the `matrix` subcommand.
 To get an idea, consider these examples:
 
 ```bash
@@ -66,106 +95,7 @@ cargo fc --summary-only build
 cargo fc matrix --pretty
 ```
 
-<details>
-<summary>More screenshots</summary>
-
-1. **`--diagnostics-only`** — only warnings/errors, no build noise
-
-   <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500">
-
-2. **`--dedupe`** — fold identical diagnostics across combinations
-
-   <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500">
-
-3. **`--summary-only`** — just the per-combination result table
-
-   <img src="docs/summary.png" alt="cargo fc --summary-only check" width="500">
-
-4. **`--show-pruned`** — redundant combinations implied by other features are pruned
-
-   <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500">
-
-5. **`matrix`** — machine-readable feature matrix (one row per combination)
-
-   <img src="docs/matrix.png" alt="cargo fc matrix piped to jq" width="500">
-
-</details>
-
 For details, please refer to `--help`:
-
-```bash
-$ cargo fc --help
-
-USAGE:
-    cargo fc [+toolchain] [SUBCOMMAND] [SUBCOMMAND_OPTIONS]
-    cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
-
-SUBCOMMAND:
-    matrix                  Print JSON feature combination matrix to stdout
-        --pretty            Print pretty JSON
-    version                 Print version information
-
-OPTIONS:
-    -h, --help              Print help information
-    -V, --version           Print version information
-    --manifest-path <path>  Path to Cargo.toml to inspect
-    -p, --package <name>    Include only this workspace package (repeatable)
-    --exclude-package <name>
-    --exclude <name>        Exclude a workspace package from feature
-                            combinations (repeatable). `--exclude` is accepted
-                            with `--workspace` for Cargo-compatible workspace
-                            package selection.
-    --diagnostics-only      Show only diagnostics (warnings/errors) per
-                            feature combination. Subcommand must accept
-                            --message-format=... and emit rustc JSON
-                            diagnostics (e.g. build, check, clippy, doc,
-                            or any alias/wrapper that does the same)
-    --dedupe, --dedup       Like --diagnostics-only, but also deduplicate
-                            identical diagnostics across feature combinations
-    --summary-only
-    --summary
-    --silent                Hide cargo output and only show the final summary
-    --fail-fast             Fail fast on the first bad feature combination
-    --errors-only           Allow all warnings, show errors only (-Awarnings).
-                            This appends to RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS;
-                            like any RUSTFLAGS env override, it shadows
-                            config-file target rustflags.
-    --packages-only         In matrix mode, emit one row per package-target
-                            instead of one row per feature combination
-    --only-packages-with-lib-target
-                            Only consider packages with a library target
-    --pedantic              Treat warnings like errors in summary and
-                            when using --fail-fast
-    --no-prune-implied      Disable automatic pruning of redundant feature
-                            combinations implied by other features
-    --show-pruned           Show pruned feature combinations in the summary
-    --aggregate-targets     Batch each combination's configured targets into a
-                            single Cargo invocation (one `--target` per target)
-                            instead of one invocation per target. Faster on
-                            many cores; reports results per target group. Falls
-                            back to serial for `run` and pruned summaries.
-    --no-targets            Ignore configured target lists for this invocation
-                            and use Cargo's default single target (--target,
-                            then CARGO_BUILD_TARGET, then host). An alternative
-                            to passing an explicit --target <triple>.
-    --install-missing-targets
-                            Install missing Rust target components with rustup
-                            before running Cargo. Explicit opt-in because this
-                            may mutate the toolchain and use the network.
-    --driver <bin>          Program invoked in place of `cargo` for each build
-                            (e.g. `cargo-zigbuild`, `cross`). Defaults to plain
-                            `cargo` for host-only runs and to `cargo-zigbuild`
-                            when any non-host target is planned, so native-C
-                            dependencies cross-compile. Also settable via
-                            [workspace.metadata.cargo-fc].driver; pass `cargo` to
-                            force plain cargo.
-
-ENVIRONMENT:
-    CARGO                   Program used for plain Cargo invocations
-    CARGO_DRIVER            Set in child processes to the resolved driver
-    CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
-    VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
-```
 
 ### Configuration
 
@@ -199,18 +129,19 @@ Wherever a setting is valid, it accepts the **same forms**, consistently:
 - `replace = true` on a section — **reset**: ignore everything broader in the
   chain and start this section from defaults.
 
-The matrix shows where each setting may be overridden (`✓`), and the only
-scopes where it does not apply (`—`):
+The matrix shows where each setting may be overridden (`✓`); a blank cell means
+it does not apply in that scope (`*` marks the deprecated root-package
+`exclude_packages` spelling — see note 2):
 
 | setting | ws | ws·target | ws·sub | ws·tgt·sub | pkg | pkg·target | pkg·sub | pkg·tgt·sub |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | cargo-fc flags | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| feature matrix¹ | — | — | — | — | ✓ | ✓ | ✓ | ✓ |
-| `exclude_packages`² | ✓ | ✓ | ✓ | ✓ | —* | — | — | — |
-| `targets` (list)³ | ✓ | — | ✓ | — | ✓ | — | ✓ | — |
-| `expand_targets` | — | — | ✓ | ✓ | — | — | ✓ | ✓ |
+| feature matrix¹ |  |  |  |  | ✓ | ✓ | ✓ | ✓ |
+| `exclude_packages`² | ✓ | ✓ | ✓ | ✓ | * |  |  |  |
+| `targets` (list)³ | ✓ |  | ✓ |  | ✓ |  | ✓ |  |
+| `expand_targets` |  |  | ✓ | ✓ |  |  | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `replace`⁴ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `replace`⁴ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The places a setting is *not* overridable, and why:
 

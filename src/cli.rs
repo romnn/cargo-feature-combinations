@@ -824,7 +824,7 @@ fn cargo_fc_bool_inline_flag(arg: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod test {
     use super::{
-        CargoSubcommand, Command, HELP_TEXT, builtin_diagnostics_safe, cargo_subcommand,
+        CargoSubcommand, Command, builtin_diagnostics_safe, cargo_subcommand,
         cargo_subcommand_token, known_quiet_cargo_subcommand, parse_normalized_args,
         rustup_toolchain, verbose_from_env_value,
     };
@@ -835,31 +835,6 @@ mod test {
     fn parse_args(values: &[&str]) -> eyre::Result<(super::Options, Vec<String>)> {
         let args = values.iter().copied().map(String::from).collect::<Vec<_>>();
         parse_normalized_args(&args)
-    }
-
-    #[test]
-    fn readme_help_excerpt_matches_cli_help() -> eyre::Result<()> {
-        let readme = include_str!("../README.md");
-        let marker = "```bash\n$ cargo fc --help\n\n";
-        let Some((_, after_marker)) = readme.split_once(marker) else {
-            eyre::bail!("README help block marker missing");
-        };
-        let Some((readme_help, _)) = after_marker.split_once("\n```") else {
-            eyre::bail!("README help block terminator missing");
-        };
-        let Some(help_without_title) =
-            HELP_TEXT.strip_prefix("Run cargo commands for all feature combinations\n\n")
-        else {
-            eyre::bail!("CLI help title changed");
-        };
-        let Some((cli_help_excerpt, _)) = help_without_title
-            .split_once("\n\nFeature sets can be configured in your Cargo.toml configuration.")
-        else {
-            eyre::bail!("CLI help configuration section marker missing");
-        };
-
-        sim_assert_eq!(readme_help, cli_help_excerpt);
-        Ok(())
     }
 
     #[test]
