@@ -26,6 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - run: |
           brew install ast-grep
           brew install cargo-audit

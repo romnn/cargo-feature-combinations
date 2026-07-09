@@ -37,6 +37,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
       # Everything else (go, extended Hugo, task, freeze, terminal-to-html, jq)
       # comes from mise.
       - uses: jdx/mise-action@v4
