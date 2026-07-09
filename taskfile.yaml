@@ -12,19 +12,6 @@ tasks:
     cmds:
       - cargo run --bin cargo-fc -- {{.CLI_ARGS}}
 
-  docs:screenshots:
-    desc: "regenerate the documentation screenshots (needs freeze + ImageMagick)"
-    aliases: [screenshots]
-    sources:
-      - scripts/screenshots.sh
-      - src/**/*.rs
-      - examples/**/*.rs
-      - examples/**/Cargo.toml
-    generates:
-      - docs/static/images/*.png
-    cmds:
-      - bash scripts/screenshots.sh
-
   build:
     desc: "build in debug mode"
     cmds:
@@ -97,7 +84,7 @@ tasks:
     cmds:
       - cargo clean {{.CLI_ARGS}}
 
-  docs:
+  docs:cargo:
     desc: "open documentation preview"
     env:
       RUSTDOCFLAGS: "--cfg docsrs"
@@ -116,23 +103,30 @@ tasks:
     cmds:
       - bash scripts/terminals.sh
 
+  docs:screenshots:
+    desc: "regenerate the documentation screenshots (needs freeze + ImageMagick)"
+    aliases: [screenshots]
+    sources:
+      - scripts/screenshots.sh
+      - src/**/*.rs
+      - examples/**/*.rs
+      - examples/**/Cargo.toml
+    generates:
+      - docs/static/images/*.png
+    cmds:
+      - bash scripts/screenshots.sh
+
   docs:build:
     desc: "regenerate all docs assets and build the static site into docs/public"
-    # Everything is regenerated from the current source first (fingerprinted, so
-    # unchanged inputs are skipped), then Hugo builds the site — one entrypoint,
-    # used by CI too.
     deps: [docs:terminals, docs:screenshots]
     dir: docs
     cmds:
       - hugo --minify --gc {{.CLI_ARGS}}
 
-  docs:website:
+  docs:serve:
     desc: "serve the documentation website with hot reload (needs hugo extended + go)"
-    aliases: [website]
-    # Regenerate the embedded terminal snippets first; the task is fingerprinted
-    # (sources/generates), so it is skipped when nothing changed. Screenshots are
-    # heavier (freeze + ImageMagick) — regenerate them with `task docs:screenshots`.
-    deps: [docs:terminals]
+    aliases: [docs]
+    deps: [docs:terminals, docs:screenshots]
     dir: docs
     interactive: true
     cmds:
