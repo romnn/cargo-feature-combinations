@@ -24,19 +24,6 @@ exclude_features = ["default"]
 exclude_packages = ["examples"]
 ```
 
-## Metadata key aliases
-
-The metadata table can be spelled four ways. They are equivalent; `cargo-fc` is recommended:
-
-```toml
-[package.metadata.cargo-fc]                     # recommended
-[package.metadata.fc]
-[package.metadata.cargo-feature-combinations]
-[package.metadata.feature-combinations]
-```
-
-The same aliases work under `[workspace.metadata.…]`.
-
 ## Excluding workspace packages
 
 Remove packages from every run in the workspace metadata:
@@ -46,7 +33,7 @@ Remove packages from every run in the workspace metadata:
 exclude_packages = ["package-a", "package-b"]
 ```
 
-Package exclusion is a workspace-level decision — a package can't exclude its siblings. (A bare `exclude_packages` in a root **package** table is accepted for backwards compatibility, folded into the workspace set with a deprecation warning.)
+Package exclusion is a workspace-level decision — a package can't exclude its siblings.
 
 ## What can be configured where
 

@@ -29,10 +29,10 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `-V`, `--version` | Print version information. |
 | `--manifest-path <path>` | Path to the `Cargo.toml` to inspect. |
 | `-p`, `--package <name>` | Include only this workspace package (repeatable). |
-| `--exclude <name>`, `--exclude-package <name>` | Exclude a workspace package (repeatable). `--exclude` pairs with `--workspace` for Cargo-compatible selection. |
+| `--exclude <name>` | Exclude a workspace package (repeatable). Pairs with `--workspace` for Cargo-compatible selection. |
 | `--diagnostics-only` | Show only diagnostics (warnings/errors) per combination. Requires a command that emits rustc JSON diagnostics (`build`, `check`, `clippy`, `doc`, or an equivalent alias/wrapper). |
-| `--dedupe`, `--dedup` | Like `--diagnostics-only`, but also deduplicate identical diagnostics across combinations. |
-| `--summary-only`, `--summary`, `--silent` | Hide cargo output; show only the final summary. |
+| `--dedupe` | Like `--diagnostics-only`, but also deduplicate identical diagnostics across combinations. |
+| `--summary-only` | Hide cargo output; show only the final summary. |
 | `--fail-fast` | Stop on the first failing combination. |
 | `--errors-only` | Allow all warnings, show errors only (`-A warnings`). Appends to `RUSTFLAGS`. |
 | `--pedantic` | Treat warnings like errors in the summary and under `--fail-fast`. |
@@ -54,9 +54,6 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 | `CARGO` | Program used for plain Cargo invocations. |
 | `CARGO_DRIVER` | Set in child processes to the resolved driver. |
 | `CARGO_FC_VERBOSE` | Boolean default for verbose `cargo fc` headers. |
-| `VERBOSE` | Deprecated fallback for `CARGO_FC_VERBOSE`. |
-
-Boolean environment values accept the usual spellings: `1`, `true`, `yes`, `y`, `t`, `on` (and their false counterparts).
 
 ## Notes
 

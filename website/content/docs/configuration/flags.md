@@ -36,7 +36,6 @@ pedantic = true
 errors_only = true
 packages_only = true
 fail_fast = true
-no_prune_implied = true
 prune_implied = true
 show_pruned = true
 aggregate_targets = true
@@ -46,7 +45,7 @@ only_packages_with_lib_target = true
 ```
 
 - `dedupe = true` implies diagnostics-only output.
-- `prune_implied` is the positive spelling of `no_prune_implied`; configure only one spelling in a given scope.
+- `prune_implied = false` turns off [automatic pruning]({{< relref "feature-matrix.md#automatic-pruning" >}}).
 
 ## Precedence
 

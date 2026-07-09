@@ -29,7 +29,7 @@ cargo fc --dedupe clippy
 
 {{< terminal name="dedupe" >}}
 
-`--dedupe` implies `--diagnostics-only`. (`--dedup` is accepted as a spelling.)
+`--dedupe` implies `--diagnostics-only`.
 
 ## `--summary-only`
 
@@ -40,8 +40,6 @@ cargo fc --summary-only check
 ```
 
 {{< terminal name="summary" >}}
-
-`--summary` and `--silent` are accepted as aliases of `--summary-only`.
 
 ## `--fail-fast`
 

@@ -157,20 +157,10 @@ You should not need to change this, but you can turn it off to check every gener
 
 ```toml
 [workspace.metadata.cargo-fc]
-prune_implied = false   # positive spelling of no_prune_implied
+prune_implied = false
 ```
 
 See also [`--show-pruned` and `--no-prune-implied`]({{< relref "../commands/output-modes.md#pruning---show-pruned-and---no-prune-implied" >}}).
-
-## Deprecated spellings
-
-These older key names are still accepted, but prefer the current ones:
-
-| Deprecated | Current |
-|---|---|
-| `denylist` | `exclude_features` |
-| `skip_feature_sets` | `exclude_feature_sets` |
-| `exact_combinations` | `include_feature_sets` |
 
 ---
 
