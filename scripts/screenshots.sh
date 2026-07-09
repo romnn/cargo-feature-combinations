@@ -20,8 +20,10 @@ examples="$repo/examples"
 max_width=2200
 
 command -v freeze >/dev/null || { echo "freeze not found — install charmbracelet/freeze" >&2; exit 1; }
-command -v magick >/dev/null || { echo "magick not found — install ImageMagick" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq not found — install jq" >&2; exit 1; }
+# ImageMagick 7 is `magick`; ImageMagick 6 (Ubuntu apt) is `convert`. Accept either.
+magick_bin="$(command -v magick || command -v convert || true)"
+[[ -n "$magick_bin" ]] || { echo "ImageMagick not found — install 'magick' (v7) or 'convert' (v6)" >&2; exit 1; }
 [[ -x "$fc" ]] || cargo build --release --bin cargo-fc --manifest-path "$repo/Cargo.toml"
 mkdir -p "$docs"
 
@@ -29,7 +31,7 @@ frame=(--window --shadow.blur 20 --border.radius 8 --padding 20)
 
 # Cap the rendered width so the images are crisp in the README without being multi-megapixel.
 downscale() {
-  magick "$1" -resize "${max_width}>" "$1"
+  "$magick_bin" "$1" -resize "${max_width}>" "$1"
 }
 
 # Terminal-style shot: a shell prompt line followed by the real (colored) output.
