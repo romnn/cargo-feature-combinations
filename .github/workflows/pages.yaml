@@ -51,7 +51,7 @@ jobs:
           mise install
           go "asdf:NeoHsu/asdf-hugo" task
           "aqua:charmbracelet/freeze" "aqua:jqlang/jq"
-          "go:github.com/buildkite/terminal-to-html/v3/cmd/terminal-to-html"
+          "github:buildkite/terminal-to-html"
       - name: Install ImageMagick
         run: sudo apt-get update && sudo apt-get install -y imagemagick
       - name: Configure Pages

@@ -237,6 +237,34 @@ checksum = "sha256:f122d5507e5206c3a9f030fc3a0d137070eb6c4f708e1b496df56795bc985
 url = "https://github.com/ast-grep/ast-grep/releases/download/0.44.1/app-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/466370609"
 
+[[tools."github:buildkite/terminal-to-html"]]
+version = "3.17.1"
+backend = "github:buildkite/terminal-to-html"
+
+[tools."github:buildkite/terminal-to-html"."platforms.linux-arm64"]
+checksum = "sha256:a35fc4b86840e7a497a86bf27709ca77f2e3727c4cc370a22662d3e80ac2d448"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-linux-arm64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851422"
+provenance = "github-attestations"
+
+[tools."github:buildkite/terminal-to-html"."platforms.linux-arm64-musl"]
+checksum = "sha256:a35fc4b86840e7a497a86bf27709ca77f2e3727c4cc370a22662d3e80ac2d448"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-linux-arm64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851422"
+provenance = "github-attestations"
+
+[tools."github:buildkite/terminal-to-html"."platforms.linux-x64"]
+checksum = "sha256:506bf48a06017c6d74903da75f9fd3aea18cc9451cb3ad39103e4c8997c3716f"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-linux-amd64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851432"
+provenance = "github-attestations"
+
+[tools."github:buildkite/terminal-to-html"."platforms.windows-x64"]
+checksum = "sha256:5286bcf3d17312af5b354da16731f4bbc9b777a0a15168d6b49562a8b6f6df17"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-windows-amd64.zip"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851361"
+provenance = "github-attestations"
+
 [[tools."github:est31/cargo-udeps"]]
 version = "0.1.61"
 backend = "github:est31/cargo-udeps"
@@ -466,10 +494,6 @@ url = "https://dl.google.com/go/go1.26.5.darwin-amd64.tar.gz"
 [tools.go."platforms.windows-x64"]
 checksum = "sha256:97e6b2a833b6d89f9ff17d25419ac0a7e3b482a044e9ab18cdef834bd834fd38"
 url = "https://dl.google.com/go/go1.26.5.windows-amd64.zip"
-
-[[tools."go:github.com/buildkite/terminal-to-html/v3/cmd/terminal-to-html"]]
-version = "3.17.1"
-backend = "go:github.com/buildkite/terminal-to-html/v3/cmd/terminal-to-html"
 
 [[tools.goreleaser]]
 version = "2.17.0"
