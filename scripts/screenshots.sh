@@ -41,7 +41,8 @@ shoot_term() {
     cd "$dir"
     {
       printf '\033[1;32m❯\033[0m cargo fc %s\n\n' "$*"
-      "$fc" "$@" --color always || true
+      # Merge streams: diagnostics go to stderr, the summary to stdout.
+      "$fc" "$@" --color always 2>&1 || true
     } | freeze --language ansi --output "$out" "${frame[@]}"
   )
   downscale "$out"
@@ -68,6 +69,9 @@ shoot_matrix() {
 # Clean workspace — the hero, plus the JSON matrix.
 shoot_term   clean       check.png   check --workspace
 shoot_matrix clean       matrix.png
+
+# Targets workspace — a feature matrix checked across multiple target triples.
+shoot_term   targets     targets.png --summary-only check --workspace
 
 # Diagnostics workspace — summary with WARN/FAIL, raw diagnostics, and deduped diagnostics.
 shoot_term   diagnostics summary.png     --summary-only check --workspace
