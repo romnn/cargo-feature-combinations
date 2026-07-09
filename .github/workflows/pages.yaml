@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      # The docs render these example workspaces' Cargo.toml files verbatim.
+      - "examples/**"
       - "mise.toml"
       - "mise.lock"
       - ".github/workflows/pages.yaml"
@@ -60,4 +62,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
