@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate the documentation terminal snippets under website/assets/terminals/.
+# Regenerate the documentation terminal snippets under docs/assets/terminals/.
 #
 # Each snippet is the real, colored output of `cargo fc` against the committed,
 # dependency-free workspaces under examples/, converted from ANSI to HTML with
@@ -20,7 +20,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fc="$repo/target/release/cargo-fc"
 examples="$repo/examples"
-out="$repo/website/assets/terminals"
+out="$repo/docs/assets/terminals"
 
 command -v terminal-to-html >/dev/null || { echo "terminal-to-html not found — run 'mise install' (provided via the go backend)" >&2; exit 1; }
 [[ -x "$fc" ]] || cargo build --release --bin cargo-fc --manifest-path "$repo/Cargo.toml"

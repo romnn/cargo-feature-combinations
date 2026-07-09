@@ -15,7 +15,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fc="$repo/target/release/cargo-fc"
-docs="$repo/docs"
+docs="$repo/docs/static/images"
 examples="$repo/examples"
 max_width=2200
 

@@ -3,6 +3,6 @@ ignore-files = true
 extend-exclude = [
   "dist/**/*",
   "examples/**/*",
-  "website/assets/**/*",
+  "docs/assets/**/*",
 ]
 

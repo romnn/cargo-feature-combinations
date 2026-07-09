@@ -31,7 +31,7 @@ examples/**/target
 .cooldown.lock
 .cooldown-versions-*
 
-# hugo documentation site (website/)
-website/public
-website/resources
-website/.hugo_build.lock
+# hugo documentation site (docs/)
+docs/public
+docs/resources
+docs/.hugo_build.lock

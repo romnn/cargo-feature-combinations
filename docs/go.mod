@@ -1,4 +1,4 @@
-module github.com/romnn/cargo-feature-combinations/website
+module github.com/romnn/cargo-feature-combinations/docs
 
 go 1.26.4
 

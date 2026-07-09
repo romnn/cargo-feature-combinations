@@ -12,7 +12,7 @@ The CLI is the supported interface. The Rust API exists for the binaries and
 integration tests and has no stability guarantees.
 
 <p align="center">
-  <img src="docs/check.png" alt="cargo fc check running across every feature combination of a workspace" width="500">
+  <img src="docs/static/images/check.png" alt="cargo fc check running across every feature combination of a workspace" width="500">
 </p>
 
 <details>
@@ -20,27 +20,27 @@ integration tests and has no stability guarantees.
 
 1. **`--diagnostics-only`** — only warnings/errors, no build noise
 
-   <img src="docs/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500">
+   <img src="docs/static/images/diagnostics.png" alt="cargo fc --diagnostics-only clippy" width="500">
 
 2. **`--dedupe`** — fold identical diagnostics across combinations
 
-   <img src="docs/dedupe.png" alt="cargo fc --dedupe clippy" width="500">
+   <img src="docs/static/images/dedupe.png" alt="cargo fc --dedupe clippy" width="500">
 
 3. **`--summary-only`** — just the per-combination result table
 
-   <img src="docs/summary.png" alt="cargo fc --summary-only check" width="500">
+   <img src="docs/static/images/summary.png" alt="cargo fc --summary-only check" width="500">
 
 4. **`--show-pruned`** — redundant combinations implied by other features are pruned
 
-   <img src="docs/pruned.png" alt="cargo fc --show-pruned check" width="500">
+   <img src="docs/static/images/pruned.png" alt="cargo fc --show-pruned check" width="500">
 
 5. **`matrix`** — machine-readable feature matrix (one row per combination)
 
-   <img src="docs/matrix.png" alt="cargo fc matrix piped to jq" width="500">
+   <img src="docs/static/images/matrix.png" alt="cargo fc matrix piped to jq" width="500">
 
 6. **configured `targets`** — every feature combination checked across each target triple
 
-   <img src="docs/targets.png" alt="cargo fc check across multiple target triples" width="500">
+   <img src="docs/static/images/targets.png" alt="cargo fc check across multiple target triples" width="500">
 
 </details>
 
