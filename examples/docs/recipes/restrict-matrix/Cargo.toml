@@ -1,0 +1,15 @@
+[package]
+name = "webapp"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+hydrate = []
+ssr = []
+csr = []
+
+[package.metadata.cargo-fc]
+# Only ever test the two modes we ship — no powerset.
+allow_feature_sets = [["hydrate"], ["ssr"]]
+
+[workspace]

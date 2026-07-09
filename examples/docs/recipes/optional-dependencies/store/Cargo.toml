@@ -1,0 +1,15 @@
+[package]
+name = "store"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+compression = []
+
+[dependencies]
+redis-backend = { path = "../redis-backend", optional = true }
+sled-backend = { path = "../sled-backend", optional = true }
+
+[package.metadata.cargo-fc]
+# Don't vary the implicit features of the optional backends.
+skip_optional_dependencies = true

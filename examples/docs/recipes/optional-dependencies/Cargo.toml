@@ -1,0 +1,11 @@
+# Recipe example: keep the implicit features of optional dependencies out of
+# the matrix. The two backends are local stub crates so the example stays
+# dependency-free and reproducible.
+[workspace]
+resolver = "2"
+members = ["store", "redis-backend", "sled-backend"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false

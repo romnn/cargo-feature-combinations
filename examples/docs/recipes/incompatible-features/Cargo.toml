@@ -1,0 +1,14 @@
+[package]
+name = "http-client"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+native-tls = []
+rustls = []
+
+[package.metadata.cargo-fc]
+# native-tls and rustls are two TLS backends — never both at once.
+exclude_feature_sets = [["native-tls", "rustls"]]
+
+[workspace]

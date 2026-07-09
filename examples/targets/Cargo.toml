@@ -1,0 +1,19 @@
+# Workspace that checks every feature combination across multiple target triples.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.metadata.cargo-fc]
+# Check every feature combination on each of these targets.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "wasm32-unknown-unknown",
+]
+# `check` never links, so plain cargo cross-checks fine without a C toolchain.
+# (Cross-compiling native-C deps would use the cargo-zigbuild default instead.)
+driver = "cargo"

@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+std = []
+simd = []
+
+[package.metadata.cargo-fc.matrix]
+kind = "lib"

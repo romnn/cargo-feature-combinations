@@ -1,0 +1,20 @@
+[package]
+name = "renderer"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+doctest = false
+
+[features]
+gpu = []
+simd = []
+
+# gpu is part of the matrix by default (build, check, clippy).
+[package.metadata.cargo-fc]
+
+[package.metadata.cargo-fc.subcommands.test]
+# ...but never test the gpu combinations.
+exclude_features = { add = ["gpu"] }
+
+[workspace]

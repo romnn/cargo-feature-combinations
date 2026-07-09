@@ -1,0 +1,22 @@
+[package]
+name = "codec"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+json = []
+yaml = []
+msgpack = []
+gzip = []
+zstd = []
+brotli = []
+
+[package.metadata.cargo-fc]
+# Formats and compression codecs are independent axes — powerset within each
+# group, never across them.
+isolated_feature_sets = [
+  ["json", "yaml", "msgpack"],
+  ["gzip", "zstd", "brotli"],
+]
+
+[workspace]

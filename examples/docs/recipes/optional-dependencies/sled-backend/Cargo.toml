@@ -1,0 +1,5 @@
+[package]
+name = "sled-backend"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
