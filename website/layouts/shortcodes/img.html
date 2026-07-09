@@ -1,0 +1,5 @@
+{{- /* Resolve an image under /static against the site baseURL (works from any page depth and under a Pages subpath). */ -}}
+{{- $src := .Get "src" -}}
+{{- $alt := .Get "alt" | default "" -}}
+{{- $class := .Get "class" | default "" -}}
+<img src="{{ $src | relURL }}"{{ with $alt }} alt="{{ . }}"{{ end }}{{ with $class }} class="{{ . }}"{{ end }} loading="lazy" />

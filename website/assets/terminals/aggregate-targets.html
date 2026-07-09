@@ -1,0 +1,13 @@
+<span class="term-fg32 term-fg1">❯</span> cargo fc --aggregate-targets --summary-only check --workspace
+&nbsp;
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[1&#47;4]</span> app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], features = [] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[2&#47;4]</span> app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], features = [simd] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[3&#47;4]</span> app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], features = [simd, std] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[4&#47;4]</span> app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], features = [std] )
+&nbsp;
+<span class="term-fg36 term-fg1">    Finished </span>4 feature combinations for 1 package across 2 targets in 0.00s
+&nbsp;
+<span class="term-fg32 term-fg1">        PASS </span>app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], 0 errors, 0 warnings, features = [] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], 0 errors, 0 warnings, features = [simd] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], 0 errors, 0 warnings, features = [simd, std] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( targets = [x86_64-unknown-linux-gnu, wasm32-unknown-unknown], 0 errors, 0 warnings, features = [std] )

@@ -1,0 +1,43 @@
+<span class="term-fg32 term-fg1">❯</span> cargo fc --diagnostics-only clippy --workspace
+&nbsp;
+<span class="term-fg36 term-fg1">     Linting </span><span class="term-fg2">[1&#47;4]</span> loader ( features = [] )
+<span class="term-fg33 term-fg1">warning</span><span class="term-fg1">: function `checksum` is never used</span>
+  <span class="term-fgi94 term-fg1">--&gt; </span>crates&#47;loader&#47;src&#47;lib.rs:12:4
+   <span class="term-fgi94 term-fg1">|</span>
+<span class="term-fgi94 term-fg1">12</span> <span class="term-fgi94 term-fg1">|</span> fn checksum(bytes: &amp;[u8]) -&gt; usize {
+   <span class="term-fgi94 term-fg1">|</span>    <span class="term-fg33 term-fg1">^^^^^^^^</span>
+   <span class="term-fgi94 term-fg1">|</span>
+   <span class="term-fgi94 term-fg1">= </span><span class="term-fg1">note</span>: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+&nbsp;
+<span class="term-fg36 term-fg1">     Linting </span><span class="term-fg2">[2&#47;4]</span> loader ( features = [experimental] )
+<span class="term-fgi91 term-fg1">error[E0425]</span><span class="term-fg1">: cannot find function `missing_helper` in this scope</span>
+  <span class="term-fgi94 term-fg1">--&gt; </span>crates&#47;loader&#47;src&#47;lib.rs:32:5
+   <span class="term-fgi94 term-fg1">|</span>
+<span class="term-fgi94 term-fg1">32</span> <span class="term-fgi94 term-fg1">|</span>     missing_helper()
+   <span class="term-fgi94 term-fg1">|</span>     <span class="term-fgi91 term-fg1">^^^^^^^^^^^^^^</span> <span class="term-fgi91 term-fg1">not found in this scope</span>
+&nbsp;
+<span class="term-fg1">For more information about this error, try `rustc --explain E0425`.</span>
+<span class="term-fg36 term-fg1">     Linting </span><span class="term-fg2">[3&#47;4]</span> loader ( features = [experimental, validation] )
+<span class="term-fgi91 term-fg1">error[E0425]</span><span class="term-fg1">: cannot find function `missing_helper` in this scope</span>
+  <span class="term-fgi94 term-fg1">--&gt; </span>crates&#47;loader&#47;src&#47;lib.rs:32:5
+   <span class="term-fgi94 term-fg1">|</span>
+<span class="term-fgi94 term-fg1">32</span> <span class="term-fgi94 term-fg1">|</span>     missing_helper()
+   <span class="term-fgi94 term-fg1">|</span>     <span class="term-fgi91 term-fg1">^^^^^^^^^^^^^^</span> <span class="term-fgi91 term-fg1">not found in this scope</span>
+&nbsp;
+<span class="term-fg1">For more information about this error, try `rustc --explain E0425`.</span>
+<span class="term-fg36 term-fg1">     Linting </span><span class="term-fg2">[4&#47;4]</span> loader ( features = [validation] )
+<span class="term-fg33 term-fg1">warning</span><span class="term-fg1">: function `checksum` is never used</span>
+  <span class="term-fgi94 term-fg1">--&gt; </span>crates&#47;loader&#47;src&#47;lib.rs:12:4
+   <span class="term-fgi94 term-fg1">|</span>
+<span class="term-fgi94 term-fg1">12</span> <span class="term-fgi94 term-fg1">|</span> fn checksum(bytes: &amp;[u8]) -&gt; usize {
+   <span class="term-fgi94 term-fg1">|</span>    <span class="term-fg33 term-fg1">^^^^^^^^</span>
+   <span class="term-fgi94 term-fg1">|</span>
+   <span class="term-fgi94 term-fg1">= </span><span class="term-fg1">note</span>: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+&nbsp;
+&nbsp;
+<span class="term-fg36 term-fg1">    Finished </span>4 feature combinations for 1 package in 0.00s
+&nbsp;
+<span class="term-fg33 term-fg1">        WARN </span>loader ( 0 errors, 1 warnings, features = [] )
+<span class="term-fg31 term-fg1">        FAIL </span>loader ( 1 errors, 0 warnings, features = [experimental] )
+<span class="term-fg31 term-fg1">        FAIL </span>loader ( 1 errors, 0 warnings, features = [experimental, validation] )
+<span class="term-fg33 term-fg1">        WARN </span>loader ( 0 errors, 1 warnings, features = [validation] )

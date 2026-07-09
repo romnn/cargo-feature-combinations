@@ -1,0 +1,28 @@
+{{- /* Manual light/dark toggle. Persists to localStorage; falls back to OS preference. */ -}}
+<button type="button" id="cfc-theme-btn" class="cfc-theme-btn" aria-label="Toggle light and dark theme" aria-pressed="false">
+  <span class="cfc-theme-btn__icon" aria-hidden="true">☾</span>
+  <span class="cfc-theme-btn__label">Dark</span>
+</button>
+<script>
+(function () {
+  var btn = document.getElementById('cfc-theme-btn');
+  if (!btn) return;
+  var root = document.documentElement;
+  var icon = btn.querySelector('.cfc-theme-btn__icon');
+  var label = btn.querySelector('.cfc-theme-btn__label');
+  function mode() { return root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
+  function render() {
+    var m = mode();
+    icon.textContent = m === 'dark' ? '☀' : '☾';
+    label.textContent = m === 'dark' ? 'Light' : 'Dark';
+    btn.setAttribute('aria-pressed', String(m === 'dark'));
+  }
+  btn.addEventListener('click', function () {
+    var next = mode() === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('cfc-theme', next); } catch (e) {}
+    render();
+  });
+  render();
+})();
+</script>

@@ -1,0 +1,69 @@
+baseURL = 'https://romnn.github.io/cargo-feature-combinations/'
+title = 'cargo-feature-combinations'
+locale = 'en-us'
+
+# Book configuration
+disablePathToLower = true
+enableGitInfo = false
+enableRobotsTXT = true
+
+# The hugo-book theme is pulled in as a Hugo module (needs Go at build time),
+# pinned in go.mod/go.sum — no git submodule.
+[module]
+[[module.imports]]
+path = 'github.com/alex-shpak/hugo-book'
+
+# Mount the real example workspaces so the docs can render their Cargo.toml
+# files verbatim (drift-free — the docs read the actual files, so breaking the
+# examples/CLI breaks the docs and gets noticed).
+[[module.mounts]]
+source = 'assets'
+target = 'assets'
+[[module.mounts]]
+source = '../examples'
+target = 'assets/examples'
+excludeFiles = '**/target/**'
+
+[markup]
+[markup.goldmark.renderer]
+  # Landing page hero and cards use inline HTML.
+  unsafe = true
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3
+  ordered = false
+[markup.highlight]
+  # Emit CSS classes so light/dark syntax themes can be swapped via
+  # prefers-color-scheme (see assets/_syntax.scss).
+  noClasses = false
+  tabWidth = 2
+
+[params]
+  description = 'Run cargo commands against every combination of a crate feature set — check, clippy, test, build and doc across the whole feature matrix.'
+
+  # Follow the reader's OS light/dark preference.
+  BookTheme = 'auto'
+  BookSection = 'docs'
+  BookToC = true
+  BookSearch = true
+  BookComments = false
+  # Project pages under a subpath + a precaching service worker is a recipe for
+  # stale assets; keep it off.
+  BookServiceWorker = false
+
+  BookRepo = 'https://github.com/romnn/cargo-feature-combinations'
+  BookEditLink = '{{ .Site.Params.BookRepo }}/edit/main/website{{ .Path }}'
+
+[menu]
+[[menu.after]]
+  name = 'GitHub'
+  url = 'https://github.com/romnn/cargo-feature-combinations'
+  weight = 10
+[[menu.after]]
+  name = 'crates.io'
+  url = 'https://crates.io/crates/cargo-feature-combinations'
+  weight = 20
+[[menu.after]]
+  name = 'docs.rs'
+  url = 'https://docs.rs/cargo-feature-combinations'
+  weight = 30

@@ -1,0 +1,18 @@
+<span class="term-fg32 term-fg1">❯</span> cargo fc --summary-only --show-pruned check --workspace
+&nbsp;
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[1&#47;5]</span> app ( features = [] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[2&#47;5]</span> app ( features = [full] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[3&#47;5]</span> app ( features = [json] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[4&#47;5]</span> app ( features = [json, yaml] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[5&#47;5]</span> app ( features = [yaml] )
+&nbsp;
+<span class="term-fg36 term-fg1">    Finished </span>5 of 8 feature combinations for 1 package in 0.00s<span class="term-fg2"> (3 pruned)</span>
+&nbsp;
+<span class="term-fg32 term-fg1">        PASS </span>app ( 0 errors, 0 warnings, features = [] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( 0 errors, 0 warnings, features = [full] )
+<span class="term-fg2">        SKIP </span>app ( 0 errors, 0 warnings, features = [full, json] )<span class="term-fg2"> ← equivalent to [full]</span>
+<span class="term-fg2">        SKIP </span>app ( 0 errors, 0 warnings, features = [full, json, yaml] )<span class="term-fg2"> ← equivalent to [full]</span>
+<span class="term-fg2">        SKIP </span>app ( 0 errors, 0 warnings, features = [full, yaml] )<span class="term-fg2"> ← equivalent to [full]</span>
+<span class="term-fg32 term-fg1">        PASS </span>app ( 0 errors, 0 warnings, features = [json] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( 0 errors, 0 warnings, features = [json, yaml] )
+<span class="term-fg32 term-fg1">        PASS </span>app ( 0 errors, 0 warnings, features = [yaml] )

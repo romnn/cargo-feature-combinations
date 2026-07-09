@@ -96,6 +96,31 @@ tasks:
     cmds:
       - cargo +nightly watchdoc --all-features {{.CLI_ARGS}}
 
+  docs:terminals:
+    desc: "regenerate the documentation terminal snippets (needs terminal-to-html)"
+    sources:
+      - scripts/terminals.sh
+      - src/**/*.rs
+      - examples/**/*.rs
+      - examples/**/Cargo.toml
+    generates:
+      - website/assets/terminals/*.html
+    cmds:
+      - bash scripts/terminals.sh
+
+  docs:website:
+    desc: "serve the documentation website with hot reload (needs hugo extended + go)"
+    aliases: [website]
+    # Regenerate the embedded terminal snippets first; the task is fingerprinted
+    # (sources/generates), so it is skipped when nothing changed. The hero
+    # screenshot is a committed asset — regenerate it separately with `task
+    # screenshots` (needs freeze + ImageMagick), not on every serve.
+    deps: [docs:terminals]
+    dir: website
+    interactive: true
+    cmds:
+      - hugo server --disableFastRender {{.CLI_ARGS}}
+
   outdated:
     desc: "check for outdated cargo workspace dependencies"
     cmds:

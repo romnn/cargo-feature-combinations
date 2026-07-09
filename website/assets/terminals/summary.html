@@ -1,0 +1,13 @@
+<span class="term-fg32 term-fg1">❯</span> cargo fc --summary-only check --workspace
+&nbsp;
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[1&#47;4]</span> loader ( features = [] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[2&#47;4]</span> loader ( features = [experimental] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[3&#47;4]</span> loader ( features = [experimental, validation] )
+<span class="term-fg36 term-fg1">     Checking </span><span class="term-fg2">[4&#47;4]</span> loader ( features = [validation] )
+&nbsp;
+<span class="term-fg36 term-fg1">    Finished </span>4 feature combinations for 1 package in 0.00s
+&nbsp;
+<span class="term-fg33 term-fg1">        WARN </span>loader ( 0 errors, 1 warnings, features = [] )
+<span class="term-fg31 term-fg1">        FAIL </span>loader ( 1 errors, 0 warnings, features = [experimental] )
+<span class="term-fg31 term-fg1">        FAIL </span>loader ( 1 errors, 0 warnings, features = [experimental, validation] )
+<span class="term-fg33 term-fg1">        WARN </span>loader ( 0 errors, 1 warnings, features = [validation] )

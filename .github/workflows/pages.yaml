@@ -1,0 +1,63 @@
+name: pages
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "mise.toml"
+      - "mise.lock"
+      - ".github/workflows/pages.yaml"
+  workflow_dispatch: {}
+
+# Allow the GITHUB_TOKEN to deploy to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Tooling comes from mise (mise.toml): go + extended Hugo. Only install
+      # what the docs build needs, not the whole workspace toolchain.
+      - uses: jdx/mise-action@v4
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
+        with:
+          install: false
+          cache: true
+      - name: Install go + hugo (extended)
+        run: mise install go "asdf:NeoHsu/asdf-hugo"
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Build
+        # The hugo-book theme is a Hugo module, fetched via go at build time.
+        run: >-
+          mise exec -- hugo
+          --source website
+          --minify
+          --gc
+          --baseURL "${{ steps.pages.outputs.base_url }}/"
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

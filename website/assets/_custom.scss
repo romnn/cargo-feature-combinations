@@ -1,0 +1,408 @@
+@import "syntax";
+
+/*
+  Two font/accent options — flip between them to compare. Only one block of each
+  pair should be active (the other commented out).
+
+  Option A (original): IBM Plex Sans + IBM Plex Mono, warm orange accent.
+  Option B (active):   Geist + Geist Mono, cool indigo/violet accent.
+*/
+
+/* Option A fonts — commented out:
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url('fonts/ibm-plex-sans.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('fonts/ibm-plex-mono-500.woff2') format('woff2');
+}
+*/
+
+/* Option B fonts (active): Geist + Geist Mono (variable). */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('fonts/geist-sans.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('fonts/geist-mono.woff2') format('woff2');
+}
+
+:root {
+  /* Option A (commented out):
+  --cfc-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --cfc-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  */
+  --cfc-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --cfc-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/*
+  Theme application. An inline <head> script resolves the effective theme from
+  localStorage or prefers-color-scheme and sets data-theme before first paint,
+  so these two rules cover both the OS default and the manual toggle. The
+  attribute selector also outranks the theme's own `:root { … }` block.
+*/
+@mixin cfc-light {
+  @include theme-light;
+  /* Option A accent (commented out): warm orange
+  --cfc-brand: #d9480f;
+  --cfc-brand-strong: #b8390b;
+  --cfc-brand-contrast: #ffffff;
+  --color-link: #b8390b;
+  --color-visited-link: #b8390b;
+  */
+  --cfc-brand: #6355d6;
+  --cfc-brand-strong: #5445c4;
+  --cfc-brand-contrast: #ffffff;
+  --color-link: #5445c4;
+  --color-visited-link: #5445c4;
+
+  /* Inline code and code blocks (theme uses --gray-100 bg + --gray-200 border);
+     kept clearly distinct from the white body. */
+  --gray-100: #eef0f4;
+  --gray-200: #dbdfe6;
+
+  --cfc-surface: #ffffff;
+  --cfc-surface-2: #f6f7f9;
+  --cfc-border: #e6e8eb;
+  --cfc-muted: #59626d;
+  --cfc-scroll-thumb: #c7ccd1;
+}
+
+@mixin cfc-dark {
+  @include theme-dark;
+  /* Option A accent (commented out): warm orange
+  --cfc-brand: #ff922b;
+  --cfc-brand-strong: #ffa94d;
+  --cfc-brand-contrast: #1a1205;
+  --color-link: #ffa94d;
+  --color-visited-link: #ffa94d;
+  */
+  --cfc-brand: #b3a4ff;
+  --cfc-brand-strong: #c7bcff;
+  --cfc-brand-contrast: #191433;
+  --color-link: #b9abff;
+  --color-visited-link: #b9abff;
+
+  /* A neutral dark gray — darker and less blue than the theme's Nord default
+     (#2e3440), but not a harsh near-black. Text is softened off-white so the
+     contrast stays comfortable. */
+  --body-background: #1a1c21;
+  --body-font-color: #dce1e7;
+  /* Inline code and code blocks sit one clear step above the body, with a
+     visible border, so they read as distinct surfaces. */
+  --gray-100: #282d37;
+  --gray-200: #3a414e;
+  --gray-500: #bec6cf;
+
+  --cfc-surface: #23262d;
+  --cfc-surface-2: #1f2228;
+  --cfc-border: #313641;
+  --cfc-muted: #949dab;
+  --cfc-scroll-thumb: #3a414c;
+}
+
+:root[data-theme="light"] { @include cfc-light; }
+:root[data-theme="dark"] { @include cfc-dark; }
+
+/* Keep code blocks on the same neutral "code surface" as inline code (one step
+   above the body), rather than the syntax theme's tinted background. Token
+   colors are unchanged. */
+:root[data-theme="dark"] pre.chroma {
+  background: var(--gray-100);
+}
+
+body {
+  font-family: var(--cfc-sans);
+}
+
+/* Thin, theme-aware scrollbars (page, menu, TOC, code blocks, tables). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--cfc-scroll-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cfc-scroll-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cfc-brand);
+}
+
+/* The terminal is always dark, so its scrollbar is too, regardless of theme. */
+.cfc-term__body {
+  scrollbar-color: #4a5160 transparent;
+}
+
+.cfc-term__body::-webkit-scrollbar-thumb {
+  background: #4a5160;
+}
+
+.cfc-term__body::-webkit-scrollbar-thumb:hover {
+  background: #5c6470;
+}
+
+code, kbd, samp, pre, .chroma, .cfc-term__body {
+  font-family: var(--cfc-mono);
+}
+
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* The book theme forces TOC entries onto a single line (`white-space: nowrap`),
+   so a long entry (e.g. a heading with two flag names) overflows the column
+   instead of wrapping. Allow entries to wrap, but keep each hyphenated flag name
+   whole — otherwise the default line-breaking chops `--show-pruned` mid-word at a
+   hyphen. A little extra spacing keeps multi-line entries readable. */
+.book-toc a {
+  /* The theme lays TOC links out as flex, so their content never wraps and
+     overflows instead — make them normal block boxes that wrap at spaces. */
+  display: block;
+  white-space: normal;
+}
+.book-toc code {
+  white-space: nowrap;
+}
+.book-toc li {
+  margin: 0.2rem 0;
+  line-height: 1.35;
+}
+
+.markdown pre.chroma {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--gray-200);
+  border-radius: 0.4rem;
+  overflow-x: auto;
+}
+
+.cfc-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: var(--font-size-smaller);
+  color: var(--body-font-color);
+  background: var(--cfc-surface-2);
+  border: 1px solid var(--cfc-border);
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+
+.cfc-theme-btn:hover {
+  border-color: var(--cfc-brand);
+}
+
+.cfc-theme-btn__icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.markdown a.cfc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.55rem 1.15rem;
+  border-radius: 0.4rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--cfc-border);
+  color: var(--body-font-color);
+}
+
+.markdown a.cfc-btn:hover {
+  border-color: var(--cfc-brand);
+  text-decoration: none;
+}
+
+.markdown a.cfc-btn--primary {
+  background: var(--cfc-brand);
+  border-color: var(--cfc-brand);
+  color: var(--cfc-brand-contrast);
+}
+
+.markdown a.cfc-btn--primary:hover {
+  background: var(--cfc-brand-strong);
+  border-color: var(--cfc-brand-strong);
+}
+
+.cfc-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2.5rem;
+  margin: 0.25rem 0 2.5rem;
+}
+
+.cfc-hero__text {
+  flex: 1 1 20rem;
+  min-width: 16rem;
+}
+
+.cfc-hero__text h1 {
+  font-size: 2rem;
+  line-height: 1.15;
+  margin: 0 0 0.6rem;
+  border: 0;
+  padding: 0;
+}
+
+.cfc-hero__lead {
+  font-size: 1.05rem;
+  color: var(--cfc-muted);
+  margin: 0 0 1.3rem;
+  line-height: 1.55;
+}
+
+.cfc-hero__cmd {
+  display: inline-block;
+  font-family: var(--cfc-mono);
+  background: #0e1116;
+  color: #e6edf3;
+  padding: 0.5rem 0.85rem;
+  border-radius: 0.4rem;
+  margin-bottom: 1.3rem;
+  font-size: 0.9rem;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cfc-hero__cmd::before {
+  content: "$ ";
+  color: #4ade80;
+}
+
+.cfc-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.cfc-hero__shot {
+  flex: 1 1 22rem;
+  min-width: 18rem;
+}
+
+.cfc-hero__shot img {
+  width: 100%;
+  height: auto;
+  border-radius: 0.6rem;
+  border: 1px solid var(--cfc-border);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+}
+
+.cfc-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 2rem;
+}
+
+.cfc-card {
+  border: 1px solid var(--cfc-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  background: var(--cfc-surface);
+}
+
+.cfc-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.98rem;
+}
+
+.cfc-card p {
+  margin: 0;
+  color: var(--cfc-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+/* Terminal snippets (generated by scripts/terminals.sh). Plain dark block —
+   no window chrome — rendered dark in both site themes. */
+.cfc-term {
+  margin: 1.1rem 0;
+  border: 1px solid #21262d;
+  border-radius: 0.4rem;
+  overflow: hidden;
+  background: #0e1116;
+}
+
+/* Raised specificity so the always-dark terminal keeps light text on light pages,
+   where the theme's `.markdown pre` color would otherwise win. */
+.cfc-term pre.cfc-term__body {
+  margin: 0;
+  padding: 0.9rem 1.1rem;
+  max-height: 28rem;
+  overflow: auto;
+  background: none;
+  color: #e6edf3;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}
+
+/* terminal-to-html emits `term-fgN` (attributes + normal colors) and
+   `term-fgiN` (intense/bright). Palette is fixed dark, matching the screenshots. */
+.cfc-term__body {
+  .term-fg1 { font-weight: 600; }
+  .term-fg2 { opacity: 0.6; }
+  .term-fg3 { font-style: italic; }
+  .term-fg4 { text-decoration: underline; }
+
+  .term-fg30 { color: #6e7681; }
+  .term-fg31 { color: #ff7b72; }
+  .term-fg32 { color: #3fb950; }
+  .term-fg33 { color: #d29922; }
+  .term-fg34 { color: #58a6ff; }
+  .term-fg35 { color: #bc8cff; }
+  .term-fg36 { color: #39c5cf; }
+  .term-fg37 { color: #b1bac4; }
+
+  .term-fgi90 { color: #8b949e; }
+  .term-fgi91 { color: #ffa198; }
+  .term-fgi92 { color: #56d364; }
+  .term-fgi93 { color: #e3b341; }
+  .term-fgi94 { color: #79c0ff; }
+  .term-fgi95 { color: #d2a8ff; }
+  .term-fgi96 { color: #56d4dd; }
+  .term-fgi97 { color: #f0f6fc; }
+}

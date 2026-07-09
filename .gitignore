@@ -1,15 +1,21 @@
 .DS_Store
-/target
-/goreleaser-dist
+
+# taskfile
+/.task
+
+# plans
 /plan
 
 # build artifacts from the example workspaces used to generate screenshots
-examples/*/target
+/target
+examples/**/target
 
 # local env files
 .env.local
 .env.*.local
 
+# goreleaser artifacts
+/goreleaser-dist
 .intentionally-empty-file.o
 
 # Editor directories and files
@@ -24,3 +30,8 @@ examples/*/target
 # cooldown
 .cooldown.lock
 .cooldown-versions-*
+
+# hugo documentation site (website/)
+website/public
+website/resources
+website/.hugo_build.lock

@@ -1,0 +1,11 @@
+{{- /* Render a recipe example's Cargo.toml verbatim (read from the real file via
+       a module mount), so the docs can never drift from the runnable example.
+       Usage: {{< cargofile "incompatible-features" >}} or a nested path like
+       {{< cargofile "optional-dependencies/store" >}}. */ -}}
+{{- $dir := .Get 0 -}}
+{{- $res := resources.Get (printf "examples/%s/Cargo.toml" $dir) -}}
+{{- if $res -}}
+{{ transform.Highlight (strings.TrimSpace $res.Content) "toml" }}
+{{- else -}}
+  {{- errorf "cargofile: examples/%s/Cargo.toml not found" $dir -}}
+{{- end -}}
