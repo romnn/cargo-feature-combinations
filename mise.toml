@@ -1,0 +1,30 @@
+[tools]
+# Developer tools
+zig = "latest"
+task = "latest"
+ast-grep = "latest"
+typos = "latest"
+actionlint = "latest"
+goreleaser = "latest"
+"aqua:charmbracelet/freeze" = "latest"
+
+# Documentation site (website/, Hugo + hugo-book theme).
+# - go: the theme is a Hugo module, so `hugo` shells out to `go` at build time.
+# - hugo: the theme compiles SCSS, which needs the *extended* build. The default
+#   aqua hugo package is the non-extended build, so pull extended via asdf.
+# - terminal-to-html: renders the ANSI terminal snippets to HTML (scripts/terminals.sh).
+go = "latest"
+"asdf:NeoHsu/asdf-hugo" = "extended-0.163.3"
+"go:github.com/buildkite/terminal-to-html/v3/cmd/terminal-to-html" = "latest"
+
+# Cargo plugins
+"github:rust-cross/cargo-zigbuild" = "latest"
+"github:romnn/cargo-watchdoc" = { version = "latest", minimum_release_age = "0" }
+"aqua:rustsec/rustsec/cargo-audit" = "latest"
+"github:romnn/cooldown" = { version = "latest", minimum_release_age = "0" }
+"github:romnn/cargo-feature-combinations" = { version = "latest", matching = "cargo-fc", minimum_release_age = "0" }
+"github:est31/cargo-udeps" = "latest"
+"aqua:nextest-rs/nextest/cargo-nextest" = "latest"
+
+[settings]
+lockfile = true
