@@ -6,7 +6,14 @@ use std::collections::{BTreeMap, HashSet};
 /// What one precedence-chain scope may say.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct ScopeConfig {
-    /// When enabled, discard everything broader in the precedence chain.
+    /// Whether this scope inherits everything broader in the precedence chain.
+    ///
+    /// Defaults to `true`. Set `inherit = false` to start this scope from a
+    /// fresh default config instead of inheriting.
+    #[serde(default)]
+    pub inherit: Option<bool>,
+    /// Deprecated alias for `inherit = false`, still parsed for backward
+    /// compatibility. Prefer the [`inherit`](Self::inherit) field.
     #[serde(default)]
     pub replace: bool,
     /// Build driver override.
@@ -27,6 +34,31 @@ pub struct ScopeConfig {
     /// cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
+}
+
+impl ScopeConfig {
+    /// Whether this scope inherits everything broader in the precedence chain.
+    ///
+    /// Delegates to the free [`should_inherit()`](fn@should_inherit) helper for
+    /// the precedence rule, which config validation also uses.
+    #[must_use]
+    pub(crate) fn should_inherit(&self) -> bool {
+        should_inherit(self.inherit, self.replace)
+    }
+}
+
+/// Whether an `inherit` / `replace` pair keeps inheriting everything broader in
+/// the precedence chain (rather than starting from a fresh default config).
+///
+/// `inherit = false` is the canonical spelling for opting out; `replace = true`
+/// is a deprecated alias kept for backward compatibility. An explicit `inherit`
+/// wins over the legacy `replace` key. This single rule is shared by config
+/// validation (which reads the raw TOML map before deserialization) and
+/// resolution (which reads the typed [`ScopeConfig`]) so the two can never
+/// disagree.
+#[must_use]
+pub(crate) fn should_inherit(inherit: Option<bool>, replace: bool) -> bool {
+    inherit.unwrap_or(!replace)
 }
 
 /// Base or target section plus its command-local overrides.
@@ -155,6 +187,36 @@ mod tests {
     }
 
     #[test]
+    fn should_inherit_reads_inherit_then_legacy_replace() {
+        let cases = [
+            (
+                serde_json::json!({ "inherit": false }),
+                false,
+                "inherit false",
+            ),
+            (serde_json::json!({ "inherit": true }), true, "inherit true"),
+            (
+                serde_json::json!({ "replace": true }),
+                false,
+                "legacy replace",
+            ),
+            // An explicit `inherit` wins over the deprecated `replace` alias.
+            (
+                serde_json::json!({ "inherit": true, "replace": true }),
+                true,
+                "explicit inherit wins",
+            ),
+            (serde_json::json!({}), true, "default"),
+        ];
+        for (value, expected, name) in cases {
+            let scope: ScopeConfig = serde_json::from_value(value).expect(name);
+            assert_eq!(scope.should_inherit(), expected, "{name}");
+        }
+
+        assert!(ScopeConfig::default().should_inherit());
+    }
+
+    #[test]
     fn section_config_splits_subcommands_from_settings() {
         let value = serde_json::json!({
             "targets": ["wasm", "linux"],
@@ -196,6 +258,7 @@ mod tests {
     #[test]
     fn flattened_schema_key_sets_are_disjoint() {
         let scope = [
+            "inherit",
             "replace",
             "driver",
             "expand_targets",

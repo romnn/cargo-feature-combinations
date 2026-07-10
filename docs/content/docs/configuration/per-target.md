@@ -44,9 +44,9 @@ Matrix metadata tables merge recursively; other metadata values, including array
 
 A section applies when its `cfg(...)` predicate matches the concrete target being resolved. `cfg(feature = "...")` predicates are **not** supported in target-override keys. If `--target <triple>` or `CARGO_BUILD_TARGET` is set, that value selects matching overrides — this also applies to `cargo fc matrix`.
 
-## `replace = true`
+## `inherit = false`
 
-A matching target section can start from a fresh default config instead of inheriting the base. When it does, patchable fields in that section may only use `override` (arrays), not `add`/`remove`:
+Sections inherit the base by default (`inherit = true`). A matching target section can set `inherit = false` to start from a fresh default config instead. When it does, patchable fields in that section may only use `override` (arrays), not `add`/`remove`:
 
 ```toml
 [package.metadata.cargo-fc]
@@ -54,7 +54,7 @@ exclude_features = ["default"]
 skip_optional_dependencies = true
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
-replace = true
+inherit = false
 exclude_features = ["default", "cuda"]   # fresh config; nothing inherited
 ```
 

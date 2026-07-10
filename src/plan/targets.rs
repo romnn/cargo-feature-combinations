@@ -963,7 +963,7 @@ mod test {
     }
 
     #[test]
-    fn package_replace_resets_inherited_workspace_targets() -> eyre::Result<()> {
+    fn package_replace_discards_inherited_workspace_targets() -> eyre::Result<()> {
         let pkg = package("native")?;
         let mut cfg = Config::default();
         cfg.base.settings.replace = true;

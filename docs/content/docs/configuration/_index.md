@@ -12,7 +12,7 @@ Read these in order the first time:
 
 1. **[Basics]({{< relref "basics.md" >}})** — where configuration lives.
 2. **[Shaping the feature matrix]({{< relref "feature-matrix.md" >}})** — the keys that add, remove, restrict, or pin combinations.
-3. **[The override model]({{< relref "override-model.md" >}})** — the single precedence chain, patch operations, and `replace`. This is the mental model that ties everything together.
+3. **[The override model]({{< relref "override-model.md" >}})** — the single precedence chain, patch operations, and `inherit`. This is the mental model that ties everything together.
 4. **[Per-target configuration]({{< relref "per-target.md" >}})** — vary the matrix by target triple with `cfg(...)` selectors.
 5. **[Per-command configuration]({{< relref "per-command.md" >}})** — vary the matrix by cargo subcommand.
 6. **[Flags in config]({{< relref "flags.md" >}})** — set `cargo fc` flag defaults.

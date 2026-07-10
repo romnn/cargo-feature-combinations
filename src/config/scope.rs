@@ -58,7 +58,7 @@ impl ScopeId {
 /// Uniform borrowed view of one scope's payload.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ScopeView<'a> {
-    pub(crate) replace: bool,
+    pub(crate) inherits: bool,
     pub(crate) driver: Option<&'a str>,
     pub(crate) expand_targets: Option<bool>,
     pub(crate) targets: Option<&'a TargetListPatch>,
@@ -201,7 +201,7 @@ fn package_base_view(pkg: &Config) -> ScopeView<'_> {
 
 fn scope_view(scope: &ScopeConfig) -> ScopeView<'_> {
     ScopeView {
-        replace: scope.replace,
+        inherits: scope.should_inherit(),
         driver: scope.driver.as_deref(),
         expand_targets: scope.expand_targets,
         targets: scope.targets.as_ref(),

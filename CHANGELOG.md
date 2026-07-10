@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0]
+
+### Changed
+
+- The per-section toggle that discards inherited config is now spelled
+  `inherit = false` (with `inherit = true` as the default) instead of
+  `replace = true`. The behavior is unchanged: a section that sets
+  `inherit = false` discards everything broader in the precedence chain and
+  starts from a fresh default config, and it still may not combine
+  `inherit = false` with `add`/`remove` patch operations in the same section.
+
+### Deprecated
+
+- `replace = true` is now a deprecated alias for `inherit = false`. It is still
+  parsed for backward compatibility, so existing configs keep working, but it is
+  no longer documented. Prefer `inherit = false`. When both keys appear in the
+  same section, the explicit `inherit` wins over the legacy `replace`.
+
 ## [0.3.0]
 
 ### Added

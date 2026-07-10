@@ -1037,7 +1037,7 @@ mod test {
     }
 
     #[test]
-    fn package_subcommand_replace_resets_broader_expand_targets_policy() -> eyre::Result<()> {
+    fn package_subcommand_replace_discards_broader_expand_targets_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
         ws.base.subcommands.insert(

@@ -86,7 +86,7 @@ impl Chain<'_> {
         cli: CliOverlay<'_>,
         policy: ResolvePolicy,
     ) -> eyre::Result<Resolved> {
-        let start = replace_start(&self.layers);
+        let start = inheritance_start(&self.layers);
         let layers = self.layers.get(start..).unwrap_or(&[]);
         let flag_result = resolve_flags(layers, cli.flags, policy.default_diagnostics_allowed)?;
         let driver = resolve_driver(layers, cli.driver)?;
@@ -108,7 +108,7 @@ impl Chain<'_> {
         &self,
         base_exclude: &HashSet<String>,
     ) -> eyre::Result<HashSet<String>> {
-        let start = replace_start(&self.layers);
+        let start = inheritance_start(&self.layers);
         let mut out = if start == 0 {
             base_exclude.clone()
         } else {
@@ -128,7 +128,7 @@ impl Chain<'_> {
         &self,
         workspace_base: &[String],
     ) -> eyre::Result<TargetListResolution> {
-        let start = replace_start(&self.layers);
+        let start = inheritance_start(&self.layers);
         let mut targets = if start == 0 {
             workspace_base.to_vec()
         } else {
@@ -156,10 +156,10 @@ struct ResolvedFlagResult {
     ignored_diagnostics_config: bool,
 }
 
-fn replace_start(layers: &[Layer<'_>]) -> usize {
+fn inheritance_start(layers: &[Layer<'_>]) -> usize {
     layers
         .iter()
-        .rposition(|layer| layer.entries.iter().any(|(_, view)| view.replace))
+        .rposition(|layer| layer.entries.iter().any(|(_, view)| !view.inherits))
         .unwrap_or(0)
 }
 
@@ -638,6 +638,36 @@ mod tests {
     }
 
     #[test]
+    fn package_inherit_false_discards_broader_flags_and_driver() -> eyre::Result<()> {
+        let mut ws = WorkspaceConfig::default();
+        ws.base.settings.flags.pedantic = Some(true);
+        ws.base.settings.driver = Some("cargo-zigbuild".to_string());
+        let mut pkg = Config::default();
+        // Canonical opt-out of inheritance, with the legacy `replace` left at
+        // its default; this drives `scope_view` -> `should_inherit()` ->
+        // `inheritance_start` and guards against a regression that reads the
+        // legacy field directly.
+        pkg.base.settings.inherit = Some(false);
+        pkg.base.settings.flags.verbose = Some(true);
+        pkg.base.settings.driver = Some("cross".to_string());
+
+        let resolved = resolve_base(
+            &ws,
+            Some(&pkg),
+            None,
+            None,
+            FlagConfig::default(),
+            None,
+            true,
+        )?;
+
+        assert!(!resolved.flags.pedantic);
+        assert!(resolved.flags.verbose);
+        assert_eq!(resolved.driver.as_deref(), Some("cross"));
+        Ok(())
+    }
+
+    #[test]
     fn cli_driver_overrides_resolved_driver() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.driver = Some("cargo-zigbuild".to_string());
@@ -722,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn non_replacing_sibling_add_applies_onto_reset_base() -> eyre::Result<()> {
+    fn non_replacing_sibling_add_applies_onto_fresh_base() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "exclude_features": ["base"],
             "target": {

@@ -152,7 +152,7 @@ fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
 }
 
 #[test]
-fn replace_true_rejects_add_remove() -> eyre::Result<()> {
+fn legacy_replace_true_rejects_add_remove() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations]
         exclude_features = ["default"]
@@ -176,11 +176,11 @@ fn replace_true_rejects_add_remove() -> eyre::Result<()> {
         .ok_or_eyre("test package should exist")?;
 
     let Err(err) = pkg.config() else {
-        eyre::bail!("expected replace=true load-time validation to fail");
+        eyre::bail!("expected the legacy replace=true alias to fail load-time validation");
     };
 
     let message = err.to_string();
-    assert!(message.contains("replace"), "{message}");
+    assert!(message.contains("inherit = false"), "{message}");
     assert!(message.contains("add/remove"), "{message}");
 
     Ok(())

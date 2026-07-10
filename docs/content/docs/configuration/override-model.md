@@ -40,7 +40,7 @@ exclude_features = { remove = ["cuda"] }    # subtract from the inherited value
 
 Patches apply in order: **override (or base), then remove, then add.** If a value is in both `add` and `remove`, `add` wins. When several matching sections contribute patches, their `add` and `remove` sets are unioned; conflicting `override` values are an error.
 
-**3. Reset** — `replace = true` on a section discards everything broader in the chain and starts that section from defaults. See [below](#replace--true).
+**3. Discard** — `inherit = false` on a section discards everything broader in the chain and starts that section from defaults (the default is `inherit = true`). See [below](#inherit--false).
 
 > [!WARNING]
 > **An array is always an override, never an add.** `exclude_features = ["cuda"]` *replaces* the inherited value. To extend it, you must write `{ add = ["cuda"] }`. This is the single most common configuration mistake.
@@ -57,19 +57,19 @@ Patches apply in order: **override (or base), then remove, then add.** If a valu
 | `targets` (the list) | ✓ |  | ✓ |  | ✓ |  | ✓ |  |
 | `expand_targets` |  |  | ✓ | ✓ |  |  | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `replace` |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `inherit` |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The blank cells are deliberate:
 
 1. **Feature-matrix keys** are package-only — a workspace isn't a crate and has no features to shape.
 2. **`exclude_packages`** is workspace-only — a package can't exclude its siblings; run membership is a workspace decision.
 3. **`targets` (the list)** can't be set inside a `target.'cfg(...)'` section — that section was selected *because* a target matched, so redefining the list there would be circular. (Per-subcommand lists are fine.)
-4. **`replace`** has nothing to reset at the workspace base, so it isn't allowed there. At a package base it's fine — it discards the inherited workspace config for that package.
+4. **`inherit = false`** has nothing to discard at the workspace base, so it isn't allowed there. At a package base it's fine — it discards the inherited workspace config for that package.
 5. **`expand_targets`** is a per-subcommand capability, so it only appears in `subcommands.<cmd>` tables. See [Per-command configuration]({{< relref "per-command.md" >}}).
 
-## `replace = true`
+## `inherit = false`
 
-When a matching section sets `replace = true`, resolution starts from a fresh default configuration for that section instead of inheriting. To avoid ambiguity, patchable fields in that same section may then only use `override` (arrays), not `add`/`remove`.
+Sections inherit from everything broader by default (`inherit = true`). When a matching section sets `inherit = false`, resolution starts from a fresh default configuration for that section instead of inheriting. To avoid ambiguity, patchable fields in that same section may then only use `override` (arrays), not `add`/`remove`.
 
 ```toml
 [package.metadata.cargo-fc]
@@ -78,7 +78,7 @@ isolated_feature_sets = [["gpu"], ["ui"]]
 skip_optional_dependencies = true
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
-replace = true
+inherit = false
 # Fresh config on Linux: isolated_feature_sets and skip_optional_dependencies
 # are NOT inherited.
 exclude_features = ["default", "cuda"]

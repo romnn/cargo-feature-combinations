@@ -126,8 +126,8 @@ Wherever a setting is valid, it accepts the **same forms**, consistently:
   ops on a set-like value: `override` replaces the whole value, `add` unions
   into it, `remove` subtracts from it. (Scalars — bools and `driver` — only have
   `override`, i.e. `key = value`.)
-- `replace = true` on a section — **reset**: ignore everything broader in the
-  chain and start this section from defaults.
+- `inherit = false` on a section — **discard**: ignore everything broader in the
+  chain and start this section from defaults (the default is `inherit = true`).
 
 The matrix shows where each setting may be overridden (`✓`); a blank cell means
 it does not apply in that scope (`*` marks the deprecated root-package
@@ -141,7 +141,7 @@ it does not apply in that scope (`*` marks the deprecated root-package
 | `targets` (list)³ | ✓ |  | ✓ |  | ✓ |  | ✓ |  |
 | `expand_targets` |  |  | ✓ | ✓ |  |  | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `replace`⁴ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `inherit`⁴ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The places a setting is *not* overridable, and why:
 
@@ -159,9 +159,9 @@ The places a setting is *not* overridable, and why:
    section was selected *because* a target matched, so redefining the list there
    is self-referential. (Per-subcommand lists, e.g. "test only on host", are
    fine.)
-4. **`replace`** at a *workspace base* — nothing broader exists for it to reset.
-   (`replace` at a *package* base is fine: it discards the inherited workspace
-   config for that package.)
+4. **`inherit = false`** at a *workspace base* — nothing broader exists for it to
+   discard. (`inherit = false` at a *package* base is fine: it discards the
+   inherited workspace config for that package.)
 5. **`expand_targets`** outside a `subcommands.<cmd>` table — it is a
    per-subcommand capability, not a base or target-wide setting.
 
@@ -627,15 +627,16 @@ their `add` and `remove` sets are unioned. Conflicting `override` values result 
 Matrix metadata tables merge recursively. Other matrix metadata values,
 including arrays, replace the base value.
 
-##### `replace = true`
+##### `inherit = false`
 
-If a matching target override sets `replace = true`, resolution starts from a fresh default
+Sections inherit from everything broader by default (`inherit = true`). If a matching
+target override sets `inherit = false`, resolution starts from a fresh default
 configuration (instead of inheriting from the base config). To avoid confusion, when
-`replace = true` is set, patchable fields in that same section must not use `add` or
+`inherit = false` is set, patchable fields in that same section must not use `add` or
 `remove` (only override is allowed).
 
 <details>
-<summary>Example: Start from fresh config with `replace=true`</summary>
+<summary>Example: Start from fresh config with `inherit = false`</summary>
 
 ```toml
 [package.metadata.cargo-fc]
@@ -647,7 +648,7 @@ isolated_feature_sets = [
 skip_optional_dependencies = true
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
-replace = true
+inherit = false
 
 # Start from a fresh default config on Linux: `isolated_feature_sets` and
 # `skip_optional_dependencies` are not inherited from the base config.

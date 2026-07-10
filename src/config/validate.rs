@@ -44,7 +44,7 @@ enum SettingKind {
     TargetsList,
     ExpandTargets,
     Driver,
-    Replace,
+    Inherit,
     TargetTable,
     SubcommandsTable,
 }
@@ -134,8 +134,25 @@ fn validate_scope(value: &serde_json::Value, section: &str, scope: ScopeId) -> e
         }
         validate_value_shape(key, value, kind, section)?;
     }
-    validate_replace_patch_ops(map, section)?;
+    if scope == ScopeId::WorkspaceBase && !scope_should_inherit(map) {
+        eyre::bail!(
+            "`inherit = false` in [{section}] discards everything broader in the precedence chain, but the workspace base is the broadest scope, so there is nothing broader to discard"
+        );
+    }
+    validate_non_inheriting_patch_ops(map, section)?;
     Ok(())
+}
+
+/// Whether this scope inherits everything broader in the precedence chain.
+///
+/// Reads the `inherit` / `replace` spelling off the raw TOML map (validation
+/// runs before deserialization) and defers to the shared
+/// [`super::schema::should_inherit`] rule that resolution uses, so the two never
+/// disagree.
+fn scope_should_inherit(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let inherit = map.get("inherit").and_then(serde_json::Value::as_bool);
+    let replace = map.get("replace") == Some(&serde_json::Value::Bool(true));
+    super::schema::should_inherit(inherit, replace)
 }
 
 fn validate_value_shape(
@@ -188,7 +205,7 @@ enum ValueShape {
 
 fn value_shape(key: &str, kind: SettingKind) -> ValueShape {
     match kind {
-        SettingKind::Flag | SettingKind::ExpandTargets | SettingKind::Replace => ValueShape::Bool,
+        SettingKind::Flag | SettingKind::ExpandTargets | SettingKind::Inherit => ValueShape::Bool,
         SettingKind::Driver => ValueShape::String,
         SettingKind::FeatureMatrix => match key {
             "skip_optional_dependencies" | "no_empty_feature_set" => ValueShape::Bool,
@@ -227,11 +244,11 @@ fn validate_patch_shape(key: &str, value: &serde_json::Value, section: &str) -> 
     Ok(())
 }
 
-fn validate_replace_patch_ops(
+fn validate_non_inheriting_patch_ops(
     map: &serde_json::Map<String, serde_json::Value>,
     section: &str,
 ) -> eyre::Result<()> {
-    if map.get("replace") != Some(&serde_json::Value::Bool(true)) {
+    if scope_should_inherit(map) {
         return Ok(());
     }
 
@@ -250,7 +267,7 @@ fn validate_replace_patch_ops(
     }
 
     eyre::bail!(
-        "`{}` use add/remove patch operations in [{section}] with replace = true",
+        "`{}` use add/remove patch operations in [{section}] with inherit = false",
         invalid.join(", ")
     );
 }
@@ -287,7 +304,7 @@ fn setting_kind(key: &str) -> Option<SettingKind> {
         "targets" => Some(SettingKind::TargetsList),
         "expand_targets" => Some(SettingKind::ExpandTargets),
         "driver" => Some(SettingKind::Driver),
-        "replace" => Some(SettingKind::Replace),
+        "inherit" | "replace" => Some(SettingKind::Inherit),
         "target" => Some(SettingKind::TargetTable),
         "subcommands" => Some(SettingKind::SubcommandsTable),
         _ => None,
@@ -296,11 +313,7 @@ fn setting_kind(key: &str) -> Option<SettingKind> {
 
 fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str> {
     match kind {
-        SettingKind::Flag | SettingKind::Driver => Ok(()),
-        SettingKind::Replace if scope != ScopeId::WorkspaceBase => Ok(()),
-        SettingKind::Replace => Err(
-            "`replace` resets everything broader in the precedence chain, but the workspace base is the broadest scope, so there is nothing for it to reset",
-        ),
+        SettingKind::Flag | SettingKind::Driver | SettingKind::Inherit => Ok(()),
         SettingKind::ExpandTargets if scope.is_command() => Ok(()),
         SettingKind::ExpandTargets => Err(
             "`expand_targets` is a per-subcommand capability; set it inside a `subcommands.<cmd>` table",
@@ -405,6 +418,7 @@ mod tests {
                     "targets",
                     "expand_targets",
                     "driver",
+                    "inherit",
                     "replace",
                     "target",
                     "subcommands",
@@ -437,7 +451,7 @@ mod tests {
             SettingKind::TargetsList,
             SettingKind::ExpandTargets,
             SettingKind::Driver,
-            SettingKind::Replace,
+            SettingKind::Inherit,
             SettingKind::TargetTable,
             SettingKind::SubcommandsTable,
         ] {
@@ -489,17 +503,44 @@ mod tests {
     }
 
     #[test]
-    fn workspace_base_rejects_replace() {
+    fn workspace_base_rejects_inherit_false() {
+        let err = super::validate_workspace_metadata(
+            &serde_json::json!({ "inherit": false }),
+            "workspace.metadata.cargo-fc",
+        )
+        .expect_err("workspace base should reject inherit = false");
+        assert!(err.to_string().contains("nothing broader to discard"));
+
+        // The deprecated `replace = true` alias hits the same rule.
         let err = super::validate_workspace_metadata(
             &serde_json::json!({ "replace": true }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace base should reject replace");
-        assert!(err.to_string().contains("nothing for it to reset"));
+        .expect_err("workspace base should reject the legacy replace alias");
+        assert!(err.to_string().contains("nothing broader to discard"));
     }
 
     #[test]
-    fn package_base_and_subcommands_accept_replace() {
+    fn workspace_base_accepts_redundant_inherit_true() {
+        super::validate_workspace_metadata(
+            &serde_json::json!({ "inherit": true }),
+            "workspace.metadata.cargo-fc",
+        )
+        .expect("inherit = true at the workspace base is a harmless no-op");
+    }
+
+    #[test]
+    fn package_base_and_subcommands_accept_inherit_false() {
+        super::validate_package_metadata(
+            &serde_json::json!({
+                "inherit": false,
+                "subcommands": { "test": { "inherit": false } },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect("package base and subcommands should accept inherit = false");
+
+        // The deprecated `replace = true` alias is still parsed and accepted.
         super::validate_package_metadata(
             &serde_json::json!({
                 "replace": true,
@@ -507,7 +548,7 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package base and subcommands should accept replace");
+        .expect("package base and subcommands should accept the legacy replace alias");
     }
 
     #[test]
@@ -703,24 +744,24 @@ mod tests {
     }
 
     #[test]
-    fn replace_rejects_add_remove_in_same_package_section() {
+    fn inherit_false_rejects_add_remove_in_same_package_section() {
         let err = super::validate_package_metadata(
             &serde_json::json!({
-                "replace": true,
+                "inherit": false,
                 "exclude_features": { "add": ["gpu"], "remove": ["cpu"] },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("replace with add/remove in the same section should fail");
+        .expect_err("inherit = false with add/remove in the same section should fail");
 
         let message = err.to_string();
-        assert!(message.contains("replace"), "{message}");
+        assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("exclude_features"), "{message}");
     }
 
     #[test]
-    fn replace_rejects_add_remove_in_same_workspace_section() {
+    fn legacy_replace_true_rejects_add_remove_in_same_workspace_section() {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "subcommands": {
@@ -735,7 +776,7 @@ mod tests {
         .expect_err("workspace command replace with add/remove should fail");
 
         let message = err.to_string();
-        assert!(message.contains("replace"), "{message}");
+        assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("exclude_packages"), "{message}");
         assert!(
@@ -745,32 +786,32 @@ mod tests {
     }
 
     #[test]
-    fn broader_replace_add_remove_errors_even_when_narrower_reset_exists() {
+    fn broader_non_inheriting_add_remove_errors_even_when_narrower_also_opts_out() {
         let err = super::validate_package_metadata(
             &serde_json::json!({
-                "replace": true,
+                "inherit": false,
                 "exclude_features": { "add": ["base"] },
                 "target": {
-                    "cfg(unix)": { "replace": true },
+                    "cfg(unix)": { "inherit": false },
                 },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("broader invalid reset should fail at load time");
+        .expect_err("broader invalid non-inheriting section should fail at load time");
 
         let message = err.to_string();
-        assert!(message.contains("replace"), "{message}");
+        assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("package.metadata.cargo-fc"), "{message}");
     }
 
     #[test]
-    fn unmatched_target_replace_add_remove_errors_at_load_time() {
+    fn unmatched_target_non_inheriting_add_remove_errors_at_load_time() {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "target": {
                     "cfg(target_os = \"definitely-not-this-target\")": {
-                        "replace": true,
+                        "inherit": false,
                         "exclude_features": { "add": ["gpu"] },
                     },
                 },
@@ -780,34 +821,34 @@ mod tests {
         .expect_err("invalid target section should fail without cfg evaluation");
 
         let message = err.to_string();
-        assert!(message.contains("replace"), "{message}");
+        assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("target.'cfg(target_os = \"definitely-not-this-target\")'"));
     }
 
     #[test]
-    fn replace_rule_is_section_local_for_nested_subcommands() {
+    fn non_inheriting_rule_is_section_local_for_nested_subcommands() {
         super::validate_package_metadata(
             &serde_json::json!({
-                "replace": true,
+                "inherit": false,
                 "subcommands": {
                     "test": { "exclude_features": { "add": ["gpu"] } },
                 },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("parent replace should not constrain nested subcommand patches");
+        .expect("parent non-inheriting section should not constrain nested subcommand patches");
 
         super::validate_package_metadata(
             &serde_json::json!({
                 "exclude_features": { "add": ["gpu"] },
                 "subcommands": {
-                    "test": { "replace": true },
+                    "test": { "inherit": false },
                 },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("subcommand replace should not constrain parent patches");
+        .expect("subcommand non-inheriting section should not constrain parent patches");
     }
 
     fn keys_for<T: Serialize>(value: T) -> BTreeSet<String> {
