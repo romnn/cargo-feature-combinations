@@ -31,7 +31,7 @@ shoot() {
   local name="$1" dir="$examples/$2"; shift 2
   ( cd "$dir" && "$fc" "$@" >/dev/null 2>&1 || true ) # warm the build
   {
-    printf '\033[1;32m❯\033[0m cargo fc %s\n\n' "$*"
+    printf '\033[1;32m$\033[0m cargo fc %s\n\n' "$*"
     # Capture both streams: diagnostics (warnings/errors) go to stderr, the
     # summary to stdout — a user sees them merged in the terminal.
     ( cd "$dir" && "$fc" "$@" --color always 2>&1 || true )
@@ -55,7 +55,9 @@ shoot pruned      pruning --summary-only --show-pruned check --workspace
 shoot targets           targets --summary-only check --workspace
 shoot aggregate-targets targets --aggregate-targets --summary-only check --workspace
 
-# Clean workspace — a passing run summary, and the JSON feature matrix.
+# Clean workspace — the homepage hero (full per-combination run), a passing run
+# summary, and the JSON feature matrix.
+shoot hero        clean check --workspace
 shoot check       clean --summary-only check --workspace
 shoot matrix      clean matrix --pretty
 

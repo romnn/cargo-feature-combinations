@@ -259,6 +259,24 @@ url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/t
 url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851432"
 provenance = "github-attestations"
 
+[tools."github:buildkite/terminal-to-html"."platforms.linux-x64-musl"]
+checksum = "sha256:506bf48a06017c6d74903da75f9fd3aea18cc9451cb3ad39103e4c8997c3716f"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-linux-amd64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851432"
+provenance = "github-attestations"
+
+[tools."github:buildkite/terminal-to-html"."platforms.macos-arm64"]
+checksum = "sha256:264b131fe7ae4601fc8b65e80bdc3d71e5c2cc32853f3a270c9cbaf47b2d45df"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-darwin-arm64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851452"
+provenance = "github-attestations"
+
+[tools."github:buildkite/terminal-to-html"."platforms.macos-x64"]
+checksum = "sha256:4350e0e3b1b4dd71b9f4b9d8a197e4946df7be214e1cc1d0f7271135318ccd8d"
+url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-darwin-amd64.gz"
+url_api = "https://api.github.com/repos/buildkite/terminal-to-html/releases/assets/469851463"
+provenance = "github-attestations"
+
 [tools."github:buildkite/terminal-to-html"."platforms.windows-x64"]
 checksum = "sha256:5286bcf3d17312af5b354da16731f4bbc9b777a0a15168d6b49562a8b6f6df17"
 url = "https://github.com/buildkite/terminal-to-html/releases/download/v3.17.1/terminal-to-html-3.17.1-windows-amd64.zip"

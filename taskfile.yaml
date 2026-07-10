@@ -117,8 +117,8 @@ tasks:
       - bash scripts/screenshots.sh
 
   docs:build:
-    desc: "regenerate all docs assets and build the static site into docs/public"
-    deps: [docs:terminals, docs:screenshots]
+    desc: "regenerate the terminal snippets and build the static site into docs/public"
+    deps: [docs:terminals]
     dir: docs
     cmds:
       - hugo --minify --gc {{.CLI_ARGS}}
@@ -126,7 +126,7 @@ tasks:
   docs:serve:
     desc: "serve the documentation website with hot reload (needs hugo extended + go)"
     aliases: [docs]
-    deps: [docs:terminals, docs:screenshots]
+    deps: [docs:terminals]
     dir: docs
     interactive: true
     cmds:

@@ -319,14 +319,31 @@ code, kbd, samp, pre, .chroma, .cfc-term__body {
 .cfc-hero__shot {
   flex: 1 1 22rem;
   min-width: 18rem;
+  /* Size the hero terminal's font to this column's width (below) so the
+     fixed-width cargo lines always fit, at any viewport. */
+  container-type: inline-size;
 }
 
-.cfc-hero__shot img {
-  width: 100%;
-  height: auto;
-  border-radius: 0.6rem;
-  border: 1px solid var(--cfc-border);
+/* The hero shot is a live terminal snippet (not an image). Give it the drop
+   shadow the screenshot had, drop the default vertical margin so it aligns with
+   the hero text, and shrink the font + padding so the whole run fits inside the
+   hero column with no scrollbar on either axis. */
+.cfc-hero__shot .cfc-term {
+  margin: 0;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+}
+
+/* Match the base rule's specificity (.cfc-term pre.cfc-term__body) so these win.
+   font-size is in cqi (1% of the column width): the widest cargo line is ~50
+   characters wide, so ~1.8cqi keeps it inside the column with a little slack,
+   scaling up on wider columns and down on narrow ones. No scrollbar on either
+   axis — max-height:none lets the box grow to the full run. */
+.cfc-hero__shot .cfc-term pre.cfc-term__body {
+  padding: 0.7rem 0.85rem;
+  font-size: 1.8cqi;
+  line-height: 1.5;
+  max-height: none;
+  overflow: hidden;
 }
 
 .cfc-cards {

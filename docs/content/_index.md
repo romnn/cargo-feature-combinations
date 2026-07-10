@@ -15,7 +15,7 @@ bookToc: false
     </div>
   </div>
   <div class="cfc-hero__shot">
-    {{< img src="images/check.png" alt="cargo fc check running across the feature combinations of a workspace" >}}
+    {{< terminal name="hero" >}}
   </div>
 </div>
 
