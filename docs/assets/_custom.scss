@@ -123,6 +123,16 @@
   --cfc-scroll-thumb: #3a414c;
 }
 
+/* Base defaults so every --cfc-* variable is defined even when data-theme is not
+   set yet — before the head script runs, on a livereload repaint, or with JS
+   disabled. Without them var(--cfc-brand-contrast)/var(--cfc-brand) are undefined
+   and the primary hero button renders transparent with black text. The head
+   script still sets data-theme for the toggle; the @media just picks the right
+   default when it hasn't. */
+:root { @include cfc-light; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { @include cfc-dark; }
+}
 :root[data-theme="light"] { @include cfc-light; }
 :root[data-theme="dark"] { @include cfc-dark; }
 
