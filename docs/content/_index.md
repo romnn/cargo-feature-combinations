@@ -71,16 +71,6 @@ cargo fc --dedupe clippy
 cargo fc matrix --pretty
 ```
 
-Shape the matrix in `Cargo.toml` when the defaults don't fit:
-
-```toml
-[package.metadata.cargo-fc]
-# Two features that must not be enabled together.
-exclude_feature_sets = [["postgres", "sqlite"]]
-# Don't vary the implicit features generated for optional dependencies.
-skip_optional_dependencies = true
-```
-
 ## Documentation
 
 - [Introduction]({{< relref "/docs/introduction.md" >}}) and [Installation]({{< relref "/docs/installation.md" >}}).
