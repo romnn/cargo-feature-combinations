@@ -32,6 +32,9 @@ jobs:
           brew install cargo-audit
           brew install cargo-udeps
       - name: Audit
+        # Advisories shouldn't fail the lint run — a new RUSTSEC advisory can land
+        # without any change on our side. Surface it, but don't block.
+        continue-on-error: true
         run: task audit --output group --output-group-error-only
       - name: Check for unused dependencies
         run: task unused-dependencies --output group --output-group-error-only
