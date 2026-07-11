@@ -11,11 +11,20 @@
 # The snippets are committed, so the Hugo site builds without terminal-to-html;
 # run this only to regenerate them. The `terminal` shortcode inlines each snippet.
 #
-# `--color always` forces ANSI because output is captured through a pipe, not a
-# PTY. We warm each example's target dir first so the capture is just the
-# feature-combination run, and normalize the wall-clock duration so the output
-# is reproducible.
+# Output is captured through a pipe, not a PTY, so colour has to be forced.
+# cargo-fc honours TERM=dumb and NO_COLOR over its `--color` flag, and CI (GitHub
+# Actions) runs steps with TERM=dumb — so we force a colour-capable environment
+# (below) rather than passing a flag. We warm each example's target dir first so
+# the capture is just the feature-combination run, and normalize the wall-clock
+# duration so the output is reproducible.
 set -euo pipefail
+
+# Force colour for the captured cargo-fc output regardless of the ambient
+# environment: CLICOLOR_FORCE makes it emit colour through a pipe (no PTY), and
+# overriding TERM / clearing NO_COLOR stops CI's TERM=dumb (or a stray NO_COLOR)
+# from stripping it — cargo-fc lets those win over `--color always`.
+export CLICOLOR_FORCE=1 TERM=xterm-256color
+unset NO_COLOR
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fc="$repo/target/release/cargo-fc"
@@ -34,7 +43,7 @@ shoot() {
     printf '\033[1;32m$\033[0m cargo fc %s\n\n' "$*"
     # Capture both streams: diagnostics (warnings/errors) go to stderr, the
     # summary to stdout — a user sees them merged in the terminal.
-    ( cd "$dir" && "$fc" "$@" --color always 2>&1 || true )
+    ( cd "$dir" && "$fc" "$@" 2>&1 || true )
   } \
     | terminal-to-html \
     | sed -E 's/ in [0-9]+(\.[0-9]+)?s/ in 0.00s/g' \

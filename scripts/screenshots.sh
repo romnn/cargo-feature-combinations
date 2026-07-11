@@ -8,15 +8,23 @@
 # workspace contains real warnings/errors so the diagnostics, dedupe, and pruning shots have
 # something to show.
 #
-# These PNGs exist for the README only: GitHub markdown can't render the docs site's live HTML
+# These PNG's exist for the README only: GitHub markdown can't render the docs site's live HTML
 # terminals, so it needs static images. The docs *site* renders the same `cargo fc` output as HTML
 # via scripts/terminals.sh, so it does not use these images — which is why the docs build does not
 # depend on this script. Run it by hand (`task docs:screenshots`) to refresh the README shots.
 #
-# `--color always` forces ANSI because freeze captures via a pipe, not a PTY. We warm each example's
-# target dir before capturing so the output is just the feature-combination run, without the
-# one-time `Compiling <dep>` noise. Images are downscaled to a sane width afterwards.
+# freeze captures via a pipe, not a PTY, so colour has to be forced. cargo-fc honours TERM=dumb and
+# NO_COLOR over its `--color` flag, so we force a colour-capable environment (below) rather than
+# passing a flag. We warm each example's target dir before capturing so the output is just the
+# feature-combination run, without the one-time `Compiling <dep>` noise. Images are downscaled to a
+# sane width afterwards.
 set -euo pipefail
+
+# Force colour for the captured cargo-fc output regardless of the ambient environment: CLICOLOR_FORCE
+# makes it emit colour through a pipe (no PTY), and overriding TERM / clearing NO_COLOR stops a
+# TERM=dumb or stray NO_COLOR from stripping it — cargo-fc lets those win over `--color always`.
+export CLICOLOR_FORCE=1 TERM=xterm-256color
+unset NO_COLOR
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fc="$repo/target/release/cargo-fc"
@@ -24,11 +32,20 @@ docs="$repo/docs/static/images"
 examples="$repo/examples"
 max_width=2200
 
-command -v freeze >/dev/null || { echo "freeze not found — install charmbracelet/freeze" >&2; exit 1; }
-command -v jq >/dev/null || { echo "jq not found — install jq" >&2; exit 1; }
+command -v freeze >/dev/null || {
+  echo "freeze not found — install charmbracelet/freeze" >&2
+  exit 1
+}
+command -v jq >/dev/null || {
+  echo "jq not found — install jq" >&2
+  exit 1
+}
 # ImageMagick 7 is `magick`; ImageMagick 6 (Ubuntu apt) is `convert`. Accept either.
 magick_bin="$(command -v magick || command -v convert || true)"
-[[ -n "$magick_bin" ]] || { echo "ImageMagick not found — install 'magick' (v7) or 'convert' (v6)" >&2; exit 1; }
+[[ -n "$magick_bin" ]] || {
+  echo "ImageMagick not found — install 'magick' (v7) or 'convert' (v6)" >&2
+  exit 1
+}
 [[ -x "$fc" ]] || cargo build --release --bin cargo-fc --manifest-path "$repo/Cargo.toml"
 mkdir -p "$docs"
 
@@ -60,14 +77,15 @@ freeze_render() {
 # Terminal-style shot: a shell prompt line followed by the real (colored) output.
 # Usage: shoot_term <example-dir> <output.png> <fc args...>
 shoot_term() {
-  local dir="$examples/$1" out="$docs/$2"; shift 2
-  ( cd "$dir" && "$fc" "$@" >/dev/null 2>&1 || true ) # warm the build
+  local dir="$examples/$1" out="$docs/$2"
+  shift 2
+  (cd "$dir" && "$fc" "$@" >/dev/null 2>&1 || true) # warm the build
   local ansi
   ansi="$(
     cd "$dir"
     printf '\033[1;32m$\033[0m cargo fc %s\n\n' "$*"
     # Merge streams: diagnostics go to stderr, the summary to stdout.
-    "$fc" "$@" --color always 2>&1 || true
+    "$fc" "$@" 2>&1 || true
   )"
   freeze_render "$out" "$ansi"
   downscale "$out"
@@ -92,16 +110,16 @@ shoot_matrix() {
 }
 
 # Clean workspace — the hero, plus the JSON matrix.
-shoot_term   clean       check.png   check --workspace
-shoot_matrix clean       matrix.png
+shoot_term clean check.png check --workspace
+shoot_matrix clean matrix.png
 
 # Targets workspace — a feature matrix checked across multiple target triples.
-shoot_term   targets     targets.png --summary-only check --workspace
+shoot_term targets targets.png --summary-only check --workspace
 
 # Diagnostics workspace — summary with WARN/FAIL, raw diagnostics, and deduped diagnostics.
-shoot_term   diagnostics summary.png     --summary-only check --workspace
-shoot_term   diagnostics diagnostics.png --diagnostics-only clippy --workspace
-shoot_term   diagnostics dedupe.png      --dedupe clippy --workspace
+shoot_term diagnostics summary.png --summary-only check --workspace
+shoot_term diagnostics diagnostics.png --diagnostics-only clippy --workspace
+shoot_term diagnostics dedupe.png --dedupe clippy --workspace
 
 # Pruning workspace — pruned (SKIP) combinations shown explicitly.
-shoot_term   pruning     pruned.png  --summary-only --show-pruned check --workspace
+shoot_term pruning pruned.png --summary-only --show-pruned check --workspace
