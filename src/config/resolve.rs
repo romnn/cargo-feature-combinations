@@ -3,6 +3,7 @@ use crate::target::TargetTriple;
 use color_eyre::eyre::{self, WrapErr};
 use std::collections::{BTreeMap, HashSet};
 
+use super::env::{EnvValue, ResolvedEnv, combine_env_patches};
 use super::patch::{
     FeatureSetVecPatch, SetPatchOps, StringSetPatch, TargetListOps, TargetListPatch,
     combine_set_patches, combine_target_list_patches,
@@ -58,6 +59,7 @@ pub(crate) struct Resolved {
     pub(crate) flags: ResolvedFlags,
     pub(crate) ignored_diagnostics_config: bool,
     pub(crate) driver: Option<String>,
+    pub(crate) env: ResolvedEnv,
     pub(crate) targets_enabled: bool,
     pub(crate) targets_explicit: bool,
     pub(crate) features: ResolvedFeatures,
@@ -67,6 +69,8 @@ pub(crate) struct Resolved {
 pub(crate) struct CliOverlay<'a> {
     pub(crate) flags: FlagConfig,
     pub(crate) driver: Option<&'a str>,
+    pub(crate) env_set: &'a [(String, EnvValue)],
+    pub(crate) env_remove: &'a [String],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +96,7 @@ impl Chain<'_> {
         let layers = self.layers.get(start..).unwrap_or(&[]);
         let flag_result = resolve_flags(layers, cli.flags, policy.default_diagnostics_allowed)?;
         let driver = resolve_driver(layers, cli.driver)?;
+        let env = resolve_env(layers, cli.env_set, cli.env_remove)?;
         let (targets_enabled, targets_explicit) =
             resolve_expand_targets(layers, policy.default_targets_enabled)?;
         let features = resolve_features(layers)?;
@@ -100,6 +105,7 @@ impl Chain<'_> {
             flags: flag_result.flags,
             ignored_diagnostics_config: flag_result.ignored_diagnostics_config,
             driver,
+            env,
             targets_enabled,
             targets_explicit,
             features,
@@ -218,6 +224,30 @@ fn resolve_driver(layers: &[Layer<'_>], cli_driver: Option<&str>) -> eyre::Resul
     }
     if let Some(driver) = cli_driver {
         out = Some(driver.to_string());
+    }
+    Ok(out)
+}
+
+fn resolve_env(
+    layers: &[Layer<'_>],
+    cli_set: &[(String, EnvValue)],
+    cli_remove: &[String],
+) -> eyre::Result<ResolvedEnv> {
+    let mut out = ResolvedEnv::default();
+    for layer in layers {
+        let patches = layer
+            .entries
+            .iter()
+            .filter_map(|(section, view)| view.env.map(|patch| (*section, patch)));
+        if let Some(operations) = combine_env_patches(layer.scope.source_kind(), patches)? {
+            out.apply_patch(&operations);
+        }
+    }
+    for name in cli_remove {
+        out.remove(name);
+    }
+    for (name, value) in cli_set {
+        out.set(name.clone(), value.clone());
     }
     Ok(out)
 }
@@ -471,6 +501,8 @@ pub fn resolve_config<E: CfgEvaluator>(
             CliOverlay {
                 flags: FlagConfig::default(),
                 driver: None,
+                env_set: &[],
+                env_remove: &[],
             },
             ResolvePolicy {
                 default_diagnostics_allowed: true,
@@ -509,6 +541,8 @@ mod tests {
     use crate::target::TargetTriple;
     use color_eyre::eyre;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::ffi::OsString;
+    use std::process::Command;
 
     struct MatchAll;
 
@@ -531,6 +565,8 @@ mod tests {
             CliOverlay {
                 flags: cli_flags,
                 driver: cli_driver,
+                env_set: &[],
+                env_remove: &[],
             },
             ResolvePolicy {
                 default_diagnostics_allowed,
@@ -696,6 +732,300 @@ mod tests {
     }
 
     #[test]
+    fn cli_env_overlay_applies_last_with_additions_winning() -> eyre::Result<()> {
+        let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
+            "env": {
+                "add": { "CONFIGURED": "config", "RESTORED": "config" },
+            },
+        }))?;
+        let cli_set = vec![
+            (
+                "CONFIGURED".to_string(),
+                crate::config::EnvValue::from_validated("first".to_string()),
+            ),
+            (
+                "CONFIGURED".to_string(),
+                crate::config::EnvValue::from_validated("last".to_string()),
+            ),
+            (
+                "RESTORED".to_string(),
+                crate::config::EnvValue::from_validated("cli".to_string()),
+            ),
+        ];
+        let cli_remove = vec![
+            "CONFIGURED".to_string(),
+            "RESTORED".to_string(),
+            "AMBIENT".to_string(),
+        ];
+
+        let resolved = Chain::base(&workspace, None, None, None).resolve(
+            CliOverlay {
+                flags: FlagConfig::default(),
+                driver: None,
+                env_set: &cli_set,
+                env_remove: &cli_remove,
+            },
+            ResolvePolicy {
+                default_diagnostics_allowed: true,
+                default_targets_enabled: true,
+            },
+        )?;
+
+        assert_eq!(
+            command_env(&resolved.env, "CONFIGURED"),
+            CommandEnv::Set(OsString::from("last"))
+        );
+        assert_eq!(
+            command_env(&resolved.env, "RESTORED"),
+            CommandEnv::Set(OsString::from("cli"))
+        );
+        assert_eq!(command_env(&resolved.env, "AMBIENT"), CommandEnv::Removed);
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum CommandEnv {
+        Unchanged,
+        Removed,
+        Set(OsString),
+    }
+
+    fn command_env(env: &crate::config::ResolvedEnv, key: &str) -> CommandEnv {
+        let mut command = Command::new("cargo");
+        env.apply_to(&mut command);
+        command.get_envs().find(|(name, _)| *name == key).map_or(
+            CommandEnv::Unchanged,
+            |(_, value)| {
+                value.map_or(CommandEnv::Removed, |value| {
+                    CommandEnv::Set(value.to_os_string())
+                })
+            },
+        )
+    }
+
+    #[test]
+    fn env_resolves_precedence_and_target_removal() -> eyre::Result<()> {
+        let workspace_raw = serde_json::json!({
+            "env": { "add": { "SHARED": "workspace", "CANCEL": "workspace" } },
+            "subcommands": {
+                "check": { "env": { "add": { "SHARED": "workspace-command" } } },
+            },
+            "target": {
+                "cfg(unix)": { "env": { "add": { "WORKSPACE_TARGET": "set" } } },
+            },
+        });
+        let package_raw = serde_json::json!({
+            "env": { "add": { "SHARED": "package" } },
+            "subcommands": {
+                "check": { "env": { "add": { "SHARED": "package-command" } } },
+            },
+            "target": {
+                "cfg(unix)": { "env": { "remove": ["CANCEL"] } },
+            },
+        });
+        crate::config::validate_workspace_metadata(&workspace_raw, "workspace.metadata.cargo-fc")?;
+        crate::config::validate_package_metadata(&package_raw, "package.metadata.cargo-fc")?;
+        let workspace: WorkspaceConfig = serde_json::from_value(workspace_raw)?;
+        let package: Config = serde_json::from_value(package_raw)?;
+        let workspace_matched = workspace
+            .targets
+            .iter()
+            .map(|(expression, section)| (expression.clone(), section))
+            .collect::<Vec<_>>();
+        let package_matched = package
+            .targets
+            .iter()
+            .map(|(expression, section)| (expression.as_str(), section))
+            .collect::<Vec<_>>();
+
+        let resolved = Chain::full(
+            &workspace,
+            &workspace_matched,
+            &package,
+            package_matched,
+            Some("check"),
+            Some("check"),
+        )
+        .resolve(
+            CliOverlay {
+                flags: FlagConfig::default(),
+                driver: None,
+                env_set: &[],
+                env_remove: &[],
+            },
+            ResolvePolicy {
+                default_diagnostics_allowed: true,
+                default_targets_enabled: true,
+            },
+        )?;
+
+        assert_eq!(
+            command_env(&resolved.env, "SHARED"),
+            CommandEnv::Set(OsString::from("package-command"))
+        );
+        assert_eq!(command_env(&resolved.env, "CANCEL"), CommandEnv::Removed);
+        assert_eq!(
+            command_env(&resolved.env, "WORKSPACE_TARGET"),
+            CommandEnv::Set(OsString::from("set"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inherit_false_discards_broader_env_patch() -> eyre::Result<()> {
+        let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
+            "env": { "add": { "BROAD": "workspace" } },
+        }))?;
+        let package_raw = serde_json::json!({
+            "inherit": false,
+            "env": { "add": { "NARROW": "package" } },
+        });
+        crate::config::validate_package_metadata(&package_raw, "package.metadata.cargo-fc")?;
+        let package: Config = serde_json::from_value(package_raw)?;
+
+        let resolved = resolve_base(
+            &workspace,
+            Some(&package),
+            None,
+            None,
+            FlagConfig::default(),
+            None,
+            true,
+        )?;
+
+        assert_eq!(command_env(&resolved.env, "BROAD"), CommandEnv::Unchanged);
+        assert_eq!(
+            command_env(&resolved.env, "NARROW"),
+            CommandEnv::Set(OsString::from("package"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn env_override_resets_accumulated_removals() -> eyre::Result<()> {
+        let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
+            "env": { "remove": ["AMBIENT"] },
+        }))?;
+        let package: Config = serde_json::from_value(serde_json::json!({
+            "env": { "override": { "EXACT": "package" } },
+        }))?;
+
+        let resolved = resolve_base(
+            &workspace,
+            Some(&package),
+            None,
+            None,
+            FlagConfig::default(),
+            None,
+            true,
+        )?;
+
+        assert_eq!(command_env(&resolved.env, "AMBIENT"), CommandEnv::Unchanged);
+        assert_eq!(
+            command_env(&resolved.env, "EXACT"),
+            CommandEnv::Set(OsString::from("package"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sibling_env_patches_agree_and_add_wins_over_remove() -> eyre::Result<()> {
+        let raw = serde_json::json!({
+            "target": {
+                "cfg(a)": {
+                    "env": { "add": { "SAME": "value" }, "remove": ["RESTORED", "GONE"] },
+                },
+                "cfg(b)": {
+                    "env": { "add": { "SAME": "value", "RESTORED": "again" } },
+                },
+            },
+        });
+        crate::config::validate_package_metadata(&raw, "package.metadata.cargo-fc")?;
+        let package: Config = serde_json::from_value(raw)?;
+        let matched = package
+            .targets
+            .iter()
+            .map(|(expression, section)| (expression.as_str(), section))
+            .collect::<Vec<_>>();
+
+        let resolved = Chain::full(
+            &WorkspaceConfig::default(),
+            &[],
+            &package,
+            matched,
+            None,
+            None,
+        )
+        .resolve(
+            CliOverlay {
+                flags: FlagConfig::default(),
+                driver: None,
+                env_set: &[],
+                env_remove: &[],
+            },
+            ResolvePolicy {
+                default_diagnostics_allowed: true,
+                default_targets_enabled: true,
+            },
+        )?;
+
+        assert_eq!(
+            command_env(&resolved.env, "SAME"),
+            CommandEnv::Set(OsString::from("value"))
+        );
+        assert_eq!(
+            command_env(&resolved.env, "RESTORED"),
+            CommandEnv::Set(OsString::from("again"))
+        );
+        assert_eq!(command_env(&resolved.env, "GONE"), CommandEnv::Removed);
+        Ok(())
+    }
+
+    #[test]
+    fn sibling_env_conflict_names_key_without_values() -> eyre::Result<()> {
+        let package: Config = serde_json::from_value(serde_json::json!({
+            "target": {
+                "cfg(a)": { "env": { "add": { "TOKEN": "secret-one" } } },
+                "cfg(b)": { "env": { "add": { "TOKEN": "secret-two" } } },
+            },
+        }))?;
+        let matched = package
+            .targets
+            .iter()
+            .map(|(expression, section)| (expression.as_str(), section))
+            .collect::<Vec<_>>();
+
+        let err = Chain::full(
+            &WorkspaceConfig::default(),
+            &[],
+            &package,
+            matched,
+            None,
+            None,
+        )
+        .resolve(
+            CliOverlay {
+                flags: FlagConfig::default(),
+                driver: None,
+                env_set: &[],
+                env_remove: &[],
+            },
+            ResolvePolicy {
+                default_diagnostics_allowed: true,
+                default_targets_enabled: true,
+            },
+        )
+        .expect_err("sibling environment additions must agree");
+        let message = err.to_string();
+
+        assert!(message.contains("`env.add.TOKEN`"), "{message}");
+        assert!(message.contains("`cfg(b)`"), "{message}");
+        assert!(!message.contains("secret-one"), "{message}");
+        assert!(!message.contains("secret-two"), "{message}");
+        Ok(())
+    }
+
+    #[test]
     fn target_command_errors_use_selected_command_name_for_short_alias() {
         let ws = WorkspaceConfig {
             targets: BTreeMap::from([
@@ -745,6 +1075,8 @@ mod tests {
                 CliOverlay {
                     flags: FlagConfig::default(),
                     driver: None,
+                    env_set: &[],
+                    env_remove: &[],
                 },
                 ResolvePolicy {
                     default_diagnostics_allowed: true,

@@ -93,7 +93,7 @@ exclude_packages = { add = ["wasm-app"] }
 
 ## Throughput: `--aggregate-targets`
 
-`--aggregate-targets` batches a combination's configured targets into a single Cargo invocation (one `--target` per target) instead of one invocation per target. It's faster on many-core machines and reports results per target group. It falls back to serial execution for `run`, for pruned summaries, and when a package resolves different [drivers]({{< relref "drivers.md" >}}) per target.
+`--aggregate-targets` batches a combination's compatible configured targets into a single Cargo invocation (one `--target` per target) instead of one invocation per target. It's faster on many-core machines and reports results per target group. It falls back to serial execution for `run` and pruned summaries. Different resolved [drivers]({{< relref "drivers.md" >}}) or [child environments]({{< relref "../configuration/environment.md" >}}) split into separate aggregate invocations.
 
 Each row now covers a combination's whole target group — note `targets = [...]` (plural), and one invocation per combination instead of one per target:
 

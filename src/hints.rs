@@ -130,6 +130,12 @@ pub(crate) fn note_matrix_noop_flags(options: &Options) {
     if options.driver.is_some() {
         ignored.push("--driver");
     }
+    if !options.env_set.is_empty() {
+        ignored.push("--env");
+    }
+    if !options.env_remove.is_empty() {
+        ignored.push("--unset-env");
+    }
     if !ignored.is_empty() {
         print_note!(
             "{} {} no effect for matrix output",

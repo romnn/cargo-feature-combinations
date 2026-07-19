@@ -59,7 +59,7 @@ cargo fc --pedantic --fail-fast clippy
 
 ## `--errors-only`
 
-Allow all warnings and surface errors only (equivalent to `-A warnings`). This appends to `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS`, and — like any `RUSTFLAGS` override — it shadows `rustflags` set in config files.
+Allow all warnings and surface errors only (equivalent to `-A warnings`). This appends to the effective child `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS`, including values from cargo-fc [`env` config]({{< relref "../configuration/environment.md" >}}). Like any `RUSTFLAGS` environment override, the result shadows `rustflags` set in Cargo config files.
 
 ```bash
 cargo fc --errors-only check

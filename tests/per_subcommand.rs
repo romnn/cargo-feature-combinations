@@ -64,6 +64,8 @@ fn matrix_rows_for_command(
         raw_command: command,
         resolved_command: command,
         cli_driver: None,
+        cli_env_set: &[],
+        cli_env_remove: &[],
         default_diagnostics_allowed: false,
         matrix: true,
     };

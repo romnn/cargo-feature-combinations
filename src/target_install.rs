@@ -296,6 +296,7 @@ mod test {
                             matrix: serde_json::Map::new(),
                             flags,
                             driver: None,
+                            env: crate::config::ResolvedEnv::default(),
                             ignored_diagnostics_config: false,
                         })
                         .collect(),

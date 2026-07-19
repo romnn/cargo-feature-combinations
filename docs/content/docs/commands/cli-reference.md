@@ -44,6 +44,8 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `--no-targets` | Ignore configured target lists for this run; use Cargo's default single target. |
 | `--install-missing-targets` | Install missing Rust target components with `rustup` before running. Explicit opt-in — may mutate the toolchain and use the network. |
 | `--driver <bin>` | Program invoked in place of `cargo` for each build (e.g. `cargo-zigbuild`, `cross`). See [Build drivers]({{< relref "../targets/drivers.md" >}}). |
+| `--env <KEY=VALUE>` | Set a variable in every matrix-cell Cargo process (repeatable; the last value for a key wins). Overrides scoped [`env` config]({{< relref "../configuration/environment.md" >}}). |
+| `--unset-env <KEY>` | Remove a variable from every matrix-cell Cargo process (repeatable). Applied before CLI `--env` additions. |
 
 Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../configuration/flags.md" >}}); CLI flags always win for a single invocation.
 
@@ -52,7 +54,7 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 | Variable | Effect |
 |---|---|
 | `CARGO` | Program used for plain Cargo invocations. |
-| `CARGO_DRIVER` | Set in child processes to the resolved driver. |
+| `CARGO_DRIVER` | Set in child processes to the resolved driver unless child `env` config or CLI overrides it. |
 | `CARGO_FC_VERBOSE` | Boolean default for verbose `cargo fc` headers. |
 
 ## Notes
@@ -60,3 +62,4 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 - Cargo-fc boolean flags do **not** accept an inline value (`--summary-only=false` is rejected). Configure false defaults in `Cargo.toml` instead.
 - `--dedupe` implies `--diagnostics-only`. Setting `--dedupe` together with `diagnostics_only = false` in config is rejected as contradictory.
 - Everything after `--` is forwarded to the invoked program and never interpreted by `cargo fc`.
+- `--env` requires `KEY=VALUE`, split at the first `=`; `KEY=` sets an empty value.

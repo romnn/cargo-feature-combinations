@@ -1,3 +1,5 @@
+/// Scoped child-process environment configuration.
+pub mod env;
 mod flags;
 /// Patch types for set-like configuration fields.
 pub mod patch;
@@ -7,6 +9,7 @@ mod schema;
 pub(crate) mod scope;
 mod validate;
 
+pub use env::{EnvPatch, EnvValue, ResolvedEnv};
 pub(crate) use flags::{
     FLAG_KEYS, combine_bool, combine_driver, combine_flag_configs, combine_u128,
 };

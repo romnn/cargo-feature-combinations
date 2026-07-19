@@ -31,6 +31,11 @@ exclude_features = { override = ["cuda"] }        # identical, explicit
 
 For scalars (`bool`s and `driver`), override is the only operation — it's just `key = value`.
 
+The map-valued `env` setting uses explicit `override`, `add`, and `remove`
+operations with maps for the first two and a name array for the last. It does
+not accept a bare-map shorthand; see [Child-process environment]({{< relref
+"environment.md" >}}).
+
 **2. Patch** — incremental edits to a set-like value.
 
 ```toml
@@ -57,6 +62,7 @@ Patches apply in order: **override (or base), then remove, then add.** If a valu
 | `targets` (the list) | ✓ |  | ✓ |  | ✓ |  | ✓ |  |
 | `expand_targets` |  |  | ✓ | ✓ |  |  | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `env` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `inherit` |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The blank cells are deliberate:
@@ -69,7 +75,7 @@ The blank cells are deliberate:
 
 ## `inherit = false`
 
-Sections inherit from everything broader by default (`inherit = true`). When a matching section sets `inherit = false`, resolution starts from a fresh default configuration for that section instead of inheriting. To avoid ambiguity, patchable fields in that same section may then only use `override` (arrays), not `add`/`remove`.
+Sections inherit from everything broader by default (`inherit = true`). When a matching section sets `inherit = false`, resolution starts from a fresh default configuration for that section instead of inheriting. To avoid ambiguity, set/list patch fields in that same section may then only use `override` (arrays), not `add`/`remove`. The `env` patch is the exception: removing an ambient variable remains meaningful on a fresh config, so its explicit `add` and `remove` operations are accepted.
 
 ```toml
 [package.metadata.cargo-fc]

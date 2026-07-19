@@ -28,6 +28,8 @@ fn matrix_context(workspace_config: &WorkspaceConfig) -> PlanBuildContext<'_> {
         raw_command: None,
         resolved_command: None,
         cli_driver: None,
+        cli_env_set: &[],
+        cli_env_remove: &[],
         default_diagnostics_allowed: false,
         matrix: true,
     }

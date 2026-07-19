@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.1]
+
+### Added
+
+- Added scoped `env = { override = {...}, add = {...}, remove = [...] }`
+  configuration for matrix-cell Cargo processes. Environment patches follow
+  the normal workspace/package, target, and subcommand precedence chain;
+  support `inherit = false`; can remove ambient variables without clearing the
+  rest of the environment; and compose with cargo-fc's `CARGO_DRIVER`, color,
+  and `--errors-only` injections. Values are redacted from debug output and
+  diagnostics and are not added to matrix JSON.
+- Added repeatable `--env KEY=VALUE` and `--unset-env KEY` overrides. They apply
+  after scoped config, allowing one-off commands to replace or cancel values
+  introduced by the resolved manifest configuration.
+
+### Changed
+
+- `--aggregate-targets` now groups by resolved driver and child environment.
+  Packages whose targets resolve different drivers no longer disable
+  aggregation entirely; cargo-fc splits them into compatible aggregate
+  invocations instead.
+
 ## [0.4.0]
 
 ### Added

@@ -1,6 +1,6 @@
 ---
 title: Flags in config
-weight: 6
+weight: 7
 ---
 
 # `cargo fc` flags in config
@@ -79,3 +79,4 @@ dedupe = true
 
 - Inline values for boolean CLI flags are rejected (`--summary-only=false` fails). Configure false defaults in `Cargo.toml` instead.
 - `verbose` can also be set with the `CARGO_FC_VERBOSE` environment variable (see the [CLI reference]({{< relref "../commands/cli-reference.md" >}})).
+- `--env` and `--unset-env` override the resolved [child-process environment]({{< relref "environment.md" >}}); they are value options rather than boolean flag defaults.

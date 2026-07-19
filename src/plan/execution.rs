@@ -1,7 +1,7 @@
 //! Build resolved execution plans from target plans.
 
 use crate::cfg_eval::CfgEvaluator;
-use crate::config::{Chain, FlagConfig, ResolvedFlags, WorkspaceConfig};
+use crate::config::{Chain, EnvValue, FlagConfig, ResolvedEnv, ResolvedFlags, WorkspaceConfig};
 use crate::implication::PrunedCombination;
 use crate::package::{Package, has_lib_target};
 use crate::plan::targets::{TargetPlan, TargetPlans};
@@ -20,6 +20,10 @@ pub struct PlanBuildContext<'a> {
     pub resolved_command: Option<&'a str>,
     /// Explicit `--driver <bin>` override; overlaid last in driver resolution.
     pub cli_driver: Option<&'a str>,
+    /// Explicit `--env KEY=VALUE` overlays, applied after scoped config.
+    pub cli_env_set: &'a [(String, EnvValue)],
+    /// Explicit `--unset-env KEY` overlays, applied before CLI additions.
+    pub cli_env_remove: &'a [String],
     /// Whether broad diagnostics config is safe for the resolved command.
     pub default_diagnostics_allowed: bool,
     /// Whether these plans are for `cargo fc matrix`.
@@ -58,6 +62,8 @@ pub struct PackageExecutionPlan<'a> {
     /// applied. `None` means "unset"; `Some("cargo")` means explicit plain
     /// cargo. Finalized to the spawned program by [`crate`]'s driver pass.
     pub driver: Option<String>,
+    /// Environment patch for this matrix-cell Cargo process.
+    pub env: ResolvedEnv,
     /// Whether broad config requested diagnostics mode but was ignored because
     /// this command is not diagnostics-safe by default.
     pub ignored_diagnostics_config: bool,
@@ -183,6 +189,8 @@ fn resolve_package_execution_plan<'a>(
         crate::config::resolve::CliOverlay {
             flags: cli_flags,
             driver: context.cli_driver,
+            env_set: context.cli_env_set,
+            env_remove: context.cli_env_remove,
         },
         crate::config::resolve::ResolvePolicy {
             default_diagnostics_allowed: context.default_diagnostics_allowed,
@@ -233,6 +241,7 @@ fn resolve_package_execution_plan<'a>(
         matrix: resolved.features.matrix,
         flags,
         driver: resolved.driver,
+        env: resolved.env,
         ignored_diagnostics_config: resolved.ignored_diagnostics_config,
     }))
 }
@@ -307,6 +316,8 @@ mod test {
             raw_command: None,
             resolved_command: None,
             cli_driver: None,
+            cli_env_set: &[],
+            cli_env_remove: &[],
             default_diagnostics_allowed: false,
             matrix: false,
         }

@@ -28,6 +28,20 @@ exclude_features = { add = ["cuda"] }
 
 The base excludes `default` everywhere. On Linux, `metal` is *also* excluded (the `add` unions into the inherited value); on macOS, `cuda` is. Remember: an array like `exclude_features = ["metal"]` would have **replaced** the base instead of extending it.
 
+## Example: remove a host library path while cross-compiling
+
+Environment patches use the same target selectors. This removes a host-only
+ONNX Runtime path from every non-Linux child Cargo invocation, including when
+the value exists only in the ambient environment:
+
+```toml
+[workspace.metadata.cargo-fc.target.'cfg(not(target_os = "linux"))']
+env = { remove = ["ORT_LIB_PATH"] }
+```
+
+See [Child-process environment]({{< relref "environment.md" >}}) for the map
+patch grammar and its interaction with cargo-fc's own variables.
+
 ## Patch semantics recap
 
 Collection-like keys — `exclude_features`, `include_features`, `only_features`,
@@ -47,7 +61,7 @@ A section applies when its `cfg(...)` predicate matches the concrete target bein
 
 ## `inherit = false`
 
-Sections inherit the base by default (`inherit = true`). A matching target section can set `inherit = false` to start from a fresh default config instead. When it does, patchable fields in that section may only use `override` (arrays), not `add`/`remove`:
+Sections inherit the base by default (`inherit = true`). A matching target section can set `inherit = false` to start from a fresh default config instead. When it does, set/list patch fields in that section may only use `override` (arrays), not `add`/`remove`; `env.add` and `env.remove` remain valid because they patch the ambient child environment:
 
 ```toml
 [package.metadata.cargo-fc]

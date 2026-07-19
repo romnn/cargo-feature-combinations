@@ -63,6 +63,8 @@ fn drivers_by_target(
         raw_command: command,
         resolved_command: command,
         cli_driver: None,
+        cli_env_set: &[],
+        cli_env_remove: &[],
         default_diagnostics_allowed: false,
         matrix: false,
     };

@@ -1363,6 +1363,8 @@ mod test {
             crate::config::resolve::CliOverlay {
                 flags: FlagConfig::default(),
                 driver: None,
+                env_set: &[],
+                env_remove: &[],
             },
             crate::config::resolve::ResolvePolicy {
                 default_diagnostics_allowed: true,
