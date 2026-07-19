@@ -2,7 +2,27 @@
 
 ## [0.4.0]
 
+### Added
+
+- Added patchable `mutually_exclusive_features` groups for declaring disjoint
+  feature alternatives while preserving the powerset over all other features.
+  Global matrices generate these constraints directly, so `max_combinations`
+  measures the constrained matrix rather than a rejected full powerset.
+  Conflicting forced members and overlapping groups error, and
+  `include_feature_sets` remains an exact-set escape hatch.
+
 ### Changed
+
+- **Breaking:** configuration is now validated strictly, before anything runs.
+  Referencing a feature the package does not declare — in any feature-matrix
+  key, any scope (including non-matching `target.'cfg(...)'` sections), and any
+  patch operation — is a hard error instead of being silently ignored. The same
+  applies to `exclude_packages` entries that are not workspace members and to
+  CLI `--exclude` names (previously a warning; unknown `-p` names already
+  failed). There is no exemption for `default`: excluding it on a package that
+  declares no `default` feature is an error, matching `cargo --features`
+  strictness. Typos and stale entries after feature renames now fail loudly
+  instead of silently changing the matrix.
 
 - The per-section toggle that discards inherited config is now spelled
   `inherit = false` (with `inherit = true` as the default) instead of

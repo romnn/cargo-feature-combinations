@@ -30,7 +30,8 @@ The base excludes `default` everywhere. On Linux, `metal` is *also* excluded (th
 
 ## Patch semantics recap
 
-Collection-like keys — `exclude_features`, `include_features`, `only_features`, and the `*_feature_sets` keys — take:
+Collection-like keys — `exclude_features`, `include_features`, `only_features`,
+`mutually_exclusive_features`, and the `*_feature_sets` keys — take:
 
 - `key = [...]` or `{ override = [...] }` — replace the inherited value.
 - `{ add = [...] }` — union with the inherited value.

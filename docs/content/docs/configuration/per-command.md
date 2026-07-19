@@ -11,7 +11,11 @@ Just as you can override configuration per target triple, you can override it pe
 [package.metadata.cargo-fc.subcommands.<command>]
 ```
 
-A subcommand override accepts the **same feature-matrix keys as a target override** — `exclude_features`, `include_features`, `only_features`, the `*_feature_sets` keys, `skip_optional_dependencies`, `no_empty_feature_set`, and `matrix` — with identical patch semantics.
+A subcommand override accepts the **same feature-matrix keys as a target
+override** — `exclude_features`, `include_features`, `only_features`,
+`mutually_exclusive_features`, the `*_feature_sets` keys,
+`skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`, and
+`matrix` — with identical patch semantics.
 
 ## Example: build it, but don't test it
 

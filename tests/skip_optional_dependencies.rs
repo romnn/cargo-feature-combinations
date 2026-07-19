@@ -30,6 +30,7 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
             edition = "2024"
 
             [features]
+            default = []
             A = []
             B = ["A"]
             C = ["dep:optDepC"]

@@ -1,9 +1,13 @@
-//! Tiny HTTP client with two mutually-exclusive TLS backends.
+//! Tiny HTTP client with three mutually exclusive TLS backends.
 
-// Enabling both backends is a real conflict — the excluded combination would
-// otherwise fail to compile here.
-#[cfg(all(feature = "native-tls", feature = "rustls"))]
-compile_error!("enable only one TLS backend: `native-tls` or `rustls`");
+// Enabling multiple backends is a real conflict that the feature group keeps
+// out of the generated matrix.
+#[cfg(any(
+    all(feature = "native-tls", feature = "rustls"),
+    all(feature = "native-tls", feature = "boring"),
+    all(feature = "rustls", feature = "boring"),
+))]
+compile_error!("enable only one TLS backend: `native-tls`, `rustls`, or `boring`");
 
 /// Connect to a URL using the selected TLS backend.
 #[must_use]
@@ -26,5 +30,14 @@ pub mod rustls_backend {
     #[must_use]
     pub fn backend() -> &'static str {
         "rustls"
+    }
+}
+
+#[cfg(feature = "boring")]
+pub mod boring_backend {
+    /// Name of the active TLS backend.
+    #[must_use]
+    pub fn backend() -> &'static str {
+        "boring"
     }
 }

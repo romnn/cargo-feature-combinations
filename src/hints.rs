@@ -5,27 +5,6 @@ use crate::config;
 use crate::plan;
 use crate::{print_note, print_warning, ws_metadata_section};
 use itertools::Itertools;
-use std::collections::{BTreeSet, HashSet};
-
-pub(crate) fn warn_unmatched_config_exclude_packages(
-    exclude: &HashSet<String>,
-    metadata: &cargo_metadata::Metadata,
-) {
-    let available = metadata
-        .workspace_packages()
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect::<BTreeSet<_>>();
-    for package in exclude
-        .iter()
-        .filter(|package| !available.contains(package.as_str()))
-        .collect::<BTreeSet<_>>()
-    {
-        print_warning!(
-            "configured exclude_packages entry `{package}` did not match any workspace member"
-        );
-    }
-}
 
 /// Warn once when configured targets were skipped only because of the built-in
 /// unknown-command default.

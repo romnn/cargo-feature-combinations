@@ -21,6 +21,8 @@ pub struct ResolvedFeatures {
     pub only_features: HashSet<String>,
     /// Feature sets that must be tested independently.
     pub isolated_feature_sets: Vec<HashSet<String>>,
+    /// Feature groups whose members are mutually exclusive.
+    pub mutually_exclusive_features: Vec<HashSet<String>>,
     /// Feature-set patterns to exclude.
     pub exclude_feature_sets: Vec<HashSet<String>>,
     /// Feature sets to include exactly.
@@ -287,6 +289,10 @@ fn apply_single_feature_patch(out: &mut ResolvedFeatures, features: &FeatureMatr
         out.isolated_feature_sets =
             SetPatchOps::from_single(patch).apply_to_feature_sets(&out.isolated_feature_sets);
     }
+    if let Some(patch) = &features.mutually_exclusive_features {
+        out.mutually_exclusive_features =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.mutually_exclusive_features);
+    }
     if let Some(patch) = &features.exclude_feature_sets {
         out.exclude_feature_sets =
             SetPatchOps::from_single(patch).apply_to_feature_sets(&out.exclude_feature_sets);
@@ -366,6 +372,7 @@ fn apply_feature_patches<'a>(
         };
     }
     resolve_feature_sets!(isolated_feature_sets);
+    resolve_feature_sets!(mutually_exclusive_features);
     resolve_feature_sets!(exclude_feature_sets);
     resolve_feature_sets!(include_feature_sets);
 
@@ -501,7 +508,7 @@ mod tests {
     };
     use crate::target::TargetTriple;
     use color_eyre::eyre;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
 
     struct MatchAll;
 
@@ -801,6 +808,93 @@ mod tests {
         assert_eq!(
             resolved.exclude_features,
             HashSet::from(["fresh".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutually_exclusive_features_resolve_from_package_base() -> eyre::Result<()> {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "mutually_exclusive_features": [["cuda", "coreml"]],
+        }))?;
+
+        let resolved = crate::config::ResolvedFeatures::from_config(&config);
+
+        assert_eq!(
+            resolved.mutually_exclusive_features,
+            vec![HashSet::from(["coreml".to_string(), "cuda".to_string()])]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutually_exclusive_features_combine_sibling_add_remove_patches() -> eyre::Result<()> {
+        let raw = serde_json::json!({
+            "mutually_exclusive_features": [
+                ["cuda", "coreml"],
+                ["openssl", "rustls"],
+            ],
+            "target": {
+                "cfg(a)": {
+                    "mutually_exclusive_features": {
+                        "add": [["metal", "vulkan"]],
+                    },
+                },
+                "cfg(b)": {
+                    "mutually_exclusive_features": {
+                        "remove": [["openssl", "rustls"]],
+                        "add": [["jemalloc", "mimalloc"]],
+                    },
+                },
+            },
+        });
+        crate::config::validate_package_metadata(&raw, "package.metadata.cargo-fc")?;
+        let config = serde_json::from_value(raw)?;
+
+        let resolved = resolve_config(
+            &config,
+            &TargetTriple("x86_64-unknown-linux-gnu".to_string()),
+            &mut MatchAll,
+        )?;
+
+        let groups = resolved
+            .mutually_exclusive_features
+            .into_iter()
+            .map(|group| group.into_iter().collect::<BTreeSet<_>>())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            groups,
+            BTreeSet::from([
+                BTreeSet::from(["coreml".to_string(), "cuda".to_string()]),
+                BTreeSet::from(["jemalloc".to_string(), "mimalloc".to_string()]),
+                BTreeSet::from(["metal".to_string(), "vulkan".to_string()]),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutually_exclusive_features_target_override_replaces_base() -> eyre::Result<()> {
+        let raw = serde_json::json!({
+            "mutually_exclusive_features": [["cuda", "coreml"]],
+            "target": {
+                "cfg(a)": {
+                    "mutually_exclusive_features": [["metal", "vulkan"]],
+                },
+            },
+        });
+        crate::config::validate_package_metadata(&raw, "package.metadata.cargo-fc")?;
+        let config = serde_json::from_value(raw)?;
+
+        let resolved = resolve_config(
+            &config,
+            &TargetTriple("x86_64-unknown-linux-gnu".to_string()),
+            &mut MatchAll,
+        )?;
+
+        assert_eq!(
+            resolved.mutually_exclusive_features,
+            vec![HashSet::from(["metal".to_string(), "vulkan".to_string()])]
         );
         Ok(())
     }

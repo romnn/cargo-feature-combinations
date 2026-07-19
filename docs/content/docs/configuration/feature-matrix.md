@@ -7,6 +7,14 @@ weight: 2
 
 By default the matrix is the powerset of a package's features. These keys, all under `[package.metadata.cargo-fc]`, change what gets generated.
 
+Configuration is validated **strictly**: naming a feature the package does not
+declare — in any key, any scope (including `target.'cfg(...)'` sections that
+don't match the current host), and any patch operation — fails before anything
+runs. A typo can therefore never silently shrink or grow the matrix, and stale
+entries surface immediately when features are renamed or removed. This matches
+Cargo's own strictness for `--features`, which rejects even `default` when the
+package declares no such feature.
+
 ## At a glance
 
 | Key | Effect |
@@ -14,6 +22,7 @@ By default the matrix is the powerset of a package's features. These keys, all u
 | [`exclude_features`](#exclude_features) | Remove features from the varied set. |
 | [`only_features`](#only_features) | Restrict the varied set to an allowlist. |
 | [`include_features`](#include_features) | Add features to *every* generated combination. |
+| [`mutually_exclusive_features`](#mutually_exclusive_features) | Permit at most one feature from each group. |
 | [`exclude_feature_sets`](#exclude_feature_sets) | Drop specific combinations (e.g. incompatible pairs). |
 | [`include_feature_sets`](#include_feature_sets) | Always add specific exact combinations. |
 | [`allow_feature_sets`](#allow_feature_sets) | Replace the powerset with an exact list of sets. |
@@ -49,6 +58,42 @@ Add features to **every** generated combination. This does not restrict which fe
 include_features = ["feature-that-must-always-be-set"]
 ```
 
+## `mutually_exclusive_features`
+
+Declare groups of alternatives where each generated combination may contain at
+most one member. The no-member choice is included, and features outside the
+groups keep their full powerset:
+
+```toml
+mutually_exclusive_features = [
+  ["cuda", "coreml", "webgpu"],
+]
+```
+
+With two other features, this produces `2² × (3 + 1) = 16` base combinations:
+each independent-feature subset crossed with no backend, CUDA, Core ML, or
+WebGPU. A newly added feature remains visible automatically; a newly added
+backend also varies freely until it is deliberately added to the group.
+
+Multiple groups are allowed but must be disjoint. `include_feature_sets` can
+still add an exact combination containing
+multiple group members, while a non-empty `allow_feature_sets` remains the
+complete matrix and ignores the groups.
+
+If `include_features` pins a group member, that member becomes the only group
+choice — pinned features are added to every combination, so this holds even
+when `exclude_features` or `only_features` removes the member from the varied
+universe. Pinning two members of the same group is an error. Universe filters
+can remove members from the varied choices but never add them.
+
+Like the feature-set keys, this setting is patchable per target and command.
+Patch operations add or remove whole groups:
+
+```toml
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+mutually_exclusive_features = { add = [["openssl", "rustls"]] }
+```
+
 ## `exclude_feature_sets`
 
 Drop groupings of features that are incompatible or don't make sense together. Any generated combination that is a superset of a listed set is removed.
@@ -66,7 +111,7 @@ exclude_feature_sets = [[]]
 
 ## `include_feature_sets`
 
-Always add these exact combinations to the final matrix, unless one is already present. Non-existent features are ignored; other configuration is not applied to them.
+Always add these exact combinations to the final matrix, unless one is already present. Other configuration is not applied to these sets.
 
 ```toml
 # The exact stack you ship — always kept in the matrix, even if other rules
@@ -78,7 +123,7 @@ include_feature_sets = [
 
 ## `allow_feature_sets`
 
-When non-empty, the matrix becomes **exactly** the listed sets — no powerset is generated. Non-existent features are dropped.
+When non-empty, the matrix becomes **exactly** the listed sets — no powerset is generated.
 
 ```toml
 allow_feature_sets = [
@@ -129,6 +174,10 @@ no_empty_feature_set = true
 ```toml
 max_combinations = 250000
 ```
+
+Mutually exclusive groups are counted after applying their constraint. For
+`u` unconstrained features and groups of effective sizes `n₁, n₂, …`, the
+global base count is `2ᵘ × (n₁ + 1) × (n₂ + 1) × …`.
 
 ## `matrix`
 
