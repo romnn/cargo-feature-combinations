@@ -721,7 +721,7 @@ layers override earlier ones:
 
 ### Usage with github-actions
 
-The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI. See [GITHUB_ACTIONS.md](./docs/GITHUB_ACTIONS.md) for more information.
+The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI. See the [documentation](https://romnn.github.io/cargo-feature-combinations/docs/ci/github-actions/) for complete workflow examples.
 
 ### Local development
 
