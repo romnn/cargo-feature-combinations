@@ -268,8 +268,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     let env = RustcTargetEnvironment;
     let mut evaluator = RustcCfgEvaluator::default();
-    let base_exclude = metadata.base_workspace_exclude_packages()?;
-    hints::warn_unmatched_config_exclude_packages(&base_exclude, &metadata);
+    let base_exclude = validated_base_exclude_packages(&metadata, &ws_config, ws_key)?;
 
     let expansion = match prepared.cli_target.as_deref() {
         Some(cli) => plan::targets::TargetExpansion::Explicit(cli),
@@ -485,6 +484,49 @@ fn run_cargo_command(
     )
 }
 
+/// Reject CLI-selected package names that are not selectable packages.
+fn ensure_known_packages(
+    kind: &str,
+    requested: &std::collections::HashSet<String>,
+    available: &std::collections::BTreeSet<&str>,
+) -> eyre::Result<()> {
+    let unknown = requested
+        .iter()
+        .filter(|package| !available.contains(package.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    eyre::bail!(
+        "unknown {kind}{} `{}`; available packages: {}",
+        if unknown.len() == 1 { "" } else { "s" },
+        unknown.iter().join("`, `"),
+        available.iter().join(", "),
+    );
+}
+
+/// Resolve the workspace-base `exclude_packages` set, rejecting names that are
+/// not workspace members anywhere in the workspace config.
+fn validated_base_exclude_packages(
+    metadata: &cargo_metadata::Metadata,
+    ws_config: &config::WorkspaceConfig,
+    ws_key: &str,
+) -> eyre::Result<std::collections::HashSet<String>> {
+    let base_exclude = metadata.base_workspace_exclude_packages()?;
+    let workspace_members = metadata
+        .workspace_packages()
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    config::validate_exclude_package_names(
+        ws_config,
+        &base_exclude,
+        &workspace_members,
+        &ws_metadata_section(ws_key),
+    )?;
+    Ok(base_exclude)
+}
+
 /// Discover candidate workspace packages and apply CLI-level package filters.
 ///
 /// Workspace `exclude_packages` (and its target-specific patches) are applied
@@ -499,29 +541,8 @@ fn select_candidate_packages<'a>(
         .map(|package| package.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
 
-    let unknown_packages = options
-        .packages
-        .iter()
-        .filter(|package| !available.contains(package.as_str()))
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    if !unknown_packages.is_empty() {
-        eyre::bail!(
-            "unknown package{} `{}`; available packages: {}",
-            if unknown_packages.len() == 1 { "" } else { "s" },
-            unknown_packages.iter().join("`, `"),
-            available.iter().join(", "),
-        );
-    }
-
-    for package in options
-        .exclude_packages
-        .iter()
-        .filter(|package| !available.contains(package.as_str()))
-        .collect::<std::collections::BTreeSet<_>>()
-    {
-        print_warning!("excluded package `{package}` did not match any workspace member");
-    }
+    ensure_known_packages("package", &options.packages, &available)?;
+    ensure_known_packages("excluded package", &options.exclude_packages, &available)?;
 
     // When `--manifest-path` points to a workspace member, `cargo metadata`
     // still returns the entire workspace. Unless the user explicitly selected

@@ -17,4 +17,7 @@ pub use schema::{
     TargetOverride, WorkspaceConfig, WorkspaceTargetOverride,
 };
 pub(crate) use scope::Chain;
-pub(crate) use validate::{validate_package_metadata, validate_workspace_metadata};
+pub(crate) use validate::{
+    validate_exclude_package_names, validate_feature_names, validate_package_metadata,
+    validate_workspace_metadata,
+};

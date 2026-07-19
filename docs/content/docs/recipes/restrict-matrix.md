@@ -23,6 +23,7 @@ When `allow_feature_sets` is non-empty, the matrix is **exactly** those sets —
 | Powerset, but only over these features | `only_features` |
 | Powerset, plus these exact sets | `include_feature_sets` |
 | Powerset, minus these features | `exclude_features` |
+| Powerset, with at most one member per group | `mutually_exclusive_features` |
 | Powerset, minus these groupings | `exclude_feature_sets` |
 
 For example, to keep the powerset but restrict it to a subset of features:

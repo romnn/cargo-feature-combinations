@@ -106,6 +106,9 @@ pub struct FeatureMatrixPatch {
     /// Patch operations for isolated feature sets.
     #[serde(default)]
     pub isolated_feature_sets: Option<FeatureSetVecPatch>,
+    /// Patch operations for groups whose members may not be combined.
+    #[serde(default)]
+    pub mutually_exclusive_features: Option<FeatureSetVecPatch>,
     /// Patch operations for excluded features.
     #[serde(default)]
     pub exclude_features: Option<StringSetPatch>,

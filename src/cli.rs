@@ -407,6 +407,12 @@ For example:
 # Exclude groupings of features that are incompatible or do not make sense
 exclude_feature_sets = [ ["foo", "bar"], ] # formerly "skip_feature_sets"
 
+# Permit at most one feature from each group while preserving the powerset over
+# all features outside the groups. The no-member choice is also generated.
+mutually_exclusive_features = [
+    ["cuda", "coreml", "webgpu"],
+]
+
 # To exclude only the empty feature set from the matrix, you can either enable
 # `no_empty_feature_set = true` or explicitly list an empty set here:
 #
@@ -441,7 +447,8 @@ skip_optional_dependencies = true
 # In the end, always add these exact combinations to the overall feature matrix,
 # unless one is already present there.
 #
-# Non-existent features are ignored. Other configuration options are ignored.
+# Referencing an unknown feature here is an error. Other configuration
+# options are ignored for these sets.
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ] # formerly "exact_combinations"
@@ -449,8 +456,7 @@ include_feature_sets = [
 # Allow only the listed feature sets.
 #
 # When this list is non-empty, the feature matrix will consist exactly of the
-# configured sets (after dropping non-existent features). No powerset is
-# generated.
+# configured sets. No powerset is generated.
 allow_feature_sets = [
     ["hydrate"],
     ["ssr"],

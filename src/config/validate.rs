@@ -1,12 +1,17 @@
 use super::flags::FLAG_KEYS;
+use super::patch::{FeatureSetVecPatch, StringSetPatch};
+use super::schema::{RootConfig, ScopeConfig, WorkspaceConfig};
 use super::scope::ScopeId;
 use color_eyre::eyre;
+use itertools::Itertools;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// The [`FeatureMatrixPatch`] field names, listed in exactly one place.
 ///
 /// [`FeatureMatrixPatch`]: super::schema::FeatureMatrixPatch
 const FEATURE_MATRIX_KEYS: &[&str] = &[
     "isolated_feature_sets",
+    "mutually_exclusive_features",
     "exclude_features",
     "include_features",
     "only_features",
@@ -25,6 +30,7 @@ const PATCH_TYPED_KEYS: &[&str] = &[
     "targets",
     "exclude_packages",
     "isolated_feature_sets",
+    "mutually_exclusive_features",
     "exclude_features",
     "include_features",
     "only_features",
@@ -280,6 +286,149 @@ fn patch_object_has_add_or_remove(map: &serde_json::Map<String, serde_json::Valu
     })
 }
 
+/// Every scope of a config that may carry settings, with TOML-style locations.
+fn scopes_with_locations(config: &RootConfig) -> Vec<(String, &ScopeConfig)> {
+    let mut scopes = vec![(String::new(), &config.base.settings)];
+    for (name, command) in &config.base.subcommands {
+        scopes.push((format!("subcommands.{name}"), command));
+    }
+    for (expr, section) in &config.targets {
+        scopes.push((format!("target.'{expr}'"), &section.settings));
+        for (name, command) in &section.subcommands {
+            scopes.push((format!("target.'{expr}'.subcommands.{name}"), command));
+        }
+    }
+    scopes
+}
+
+fn string_patch_names(patch: &StringSetPatch) -> impl Iterator<Item = &String> + '_ {
+    patch
+        .override_value()
+        .into_iter()
+        .flatten()
+        .chain(patch.add_values())
+        .chain(patch.remove_values())
+}
+
+fn feature_set_patch_names(patch: &FeatureSetVecPatch) -> impl Iterator<Item = &String> + '_ {
+    patch
+        .override_value()
+        .into_iter()
+        .flatten()
+        .chain(patch.add_values())
+        .chain(patch.remove_values())
+        .flatten()
+}
+
+/// Reject configured feature names that do not exist in the package.
+///
+/// This covers every scope statically — including `target.'cfg(...)'` sections
+/// that do not match the current run — because a package's feature list does
+/// not depend on the resolution target. Silent tolerance would let a typo or a
+/// stale entry after a feature rename change the matrix without any signal;
+/// failing at config load keeps the matrix honest and matches Cargo's own
+/// strictness for `--features` (which rejects even `default` when the package
+/// declares no such feature).
+pub(crate) fn validate_feature_names(
+    config: &RootConfig,
+    package_features: &BTreeMap<String, Vec<String>>,
+    package_name: &str,
+    section: &str,
+) -> eyre::Result<()> {
+    let unknown = unknown_feature_names(config, package_features);
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let details = unknown
+        .iter()
+        .map(|(name, places)| format!("`{name}` ({})", places.iter().join(", ")))
+        .join(", ");
+    let known = if package_features.is_empty() {
+        "none".to_string()
+    } else {
+        package_features.keys().join(", ")
+    };
+    eyre::bail!(
+        "unknown features in [{section}] for package `{package_name}`: {details}; package features are: {known}"
+    );
+}
+
+/// Configured feature names not declared by the package, keyed by name with
+/// every `location.key` place each one appears.
+fn unknown_feature_names<'cfg>(
+    config: &'cfg RootConfig,
+    package_features: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<&'cfg String, BTreeSet<String>> {
+    let mut unknown: BTreeMap<&'cfg String, BTreeSet<String>> = BTreeMap::new();
+    for (location, scope) in scopes_with_locations(config) {
+        let mut record = |key: &str, names: &mut dyn Iterator<Item = &'cfg String>| {
+            for name in names.filter(|name| !package_features.contains_key(*name)) {
+                let place = if location.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{location}.{key}")
+                };
+                unknown.entry(name).or_default().insert(place);
+            }
+        };
+
+        macro_rules! check_string_patch {
+            ($field:ident) => {
+                if let Some(patch) = &scope.features.$field {
+                    record(stringify!($field), &mut string_patch_names(patch));
+                }
+            };
+        }
+        macro_rules! check_feature_set_patch {
+            ($field:ident) => {
+                if let Some(patch) = &scope.features.$field {
+                    record(stringify!($field), &mut feature_set_patch_names(patch));
+                }
+            };
+        }
+        check_string_patch!(exclude_features);
+        check_string_patch!(include_features);
+        check_string_patch!(only_features);
+        check_feature_set_patch!(isolated_feature_sets);
+        check_feature_set_patch!(mutually_exclusive_features);
+        check_feature_set_patch!(exclude_feature_sets);
+        check_feature_set_patch!(include_feature_sets);
+        check_feature_set_patch!(allow_feature_sets);
+    }
+    unknown
+}
+
+/// Reject configured `exclude_packages` names that are not workspace members.
+///
+/// `base_exclude` carries the resolved workspace base set (including the
+/// deprecated root-package spelling); the scope walk additionally covers
+/// target- and command-scoped patches that are not part of the base set.
+pub(crate) fn validate_exclude_package_names(
+    ws_config: &WorkspaceConfig,
+    base_exclude: &HashSet<String>,
+    workspace_members: &BTreeSet<&str>,
+    section: &str,
+) -> eyre::Result<()> {
+    let mut names: BTreeSet<&String> = base_exclude.iter().collect();
+    for (_location, scope) in scopes_with_locations(ws_config) {
+        if let Some(patch) = &scope.exclude_packages {
+            names.extend(string_patch_names(patch));
+        }
+    }
+    let unknown = names
+        .into_iter()
+        .filter(|name| !workspace_members.contains(name.as_str()))
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    eyre::bail!(
+        "unknown packages in [{section}] exclude_packages: {}; workspace members are: {}",
+        unknown.iter().map(|name| format!("`{name}`")).join(", "),
+        workspace_members.iter().join(", "),
+    );
+}
+
 fn bail_unknown(key: &str, section: &str) -> eyre::Result<()> {
     let hint = if key.contains('-') {
         "; cargo-fc config keys use `_`, not `-`"
@@ -391,7 +540,194 @@ mod tests {
     use crate::config::scope::ScopeId;
     use serde::Serialize;
     use serde_json::Value;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+    fn features(names: &[&str]) -> BTreeMap<String, Vec<String>> {
+        names
+            .iter()
+            .map(|name| ((*name).to_string(), Vec::new()))
+            .collect()
+    }
+
+    #[test]
+    fn feature_names_accept_known_names_in_all_scopes() {
+        let config: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "exclude_features": ["default"],
+            "mutually_exclusive_features": [["cuda", "coreml"]],
+            "subcommands": {
+                "test": { "only_features": { "add": ["cuda"] } },
+            },
+            "target": {
+                "cfg(unix)": {
+                    "include_features": { "remove": ["coreml"] },
+                    "subcommands": {
+                        "check": { "exclude_feature_sets": [["cuda", "coreml"]] },
+                    },
+                },
+            },
+        }))
+        .expect("deserialize config");
+
+        super::validate_feature_names(
+            &config,
+            &features(&["default", "cuda", "coreml"]),
+            "pkg",
+            "package.metadata.cargo-fc",
+        )
+        .expect("all referenced names are declared features");
+    }
+
+    #[test]
+    fn feature_names_reject_unknown_names_with_locations() {
+        let config: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "exclude_features": ["typo-a"],
+            "target": {
+                "cfg(windows)": {
+                    "mutually_exclusive_features": [["cuda", "typo-b"]],
+                },
+            },
+        }))
+        .expect("deserialize config");
+
+        let err = super::validate_feature_names(
+            &config,
+            &features(&["cuda"]),
+            "pkg",
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("unknown names should fail, even in non-matching target sections");
+        let message = err.to_string();
+
+        assert!(message.contains("`typo-a` (exclude_features)"), "{message}");
+        assert!(
+            message.contains("`typo-b` (target.'cfg(windows)'.mutually_exclusive_features)"),
+            "{message}"
+        );
+        assert!(message.contains("package features are: cuda"), "{message}");
+    }
+
+    #[test]
+    fn feature_names_reject_undeclared_default() {
+        // Cargo itself rejects `--features default` when the package declares
+        // no `default` feature, so cargo-fc is deliberately just as strict.
+        let config: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "exclude_features": ["default"],
+        }))
+        .expect("deserialize config");
+
+        let err = super::validate_feature_names(
+            &config,
+            &features(&["cuda"]),
+            "pkg",
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("undeclared default is not exempt");
+
+        assert!(err.to_string().contains("`default`"), "{err}");
+    }
+
+    #[test]
+    fn feature_name_validation_covers_every_patch_typed_feature_key() {
+        // Guards `unknown_feature_names()` against drift: a key registered in
+        // the schema key lists but missing from the walk would silently skip
+        // validation for that key.
+        for key in super::FEATURE_MATRIX_KEYS
+            .iter()
+            .filter(|key| super::PATCH_TYPED_KEYS.contains(*key))
+        {
+            // A key holds either feature names or feature sets; exactly one of
+            // the two shapes deserializes.
+            let config = [serde_json::json!(["ghost"]), serde_json::json!([["ghost"]])]
+                .into_iter()
+                .find_map(|shape| {
+                    let mut map = serde_json::Map::new();
+                    map.insert((*key).to_string(), shape);
+                    serde_json::from_value::<crate::config::Config>(serde_json::Value::Object(map))
+                        .ok()
+                })
+                .unwrap_or_else(|| panic!("`{key}` accepts neither name-list shape"));
+
+            let Err(err) = super::validate_feature_names(
+                &config,
+                &features(&["real"]),
+                "pkg",
+                "package.metadata.cargo-fc",
+            ) else {
+                panic!(
+                    "`{key}` referencing unknown feature `ghost` passed validation; add the key to unknown_feature_names()"
+                );
+            };
+            let message = err.to_string();
+            assert!(message.contains(&format!("({key})")), "{key}: {message}");
+        }
+    }
+
+    #[test]
+    fn feature_names_check_remove_operations() {
+        let config: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "exclude_features": { "remove": ["typo"] },
+        }))
+        .expect("deserialize config");
+
+        let err = super::validate_feature_names(
+            &config,
+            &features(&["cuda"]),
+            "pkg",
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("remove operations reference feature names too");
+
+        assert!(err.to_string().contains("`typo`"), "{err}");
+    }
+
+    #[test]
+    fn exclude_package_names_reject_unknown_members() {
+        let ws_config: crate::config::WorkspaceConfig = serde_json::from_value(serde_json::json!({
+            "target": {
+                "cfg(unix)": { "exclude_packages": { "add": ["ghost"] } },
+            },
+        }))
+        .expect("deserialize workspace config");
+        let base_exclude = HashSet::from(["ghost-base".to_string()]);
+        let members = BTreeSet::from(["member-a"]);
+
+        let err = super::validate_exclude_package_names(
+            &ws_config,
+            &base_exclude,
+            &members,
+            "workspace.metadata.cargo-fc",
+        )
+        .expect_err("unknown packages should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("`ghost`"), "{message}");
+        assert!(message.contains("`ghost-base`"), "{message}");
+        assert!(
+            message.contains("workspace members are: member-a"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn exclude_package_names_accept_members() {
+        let ws_config: crate::config::WorkspaceConfig = serde_json::from_value(serde_json::json!({
+            "exclude_packages": ["member-b"],
+            "target": {
+                "cfg(unix)": { "exclude_packages": { "remove": ["member-b"] } },
+            },
+        }))
+        .expect("deserialize workspace config");
+        let base_exclude = HashSet::from(["member-b".to_string()]);
+        let members = BTreeSet::from(["member-a", "member-b"]);
+
+        super::validate_exclude_package_names(
+            &ws_config,
+            &base_exclude,
+            &members,
+            "workspace.metadata.cargo-fc",
+        )
+        .expect("workspace members are valid excludes");
+    }
 
     fn scope_ids() -> [ScopeId; 8] {
         [
@@ -500,6 +836,51 @@ mod tests {
             "package.metadata.cargo-fc",
         )
         .expect("package target subcommand should accept feature-matrix keys");
+    }
+
+    #[test]
+    fn mutually_exclusive_features_accepts_patch_shape_in_package_scopes() {
+        super::validate_package_metadata(
+            &serde_json::json!({
+                "mutually_exclusive_features": [["cuda", "coreml"]],
+                "target": {
+                    "cfg(unix)": {
+                        "mutually_exclusive_features": {
+                            "add": [["openssl", "rustls"]],
+                        },
+                    },
+                },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect("feature groups should accept feature-set patch syntax");
+    }
+
+    #[test]
+    fn mutually_exclusive_features_rejects_invalid_patch_shape() {
+        let err = super::validate_package_metadata(
+            &serde_json::json!({
+                "mutually_exclusive_features": { "add": "cuda" },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("feature group patch operations must contain arrays");
+
+        assert!(err.to_string().contains("mutually_exclusive_features"));
+        assert!(err.to_string().contains("must be an array"));
+    }
+
+    #[test]
+    fn workspace_rejects_mutually_exclusive_features() {
+        let err = super::validate_workspace_metadata(
+            &serde_json::json!({
+                "mutually_exclusive_features": [["cuda", "coreml"]],
+            }),
+            "workspace.metadata.cargo-fc",
+        )
+        .expect_err("feature groups are package-scoped");
+
+        assert!(err.to_string().contains("per-package"));
     }
 
     #[test]

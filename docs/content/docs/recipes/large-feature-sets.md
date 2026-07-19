@@ -24,6 +24,12 @@ This turns multiplicative growth into additive growth. The full powerset would b
 max_combinations = 250000
 ```
 
-If you hit the limit unexpectedly, that's usually a sign the matrix should be shaped with `isolated_feature_sets`, `only_features`, or `skip_optional_dependencies` rather than simply raised.
+If you hit the limit unexpectedly, that's usually a sign the matrix should be
+shaped with `mutually_exclusive_features`, `isolated_feature_sets`,
+`only_features`, or `skip_optional_dependencies` rather than simply raised.
+Mutually exclusive groups retain cross-play with every independent feature and
+are counted directly as `(group size + 1)` choices, so they are the right tool
+when features are alternatives rather than independent sub-matrices.
 
-See [`isolated_feature_sets`]({{< relref "../configuration/feature-matrix.md#isolated_feature_sets" >}}).
+See [`mutually_exclusive_features`]({{< relref "../configuration/feature-matrix.md#mutually_exclusive_features" >}})
+and [`isolated_feature_sets`]({{< relref "../configuration/feature-matrix.md#isolated_feature_sets" >}}).

@@ -24,6 +24,7 @@ fn dummy_crate(features_toml: &str, settings: &str) -> eyre::Result<TempDir> {
             edition = "2024"
 
             {features_toml}
+            default = []
 
             [package.metadata.cargo-feature-combinations]
             {settings}
@@ -55,6 +56,7 @@ fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<Tem
             edition = "2024"
 
             {features_toml}
+            default = []
 
             [dependencies]
             optDep = {{ path = "optDep", optional = true }}
@@ -568,6 +570,7 @@ fn target_override_changes_matrix_then_pruning_applies() -> eyre::Result<()> {
         edition = "2024"
 
         [features]
+        default = []
         A = []
         B = ["A"]
         C = []
@@ -616,6 +619,7 @@ fn target_override_disables_pruning_for_specific_target() -> eyre::Result<()> {
         edition = "2024"
 
         [features]
+        default = []
         A = []
         B = ["A"]
 
@@ -652,6 +656,7 @@ fn target_override_include_features_interacts_with_pruning() -> eyre::Result<()>
         edition = "2024"
 
         [features]
+        default = []
         A = []
         B = ["A"]
 

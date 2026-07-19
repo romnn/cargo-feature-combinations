@@ -94,18 +94,16 @@ fn allow_feature_sets_is_exact_allowlist() -> eyre::Result<()> {
 }
 
 #[test]
-fn allow_feature_sets_drops_non_existent_features() -> eyre::Result<()> {
+fn allow_feature_sets_rejects_non_existent_features() {
     let settings = indoc::indoc! {r#"
         allow_feature_sets = [["hydrate", "does-not-exist"], ["ssr"]]
     "#};
 
-    let combos = feature_sets_for_settings(settings)?;
+    let err = feature_sets_for_settings(settings)
+        .expect_err("unknown feature names should fail config load");
 
-    assert_eq!(combos.len(), 2);
-    assert!(contains_exact_set(&combos, &["hydrate"]));
-    assert!(contains_exact_set(&combos, &["ssr"]));
-
-    Ok(())
+    assert!(err.to_string().contains("does-not-exist"), "{err}");
+    assert!(err.to_string().contains("allow_feature_sets"), "{err}");
 }
 
 #[test]

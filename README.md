@@ -145,7 +145,8 @@ it does not apply in that scope (`*` marks the deprecated root-package
 
 The places a setting is *not* overridable, and why:
 
-1. **feature matrix** (`exclude_features`, `only_features`, `*_feature_sets`,
+1. **feature matrix** (`exclude_features`, `only_features`,
+   `mutually_exclusive_features`, `*_feature_sets`,
    `skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`,
    `matrix`) — a workspace
    isn't a crate, so it has no features to shape.
@@ -170,6 +171,13 @@ Notes: **`driver`** resolves per (package × target × command); when
 `driver` forces serial execution. **`expand_targets`** (the capability formerly
 spelled `targets = true|false` on a subcommand) gates whether cargo-fc drives a
 command across the target matrix at all.
+
+Configuration is validated **strictly**: naming a feature the package does not
+declare (in any key, scope, or patch operation) or an `exclude_packages` entry
+that is not a workspace member fails before anything runs, so a typo or a stale
+entry after a refactoring can never silently change the matrix. This matches
+Cargo's own strictness for `--features`, which rejects even `default` when the
+package declares no such feature.
 
 For example:
 
@@ -212,7 +220,8 @@ only_features = ["default", "full"]
 # In the end, always add these exact combinations to the overall feature matrix, 
 # unless one is already present there.
 #
-# Non-existent features are ignored. Other configuration options are ignored.
+# Referencing an unknown feature here is an error. Other configuration
+# options are ignored for these sets.
 include_feature_sets = [
     ["foo-a", "bar-a", "other-a"],
 ]
@@ -220,8 +229,7 @@ include_feature_sets = [
 # Allow only the listed feature sets.
 #
 # When this list is non-empty, the feature matrix will consist exactly of the
-# configured sets (after dropping non-existent features). No powerset is
-# generated.
+# configured sets. No powerset is generated.
 allow_feature_sets = [
     ["hydrate"],
     ["ssr"],
@@ -234,6 +242,12 @@ no_empty_feature_set = true
 # Override the default safety limit of 100000 generated feature combinations.
 max_combinations = 250000
 
+# Permit at most one feature from each group while keeping the full powerset
+# over every feature outside the groups. The no-backend choice is included.
+mutually_exclusive_features = [
+    ["cuda", "coreml", "webgpu"],
+]
+
 # When at least one isolated feature set is configured, stop taking all project 
 # features as a whole, and instead take them in these isolated sets. Build a 
 # sub-matrix for each isolated set, then merge sub-matrices into the overall 
@@ -243,8 +257,7 @@ max_combinations = 250000
 # This feature is intended for projects with large number of features, sub-sets 
 # of which are completely independent, and thus don’t need cross-play.
 #
-# Non-existent features are ignored. Other configuration options are still 
-# respected.
+# Other configuration options are still respected.
 isolated_feature_sets = [
     ["foo-a", "foo-b", "foo-c"],
     ["bar-a", "bar-b"],
@@ -605,7 +618,7 @@ exclude_features = { add = ["cuda"] }
 ```
 
 Patch semantics for collection-like keys such as `exclude_features`, `include_features`,
-`only_features`, `*_feature_sets`:
+`only_features`, `mutually_exclusive_features`, and `*_feature_sets`:
 
 - **Array syntax is always an override**
   - `exclude_features = ["cuda"]` replaces the entire value.
@@ -667,8 +680,9 @@ per cargo subcommand under:
 
 A subcommand override accepts the **same feature-matrix keys as a target
 override** — `exclude_features`, `include_features`, `only_features`,
-`*_feature_sets`, `skip_optional_dependencies`, `no_empty_feature_set`, and
-`matrix` — with identical patch semantics (`key = [...]` or `{ override = [...] }`
+`mutually_exclusive_features`, `*_feature_sets`, `skip_optional_dependencies`,
+`no_empty_feature_set`, `max_combinations`, and `matrix` — with identical patch
+semantics (`key = [...]` or `{ override = [...] }`
 to replace; `{ add = [...] }` / `{ remove = [...] }` for incremental edits). This lets the feature combinations
 built for one command differ from another. For example, enable a heavy `gpu`
 feature when building, but skip it when testing:
@@ -721,7 +735,7 @@ layers override earlier ones:
 
 ### Usage with github-actions
 
-The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI. See [GITHUB_ACTIONS.md](./docs/GITHUB_ACTIONS.md) for more information.
+The github-actions [matrix](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) feature can be used together with `cargo fc` to more efficiently test combinations of features in CI. See the [documentation](https://romnn.github.io/cargo-feature-combinations/docs/ci/github-actions/) for complete workflow examples.
 
 ### Local development
 

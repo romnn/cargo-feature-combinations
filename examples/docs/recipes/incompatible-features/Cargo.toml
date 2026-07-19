@@ -6,9 +6,12 @@ edition = "2024"
 [features]
 native-tls = []
 rustls = []
+boring = []
+logging = []
+metrics = []
 
 [package.metadata.cargo-fc]
-# native-tls and rustls are two TLS backends — never both at once.
-exclude_feature_sets = [["native-tls", "rustls"]]
+# These TLS backends are alternatives; logging and metrics remain independent.
+mutually_exclusive_features = [["native-tls", "rustls", "boring"]]
 
 [workspace]
