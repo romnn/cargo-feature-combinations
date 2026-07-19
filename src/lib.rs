@@ -399,6 +399,8 @@ fn selected_packages_for_target_planning<'a>(
                     config::resolve::CliOverlay {
                         flags: options.flags,
                         driver: None,
+                        env_set: &[],
+                        env_remove: &[],
                     },
                     config::resolve::ResolvePolicy {
                         default_diagnostics_allowed,
@@ -430,6 +432,11 @@ fn print_matrix_command(
         raw_command: tokens.raw,
         resolved_command: tokens.resolved,
         cli_driver: None,
+        // Like `cli_driver`, the CLI env overlay is a run-only input: matrix
+        // output never contains environment data, and `note_matrix_noop_flags`
+        // tells the user `--env`/`--unset-env` are ignored here.
+        cli_env_set: &[],
+        cli_env_remove: &[],
         default_diagnostics_allowed: false,
         matrix: true,
     };
@@ -453,6 +460,8 @@ fn run_cargo_command(
         raw_command: dispatch.tokens.raw,
         resolved_command: dispatch.tokens.resolved,
         cli_driver: options.driver.as_deref(),
+        cli_env_set: &options.env_set,
+        cli_env_remove: &options.env_remove,
         default_diagnostics_allowed,
         matrix: false,
     };
@@ -623,6 +632,7 @@ mod test {
                             matrix: serde_json::Map::new(),
                             flags,
                             driver: None,
+                            env: config::ResolvedEnv::default(),
                             ignored_diagnostics_config: false,
                         }],
                     }
@@ -885,11 +895,7 @@ mod test {
     }
 
     #[test]
-    fn aggregate_execution_mode_falls_back_when_driver_differs_across_targets() -> eyre::Result<()>
-    {
-        // One package, two targets, different resolved drivers: aggregation would
-        // batch both targets into one Cargo invocation, which cannot honor two
-        // drivers — so it must fall back to serial per-target execution.
+    fn aggregate_execution_mode_allows_drivers_to_split_across_targets() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
             aggregate_targets: true,
@@ -908,6 +914,7 @@ mod test {
                 matrix: serde_json::Map::new(),
                 flags,
                 driver: driver.map(ToString::to_string),
+                env: config::ResolvedEnv::default(),
                 ignored_diagnostics_config: false,
             }],
         };
@@ -923,7 +930,7 @@ mod test {
                 &plan_set,
                 GeneratedArgPlacement::CargoCommand
             ),
-            runner::TargetExecutionMode::SerialPerTarget
+            runner::TargetExecutionMode::Aggregate
         );
         Ok(())
     }

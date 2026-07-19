@@ -1,3 +1,4 @@
+use super::env::{validate_name, validate_value};
 use super::flags::FLAG_KEYS;
 use super::patch::{FeatureSetVecPatch, StringSetPatch};
 use super::schema::{RootConfig, ScopeConfig, WorkspaceConfig};
@@ -50,6 +51,7 @@ enum SettingKind {
     TargetsList,
     ExpandTargets,
     Driver,
+    Env,
     Inherit,
     TargetTable,
     SubcommandsTable,
@@ -180,6 +182,7 @@ fn validate_value_shape(
             }
         }
         ValueShape::Patch => validate_patch_shape(key, value, section)?,
+        ValueShape::EnvPatch => validate_env_patch_shape(value, section)?,
         ValueShape::Array if !value.is_array() => {
             eyre::bail!("`{key}` in [{section}] must be an array");
         }
@@ -204,6 +207,7 @@ enum ValueShape {
     Bool,
     String,
     Patch,
+    EnvPatch,
     Array,
     Object,
     PositiveInteger,
@@ -213,6 +217,7 @@ fn value_shape(key: &str, kind: SettingKind) -> ValueShape {
     match kind {
         SettingKind::Flag | SettingKind::ExpandTargets | SettingKind::Inherit => ValueShape::Bool,
         SettingKind::Driver => ValueShape::String,
+        SettingKind::Env => ValueShape::EnvPatch,
         SettingKind::FeatureMatrix => match key {
             "skip_optional_dependencies" | "no_empty_feature_set" => ValueShape::Bool,
             "matrix" => ValueShape::Object,
@@ -223,6 +228,64 @@ fn value_shape(key: &str, kind: SettingKind) -> ValueShape {
         SettingKind::ExcludePackages | SettingKind::TargetsList => ValueShape::Patch,
         SettingKind::TargetTable | SettingKind::SubcommandsTable => ValueShape::Object,
     }
+}
+
+fn validate_env_patch_shape(value: &serde_json::Value, section: &str) -> eyre::Result<()> {
+    let Some(map) = value.as_object() else {
+        eyre::bail!("`env` in [{section}] must be a table/object");
+    };
+
+    for (op, op_value) in map {
+        if !PATCH_OP_KEYS.contains(&op.as_str()) {
+            eyre::bail!(
+                "`env.{op}` is not an env operation in [{section}]; use `env.add.{op} = \"...\"`"
+            );
+        }
+
+        if op == "remove" {
+            validate_env_remove(op_value, section)?;
+        } else {
+            validate_env_map(op, op_value, section)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_env_map(operation: &str, value: &serde_json::Value, section: &str) -> eyre::Result<()> {
+    let Some(map) = value.as_object() else {
+        eyre::bail!("`env.{operation}` in [{section}] must be a table mapping names to strings");
+    };
+    for (name, value) in map {
+        validate_env_name(name, operation, section)?;
+        let Some(value) = value.as_str() else {
+            eyre::bail!("`env.{operation}.{name}` in [{section}] must be a string");
+        };
+        if let Err(reason) = validate_value(value) {
+            eyre::bail!("`env.{operation}.{name}` in [{section}] {reason}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_env_remove(value: &serde_json::Value, section: &str) -> eyre::Result<()> {
+    let Some(names) = value.as_array() else {
+        eyre::bail!("`env.remove` in [{section}] must be an array of strings");
+    };
+    for (index, name) in names.iter().enumerate() {
+        let Some(name) = name.as_str() else {
+            eyre::bail!("`env.remove[{index}]` in [{section}] must be a string");
+        };
+        validate_env_name(name, "remove", section)?;
+    }
+    Ok(())
+}
+
+fn validate_env_name(name: &str, operation: &str, section: &str) -> eyre::Result<()> {
+    if let Err(reason) = validate_name(name) {
+        eyre::bail!("environment variable name in `env.{operation}` in [{section}] {reason}");
+    }
+    Ok(())
 }
 
 fn validate_patch_shape(key: &str, value: &serde_json::Value, section: &str) -> eyre::Result<()> {
@@ -453,6 +516,7 @@ fn setting_kind(key: &str) -> Option<SettingKind> {
         "targets" => Some(SettingKind::TargetsList),
         "expand_targets" => Some(SettingKind::ExpandTargets),
         "driver" => Some(SettingKind::Driver),
+        "env" => Some(SettingKind::Env),
         "inherit" | "replace" => Some(SettingKind::Inherit),
         "target" => Some(SettingKind::TargetTable),
         "subcommands" => Some(SettingKind::SubcommandsTable),
@@ -462,7 +526,7 @@ fn setting_kind(key: &str) -> Option<SettingKind> {
 
 fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str> {
     match kind {
-        SettingKind::Flag | SettingKind::Driver | SettingKind::Inherit => Ok(()),
+        SettingKind::Flag | SettingKind::Driver | SettingKind::Env | SettingKind::Inherit => Ok(()),
         SettingKind::ExpandTargets if scope.is_command() => Ok(()),
         SettingKind::ExpandTargets => Err(
             "`expand_targets` is a per-subcommand capability; set it inside a `subcommands.<cmd>` table",
@@ -754,6 +818,7 @@ mod tests {
                     "targets",
                     "expand_targets",
                     "driver",
+                    "env",
                     "inherit",
                     "replace",
                     "target",
@@ -787,6 +852,7 @@ mod tests {
             SettingKind::TargetsList,
             SettingKind::ExpandTargets,
             SettingKind::Driver,
+            SettingKind::Env,
             SettingKind::Inherit,
             SettingKind::TargetTable,
             SettingKind::SubcommandsTable,
@@ -1109,6 +1175,96 @@ mod tests {
             "package.metadata.cargo-fc",
         )
         .expect("package scopes should accept driver everywhere");
+    }
+
+    #[test]
+    fn env_is_accepted_in_every_scope() {
+        let config = serde_json::json!({
+            "env": { "add": { "BASE": "base" } },
+            "target": {
+                "cfg(unix)": {
+                    "env": { "remove": ["TARGET"] },
+                    "subcommands": {
+                        "test": { "env": { "override": { "TARGET_COMMAND": "set" } } },
+                    },
+                },
+            },
+            "subcommands": {
+                "test": { "env": { "add": { "COMMAND": "set" } } },
+            },
+        });
+
+        super::validate_workspace_metadata(&config, "workspace.metadata.cargo-fc")
+            .expect("workspace scopes should accept env everywhere");
+        super::validate_package_metadata(&config, "package.metadata.cargo-fc")
+            .expect("package scopes should accept env everywhere");
+    }
+
+    #[test]
+    fn env_rejects_bare_map_with_operation_hint() {
+        let err = super::validate_package_metadata(
+            &serde_json::json!({ "env": { "RUST_BACKTRACE": "1" } }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("a bare environment map is ambiguous");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("`env.RUST_BACKTRACE` is not an env operation"),
+            "{message}"
+        );
+        assert!(
+            message.contains("`env.add.RUST_BACKTRACE = \"...\"`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn env_rejects_non_string_values_and_remove_entries() {
+        let add_err = super::validate_package_metadata(
+            &serde_json::json!({ "env": { "add": { "COUNT": 3 } } }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("environment additions must contain strings");
+        assert!(
+            add_err.to_string().contains("`env.add.COUNT`")
+                && add_err.to_string().contains("must be a string"),
+            "{add_err}"
+        );
+
+        let remove_err = super::validate_package_metadata(
+            &serde_json::json!({ "env": { "remove": [true] } }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("environment removals must contain strings");
+        assert!(
+            remove_err.to_string().contains("`env.remove[0]`")
+                && remove_err.to_string().contains("must be a string"),
+            "{remove_err}"
+        );
+    }
+
+    #[test]
+    fn env_rejects_invalid_names_and_nul_values() {
+        for name in ["", "BAD=NAME", "BAD\0NAME"] {
+            let err = super::validate_package_metadata(
+                &serde_json::json!({ "env": { "add": { name: "value" } } }),
+                "package.metadata.cargo-fc",
+            )
+            .expect_err("invalid environment variable name should fail");
+            assert!(
+                err.to_string().contains("environment variable name"),
+                "{err}"
+            );
+        }
+
+        let err = super::validate_package_metadata(
+            &serde_json::json!({ "env": { "add": { "VALID": "bad\0value" } } }),
+            "package.metadata.cargo-fc",
+        )
+        .expect_err("NUL in environment variable value should fail");
+        assert!(err.to_string().contains("`env.add.VALID`"), "{err}");
+        assert!(err.to_string().contains("NUL"), "{err}");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::DEFAULT_PKG_METADATA_SECTION;
 use crate::cli::{CargoSubcommand, cargo_subcommand};
-use crate::config::ResolvedFlags;
+use crate::config::{ResolvedEnv, ResolvedFlags};
 use crate::implication::PrunedCombination;
 use crate::invocation_args::{GeneratedArgPlacement, PreparedInvocationArgs};
 use crate::package::FeatureCombinationError;
@@ -61,19 +61,44 @@ fn color_spec(color: Color, bold: bool) -> ColorSpec {
 /// A more universal fix would be to allocate a pseudo-TTY (e.g. via
 /// `portable-pty`) so that `isatty()` returns true in the subprocess, but the
 /// env-var approach covers the vast majority of real-world cases.
-fn force_color(cmd: &mut process::Command) {
+fn force_color(cmd: &mut process::Command, env: &ResolvedEnv) {
     // Gate on stderr: captured child compiler output is re-streamed to our
     // stderr, and cargo itself keys auto-color off stderr. This can still put
     // ANSI into a redirected stdout for `run`/`test` program output (child
     // stdout is inherited), but favors the dominant check/build/clippy case.
-    if !std::io::stderr().is_terminal() || std::env::var_os("NO_COLOR").is_some() {
-        return;
-    }
-    if std::env::var_os("CARGO_TERM_COLOR").is_none() {
+    let no_color = env.effective_var("NO_COLOR");
+    let cargo_term_color = env.effective_var("CARGO_TERM_COLOR");
+    let force_color = env.effective_var("FORCE_COLOR");
+    let decision = force_color_env(
+        std::io::stderr().is_terminal(),
+        no_color.as_deref(),
+        cargo_term_color.as_deref(),
+        force_color.as_deref(),
+    );
+    if decision.set_cargo_term_color {
         cmd.env("CARGO_TERM_COLOR", "always");
     }
-    if std::env::var_os("FORCE_COLOR").is_none() {
+    if decision.set_force_color {
         cmd.env("FORCE_COLOR", "1");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForceColorEnv {
+    set_cargo_term_color: bool,
+    set_force_color: bool,
+}
+
+fn force_color_env(
+    stderr_is_terminal: bool,
+    no_color: Option<&std::ffi::OsStr>,
+    cargo_term_color: Option<&std::ffi::OsStr>,
+    force_color: Option<&std::ffi::OsStr>,
+) -> ForceColorEnv {
+    let forcing_enabled = stderr_is_terminal && no_color.is_none();
+    ForceColorEnv {
+        set_cargo_term_color: forcing_enabled && cargo_term_color.is_none(),
+        set_force_color: forcing_enabled && force_color.is_none(),
     }
 }
 
@@ -499,6 +524,7 @@ struct Invocation<'a> {
     /// Finalized build driver to spawn instead of `$CARGO`/`cargo` for this
     /// invocation (e.g. `cargo-zigbuild`); `None` means plain `$CARGO`.
     driver: Option<&'a str>,
+    env: &'a ResolvedEnv,
 }
 
 struct InvocationStep<'a> {
@@ -508,6 +534,7 @@ struct InvocationStep<'a> {
     inject_targets: Vec<String>,
     summary_target: SummaryTarget,
     driver: Option<String>,
+    env: ResolvedEnv,
 }
 
 enum Step<'a> {
@@ -527,10 +554,10 @@ struct AggregateInvocationPlan<'a> {
     combo: Vec<String>,
     flags: ResolvedFlags,
     targets: Vec<EffectiveTarget>,
-    /// Build driver for this package's aggregated invocation. Aggregate mode is
-    /// only chosen when drivers resolve uniformly across targets, so all targets
-    /// in one aggregated invocation share this driver.
+    /// Build driver shared by every target in this aggregated invocation.
     driver: Option<String>,
+    /// Environment patch shared by every target in this aggregated invocation.
+    env: ResolvedEnv,
 }
 
 fn print_package_cmd(
@@ -654,16 +681,17 @@ fn run_single_combination(
         None => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
     };
     let mut cmd = process::Command::new(&cargo);
+    inv.env.apply_to(&mut cmd);
     // Propagate the resolved driver to the child via `CARGO_DRIVER` so wrapper
     // aliases (e.g. `lint = "run --package clippy-wrapper -- lint"`) can spawn
     // the same driver for their inner Cargo invocation. Without this, the inner
     // command falls back to plain `cargo` and native-C deps fail to
     // cross-compile even though this outer invocation used `cargo-zigbuild`.
-    cmd.env("CARGO_DRIVER", &cargo);
-    force_color(&mut cmd);
+    apply_cargo_driver(&mut cmd, &cargo, inv.env);
+    force_color(&mut cmd, inv.env);
 
     if inv.flags.errors_only {
-        apply_errors_only_rustflags(&mut cmd);
+        apply_errors_only_rustflags(&mut cmd, inv.env);
     }
 
     let features_flag = format!("--features={}", features.iter().join(","));
@@ -747,10 +775,16 @@ fn run_single_combination(
     })
 }
 
-fn apply_errors_only_rustflags(cmd: &mut process::Command) {
+fn apply_cargo_driver(cmd: &mut process::Command, cargo: &std::ffi::OsStr, env: &ResolvedEnv) {
+    if !env.mentions("CARGO_DRIVER") {
+        cmd.env("CARGO_DRIVER", cargo);
+    }
+}
+
+fn apply_errors_only_rustflags(cmd: &mut process::Command, env: &ResolvedEnv) {
     let (key, value) = errors_only_rustflags_env(
-        std::env::var_os("CARGO_ENCODED_RUSTFLAGS"),
-        std::env::var_os("RUSTFLAGS"),
+        env.effective_var("CARGO_ENCODED_RUSTFLAGS"),
+        env.effective_var("RUSTFLAGS"),
     );
     cmd.env(key, value);
 }
@@ -815,25 +849,6 @@ pub(crate) fn resolve_execution_mode(
     if requested != total {
         print_note!(
             "aggregate target execution is disabled because it resolves differently across package-targets; running targets serially"
-        );
-        return TargetExecutionMode::SerialPerTarget;
-    }
-
-    let mut first_driver: HashMap<&str, Option<&str>> = HashMap::new();
-    let driver_differs_within_a_package = plan_set
-        .plans
-        .iter()
-        .flat_map(|plan| &plan.package_plans)
-        .any(|package_plan| {
-            let driver = package_plan.driver.as_deref();
-            *first_driver
-                .entry(package_plan.package.id.repr.as_str())
-                .or_insert(driver)
-                != driver
-        });
-    if driver_differs_within_a_package {
-        print_note!(
-            "aggregate target execution is disabled because the build driver resolves differently across a package's targets; running targets serially"
         );
         return TargetExecutionMode::SerialPerTarget;
     }
@@ -962,6 +977,7 @@ fn serial_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
                     inject_targets: inject_targets.clone(),
                     summary_target: summary_target.clone(),
                     driver: pp.driver.clone(),
+                    env: pp.env.clone(),
                 }));
             }
             steps.push(Step::AppendPruned {
@@ -998,6 +1014,7 @@ fn aggregate_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
                 inject_targets,
                 summary_target,
                 driver: inv_plan.driver,
+                env: inv_plan.env,
             })
         })
         .collect()
@@ -1036,6 +1053,7 @@ fn execute_steps(
                         inject_targets: &inv_step.inject_targets,
                         summary_target: &inv_step.summary_target,
                         driver: inv_step.driver.as_deref(),
+                        env: &inv_step.env,
                     },
                     ctx,
                     Progress {
@@ -1125,25 +1143,20 @@ fn aggregate_invocation_plans<'a>(
     let mut package_order: Vec<&cargo_metadata::Package> = Vec::new();
     let mut seen_packages: HashSet<String> = HashSet::new();
     let mut grouped: HashMap<String, BTreeMap<AggregateKey, Vec<EffectiveTarget>>> = HashMap::new();
-    // Aggregate mode is only chosen when the driver resolves uniformly across
-    // targets, so recording the first-seen driver per package is exact.
-    let mut package_driver: HashMap<String, Option<String>> = HashMap::new();
-
     for plan in &plan_set.plans {
         for pp in &plan.package_plans {
             let id = pp.package.id.repr.clone();
             if seen_packages.insert(id.clone()) {
                 package_order.push(pp.package);
             }
-            package_driver
-                .entry(id.clone())
-                .or_insert_with(|| pp.driver.clone());
             let entry = grouped.entry(id).or_default();
             for combo in &pp.combinations {
                 entry
                     .entry(AggregateKey {
                         combo: combo.clone(),
                         flags: pp.flags,
+                        driver: pp.driver.clone(),
+                        env: pp.env.clone(),
                     })
                     .or_default()
                     .push(pp.target.clone());
@@ -1156,17 +1169,14 @@ fn aggregate_invocation_plans<'a>(
         let Some(combos) = grouped.remove(&package.id.repr) else {
             continue;
         };
-        let driver = package_driver
-            .get(&package.id.repr)
-            .cloned()
-            .unwrap_or_default();
         for (key, targets) in combos {
             invocations.push(AggregateInvocationPlan {
                 package,
                 combo: key.combo,
                 flags: key.flags,
                 targets,
-                driver: driver.clone(),
+                driver: key.driver,
+                env: key.env,
             });
         }
     }
@@ -1178,6 +1188,8 @@ fn aggregate_invocation_plans<'a>(
 struct AggregateKey {
     combo: Vec<String>,
     flags: ResolvedFlags,
+    driver: Option<String>,
+    env: ResolvedEnv,
 }
 
 /// Append pruned summaries for a single `(package, target)` block, looking up
@@ -1224,8 +1236,9 @@ fn append_pruned_summaries(
 #[cfg(test)]
 mod test {
     use super::{
-        Summary, SummaryTarget, aggregate_invocation_plans, error_counts,
-        errors_only_rustflags_env, print_summary, warning_counts,
+        ResolvedEnv, Summary, SummaryTarget, aggregate_invocation_plans, apply_cargo_driver,
+        apply_errors_only_rustflags, error_counts, errors_only_rustflags_env, force_color_env,
+        print_summary, warning_counts,
     };
     use crate::config::ResolvedFlags;
     use crate::package::test::{effective_target, package};
@@ -1234,6 +1247,7 @@ mod test {
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::ffi::OsString;
+    use std::process::Command;
 
     fn string_vec(values: &[&str]) -> Vec<String> {
         values.iter().copied().map(String::from).collect()
@@ -1284,6 +1298,77 @@ mod test {
         sim_assert_eq!(value, OsString::from("-Awarnings"));
     }
 
+    fn resolved_env(value: serde_json::Value) -> eyre::Result<ResolvedEnv> {
+        let patch: crate::config::EnvPatch = serde_json::from_value(value)?;
+        let operations = crate::config::env::combine_env_patches("test", [("", &patch)])?
+            .ok_or_else(|| eyre::eyre!("test env patch unexpectedly absent"))?;
+        let mut resolved = ResolvedEnv::default();
+        resolved.apply_patch(&operations);
+        Ok(resolved)
+    }
+
+    #[test]
+    fn errors_only_composes_with_resolved_rustflags() -> eyre::Result<()> {
+        let env = resolved_env(serde_json::json!({
+            "add": { "RUSTFLAGS": "-Dwarnings --cfg ci" },
+            "remove": ["CARGO_ENCODED_RUSTFLAGS"],
+        }))?;
+        let mut command = Command::new("cargo");
+        env.apply_to(&mut command);
+
+        apply_errors_only_rustflags(&mut command, &env);
+
+        let rustflags = command
+            .get_envs()
+            .find(|(key, _)| *key == "RUSTFLAGS")
+            .and_then(|(_, value)| value);
+        sim_assert_eq!(
+            rustflags,
+            Some(std::ffi::OsStr::new("-Dwarnings --cfg ci -Awarnings"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn color_forcing_honors_effective_user_values() -> eyre::Result<()> {
+        let configured = resolved_env(serde_json::json!({
+            "add": { "CARGO_TERM_COLOR": "never" },
+            "remove": ["NO_COLOR", "FORCE_COLOR"],
+        }))?;
+
+        let no_color = configured.effective_var("NO_COLOR");
+        let cargo_term_color = configured.effective_var("CARGO_TERM_COLOR");
+        let force_color = configured.effective_var("FORCE_COLOR");
+        let decision = force_color_env(
+            true,
+            no_color.as_deref(),
+            cargo_term_color.as_deref(),
+            force_color.as_deref(),
+        );
+
+        assert!(!decision.set_cargo_term_color);
+        assert!(decision.set_force_color);
+        Ok(())
+    }
+
+    #[test]
+    fn configured_cargo_driver_is_not_clobbered() -> eyre::Result<()> {
+        let env = resolved_env(serde_json::json!({
+            "add": { "CARGO_DRIVER": "configured-driver" },
+        }))?;
+        let mut command = Command::new("cargo");
+        env.apply_to(&mut command);
+
+        apply_cargo_driver(&mut command, std::ffi::OsStr::new("resolved-driver"), &env);
+
+        let driver = command
+            .get_envs()
+            .find(|(key, _)| *key == "CARGO_DRIVER")
+            .and_then(|(_, value)| value);
+        sim_assert_eq!(driver, Some(std::ffi::OsStr::new("configured-driver")));
+        Ok(())
+    }
+
     fn package_plan<'a>(
         package: &'a cargo_metadata::Package,
         target: &str,
@@ -1298,6 +1383,7 @@ mod test {
             matrix: serde_json::Map::new(),
             flags,
             driver: None,
+            env: ResolvedEnv::default(),
             ignored_diagnostics_config: false,
         }
     }
@@ -1485,6 +1571,108 @@ mod test {
                 ),
                 (string_vec(&[]), dedupe_flags, vec!["t2".to_string()]),
             ],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_invocation_plans_split_by_resolved_driver() -> eyre::Result<()> {
+        let package = package("a")?;
+        let make_plan = |target: &str, driver: Option<&str>| {
+            let mut package_plan = package_plan(
+                &package,
+                target,
+                vec![string_vec(&[])],
+                ResolvedFlags::default(),
+            );
+            package_plan.driver = driver.map(ToString::to_string);
+            ExecutionPlan {
+                target: TargetTriple(target.to_string()),
+                package_plans: vec![package_plan],
+            }
+        };
+        let plan_set = ExecutionPlanSet {
+            plans: vec![
+                make_plan("t1", None),
+                make_plan("t2", Some("cargo-zigbuild")),
+            ],
+            show_pruned: false,
+            show_target: true,
+        };
+
+        let simplified = aggregate_invocation_plans(&plan_set)
+            .into_iter()
+            .map(|invocation| {
+                (
+                    invocation.driver,
+                    invocation
+                        .targets
+                        .into_iter()
+                        .map(|target| target.triple.0)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        sim_assert_eq!(
+            simplified,
+            vec![
+                (None, vec!["t1".to_string()]),
+                (Some("cargo-zigbuild".to_string()), vec!["t2".to_string()]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_invocation_plans_split_by_resolved_env() -> eyre::Result<()> {
+        let package = package("a")?;
+        let configured_env = resolved_env(serde_json::json!({
+            "add": { "ORT_STRATEGY": "download" },
+        }))?;
+        let make_plan = |target: &str, env: ResolvedEnv| {
+            let mut package_plan = package_plan(
+                &package,
+                target,
+                vec![string_vec(&[])],
+                ResolvedFlags::default(),
+            );
+            package_plan.env = env;
+            ExecutionPlan {
+                target: TargetTriple(target.to_string()),
+                package_plans: vec![package_plan],
+            }
+        };
+        let plan_set = ExecutionPlanSet {
+            plans: vec![
+                make_plan("t1", ResolvedEnv::default()),
+                make_plan("t2", configured_env.clone()),
+                make_plan("t3", configured_env.clone()),
+            ],
+            show_pruned: false,
+            show_target: true,
+        };
+
+        let simplified = aggregate_invocation_plans(&plan_set)
+            .into_iter()
+            .map(|invocation| {
+                (
+                    invocation.env,
+                    invocation
+                        .targets
+                        .into_iter()
+                        .map(|target| target.triple.0)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        sim_assert_eq!(
+            simplified,
+            vec![
+                (ResolvedEnv::default(), vec!["t1".to_string()]),
+                (configured_env, vec!["t2".to_string(), "t3".to_string()]),
+            ]
         );
         Ok(())
     }

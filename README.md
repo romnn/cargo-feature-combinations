@@ -126,6 +126,9 @@ Wherever a setting is valid, it accepts the **same forms**, consistently:
   ops on a set-like value: `override` replaces the whole value, `add` unions
   into it, `remove` subtracts from it. (Scalars — bools and `driver` — only have
   `override`, i.e. `key = value`.)
+- `env = { override = {...}, add = {...}, remove = [...] }` — explicit map
+  patch for matrix-cell Cargo processes. A bare map is rejected; environment
+  values almost always need merging rather than replacement.
 - `inherit = false` on a section — **discard**: ignore everything broader in the
   chain and start this section from defaults (the default is `inherit = true`).
 
@@ -141,6 +144,7 @@ it does not apply in that scope (`*` marks the deprecated root-package
 | `targets` (list)³ | ✓ |  | ✓ |  | ✓ |  | ✓ |  |
 | `expand_targets` |  |  | ✓ | ✓ |  |  | ✓ | ✓ |
 | `driver` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `env` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `inherit`⁴ |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The places a setting is *not* overridable, and why:
@@ -166,9 +170,9 @@ The places a setting is *not* overridable, and why:
 5. **`expand_targets`** outside a `subcommands.<cmd>` table — it is a
    per-subcommand capability, not a base or target-wide setting.
 
-Notes: **`driver`** resolves per (package × target × command); when
-`aggregate_targets = true` runs several targets in one invocation, a per-target
-`driver` forces serial execution. **`expand_targets`** (the capability formerly
+Notes: **`driver`** and **`env`** resolve per (package × target × command). When
+`aggregate_targets = true`, targets with different resolved drivers or
+environments form separate aggregate invocations. **`expand_targets`** (the capability formerly
 spelled `targets = true|false` on a subcommand) gates whether cargo-fc drives a
 command across the target matrix at all.
 
@@ -515,6 +519,37 @@ commands that are not safe by default. `dedupe = true` implies
 `diagnostics_only = false` or `dedupe = false` in a narrower scope to override a
 broader default. Explicit CLI flags are always forwarded.
 
+#### Child-process environment
+
+Use `env` to set or remove variables for each matrix-cell Cargo process. It is
+available at every workspace/package, target, and subcommand scope that accepts
+`driver`, so values can vary within one cargo-fc run:
+
+```toml
+[workspace.metadata.cargo-fc]
+env = { add = { RUST_BACKTRACE = "1" }, remove = ["OPENSSL_DIR"] }
+
+[workspace.metadata.cargo-fc.target.'cfg(not(target_os = "linux"))']
+env = { remove = ["ORT_LIB_PATH"] }
+
+[package.metadata.cargo-fc.subcommands.check]
+env = { add = { ORT_STRATEGY = "download" } }
+```
+
+The grammar is explicit: `override` and `add` contain name-to-string maps;
+`remove` contains variable names. Operations apply override → remove → add,
+and a narrower scope wins. `override` resets the accumulated cargo-fc patch,
+not the ambient environment. `inherit = false` discards broader patches while
+still allowing `env.add`/`env.remove`, since removing an ambient value remains
+meaningful.
+
+For a one-off override, use `--env KEY=VALUE` or `--unset-env KEY` (repeatable).
+CLI removals apply first and CLI additions apply last, so they can replace or
+restore values introduced by scoped config. Cargo-fc applies the result only to
+matrix-cell invocations—not to metadata, driver probes, or rustup—and never
+includes values in diagnostics or matrix JSON. This differs from Cargo's own
+`[env]` table, which configures Cargo itself.
+
 > [!WARNING]
 > The `targets` list is shared by all target-capable commands. `check`/`clippy`
 > only need the target's `rustc`, but `test`/`run` **execute** the binary and so
@@ -552,9 +587,9 @@ wrapper (`cross`, `cargo-careful`, …), or set `cargo` to force plain cargo eve
 when cross-compiling. If the selected driver is missing, cargo-fc warns with the
 install/override options before returning the spawn error.
 
-> `--aggregate-targets` batches a package's targets into one Cargo invocation,
-> which can only use one driver — so if a package resolves different drivers per
-> target, cargo-fc runs those targets serially instead.
+> `--aggregate-targets` batches compatible package-targets into one Cargo
+> invocation. Different resolved drivers or child environments split into
+> separate aggregate invocations instead of disabling aggregation.
 
 #### Installing missing Rust targets
 
@@ -645,8 +680,9 @@ including arrays, replace the base value.
 Sections inherit from everything broader by default (`inherit = true`). If a matching
 target override sets `inherit = false`, resolution starts from a fresh default
 configuration (instead of inheriting from the base config). To avoid confusion, when
-`inherit = false` is set, patchable fields in that same section must not use `add` or
-`remove` (only override is allowed).
+`inherit = false` is set, set/list patch fields in that same section must not use
+`add` or `remove` (only override is allowed). `env` is the exception because
+removing an ambient child variable remains meaningful on a fresh config.
 
 <details>
 <summary>Example: Start from fresh config with `inherit = false`</summary>

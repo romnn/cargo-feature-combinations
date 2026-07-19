@@ -39,8 +39,8 @@ Point `--driver` at any cargo wrapper (`cross`, `cargo-careful`, …), or set `c
 
 ## Interaction with `--aggregate-targets`
 
-`--aggregate-targets` batches a package's targets into one Cargo invocation, which can only use one driver. If a package resolves **different** drivers per target, `cargo fc` runs those targets serially instead.
+`--aggregate-targets` batches compatible package-targets into one Cargo invocation. If a package resolves **different** drivers per target, cargo-fc keeps aggregate mode but splits those targets into separate per-driver invocations. The resolved child environment is part of the same compatibility key.
 
 ## `CARGO_DRIVER`
 
-The resolved driver is exported to child processes as the `CARGO_DRIVER` environment variable, so build scripts and wrappers can see which driver was chosen.
+The resolved driver is exported to child processes as the `CARGO_DRIVER` environment variable, so build scripts and wrappers can see which driver was chosen. Explicit [child environment]({{< relref "../configuration/environment.md" >}}) config or CLI overrides win, including removal.

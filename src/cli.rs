@@ -4,7 +4,8 @@ use color_eyre::eyre::{self, WrapErr};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::config::FlagConfig;
+use crate::config::env::{validate_name, validate_value};
+use crate::config::{EnvValue, FlagConfig};
 
 /// High-level command requested by the user.
 #[derive(Debug)]
@@ -46,6 +47,10 @@ pub struct Options {
     /// cross-compile). Set it to `cargo` to force plain cargo, or to any other
     /// cargo wrapper (`cross`, `cargo-careful`, …).
     pub driver: Option<String>,
+    /// Explicit child-process environment additions from `--env KEY=VALUE`.
+    pub env_set: Vec<(String, EnvValue)>,
+    /// Explicit child-process environment removals from `--unset-env KEY`.
+    pub env_remove: Vec<String>,
     /// Explicit cargo-fc flag overrides provided by CLI flags or environment.
     pub flags: FlagConfig,
 }
@@ -384,10 +389,15 @@ OPTIONS:
                             dependencies cross-compile. Also settable via
                             [workspace.metadata.cargo-fc].driver; pass `cargo` to
                             force plain cargo.
+    --env <KEY=VALUE>       Set an environment variable in each matching Cargo
+                            invocation (repeatable; last value for a key wins)
+    --unset-env <KEY>       Remove an environment variable from each matching
+                            Cargo invocation (repeatable)
 
 ENVIRONMENT:
     CARGO                   Program used for plain Cargo invocations
-    CARGO_DRIVER            Set in child processes to the resolved driver
+    CARGO_DRIVER            Set in child processes to the resolved driver unless
+                            explicitly set or removed by child env configuration
     CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
     VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
 
@@ -705,7 +715,50 @@ fn consume_value_option(
         return Ok(Some(2));
     }
 
+    if let Some(value) = inline_value(arg, "--env") {
+        options.env_set.push(parse_env_assignment(value)?);
+        return Ok(Some(1));
+    }
+    if arg == "--env" {
+        let value = next_value(args, index, arg)?;
+        options.env_set.push(parse_env_assignment(&value)?);
+        return Ok(Some(2));
+    }
+
+    if let Some(name) = inline_value(arg, "--unset-env") {
+        options.env_remove.push(parse_unset_env(name)?);
+        return Ok(Some(1));
+    }
+    if arg == "--unset-env" {
+        let name = next_value(args, index, arg)?;
+        options.env_remove.push(parse_unset_env(&name)?);
+        return Ok(Some(2));
+    }
+
     Ok(None)
+}
+
+fn parse_env_assignment(assignment: &str) -> eyre::Result<(String, EnvValue)> {
+    let Some((name, value)) = assignment.split_once('=') else {
+        eyre::bail!("--env requires KEY=VALUE");
+    };
+    if let Err(reason) = validate_name(name) {
+        eyre::bail!("environment variable name for --env {reason}");
+    }
+    if let Err(reason) = validate_value(value) {
+        eyre::bail!("environment variable value for --env {reason}");
+    }
+    Ok((
+        name.to_string(),
+        EnvValue::from_validated(value.to_string()),
+    ))
+}
+
+fn parse_unset_env(name: &str) -> eyre::Result<String> {
+    if let Err(reason) = validate_name(name) {
+        eyre::bail!("environment variable name for --unset-env {reason}");
+    }
+    Ok(name.to_string())
 }
 
 fn next_value(args: &[String], index: usize, flag: &str) -> eyre::Result<String> {
@@ -1038,11 +1091,23 @@ mod test {
 
     #[test]
     fn parse_keeps_cargo_fc_flags_after_double_dash() -> eyre::Result<()> {
-        let (options, forwarded) =
-            parse_args(&["run", "--", "--help", "matrix", "--driver", "cross"])?;
+        let (options, forwarded) = parse_args(&[
+            "run",
+            "--",
+            "--help",
+            "matrix",
+            "--driver",
+            "cross",
+            "--env",
+            "TOKEN=secret",
+            "--unset-env",
+            "OLD_TOKEN",
+        ])?;
 
         assert!(options.command.is_none());
         assert!(options.driver.is_none());
+        assert!(options.env_set.is_empty());
+        assert!(options.env_remove.is_empty());
         sim_assert_eq!(
             forwarded,
             vec![
@@ -1052,6 +1117,10 @@ mod test {
                 "matrix".to_string(),
                 "--driver".to_string(),
                 "cross".to_string(),
+                "--env".to_string(),
+                "TOKEN=secret".to_string(),
+                "--unset-env".to_string(),
+                "OLD_TOKEN".to_string(),
             ]
         );
         Ok(())
@@ -1121,6 +1190,68 @@ mod test {
         assert_eq!(options.driver.as_deref(), Some("cargo"));
         sim_assert_eq!(forwarded, vec!["check".to_string()]);
         Ok(())
+    }
+
+    #[test]
+    fn parse_env_options_accepts_inline_and_split_forms() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&[
+            "--env",
+            "FIRST=one",
+            "--env=SECOND=two=parts",
+            "--env=EMPTY=",
+            "--unset-env",
+            "OLD",
+            "--unset-env=OLDER",
+            "check",
+        ])?;
+
+        sim_assert_eq!(
+            serde_json::to_value(&options.env_set)?,
+            serde_json::json!([["FIRST", "one"], ["SECOND", "two=parts"], ["EMPTY", ""],])
+        );
+        sim_assert_eq!(options.env_remove, vec!["OLD", "OLDER"]);
+        sim_assert_eq!(forwarded, vec!["check".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parsed_options_debug_redacts_env_values() -> eyre::Result<()> {
+        let (options, _forwarded) = parse_args(&["--env", "TOKEN=super-secret", "check"])?;
+
+        let debug = format!("{options:?}");
+
+        assert!(debug.contains("TOKEN"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert!(!debug.contains("super-secret"), "{debug}");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_env_options_reject_invalid_assignments() {
+        let missing_equals =
+            parse_args(&["--env", "TOKEN", "check"]).expect_err("--env requires an assignment");
+        assert!(
+            missing_equals
+                .to_string()
+                .contains("--env requires KEY=VALUE"),
+            "{missing_equals}"
+        );
+
+        let empty_name =
+            parse_args(&["--env", "=value", "check"]).expect_err("--env requires a nonempty name");
+        assert!(empty_name.to_string().contains("must not be empty"));
+
+        let nul_name = parse_args(&["--env", "BAD\0NAME=value", "check"])
+            .expect_err("--env rejects NUL in names");
+        assert!(nul_name.to_string().contains("NUL"));
+
+        let nul_value = parse_args(&["--env", "TOKEN=bad\0value", "check"])
+            .expect_err("--env rejects NUL in values");
+        assert!(nul_value.to_string().contains("NUL"));
+
+        let unset_equals = parse_args(&["--unset-env", "BAD=NAME", "check"])
+            .expect_err("--unset-env rejects equals in names");
+        assert!(unset_equals.to_string().contains("must not contain `=`"));
     }
 
     #[test]

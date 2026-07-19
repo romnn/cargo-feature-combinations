@@ -533,6 +533,8 @@ fn execute_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
         raw_command: None,
         resolved_command: None,
         cli_driver: None,
+        cli_env_set: &[],
+        cli_env_remove: &[],
         default_diagnostics_allowed: true,
         matrix: false,
     };

@@ -39,6 +39,15 @@ only_features = ["core"]
 
 The override applies to that command only.
 
+Environment settings can be command-local too. For example, a crate can
+download ONNX Runtime only for checks while other commands keep their normal
+environment:
+
+```toml
+[package.metadata.cargo-fc.subcommands.check]
+env = { add = { ORT_STRATEGY = "download" } }
+```
+
 ## Aliases inherit command overrides
 
 Built-in short aliases (`t` → `test`, `b` → `build`, …) and your own `.cargo/config.toml` aliases that resolve to a built-in inherit the override automatically, the same way [configured targets]({{< relref "../targets/configured-targets.md" >}}) and flag defaults resolve aliases.
@@ -78,4 +87,4 @@ expand_targets = false
 `expand_targets` is a per-subcommand capability — it only appears in `subcommands.<cmd>` tables.
 
 > [!NOTE]
-> **Scope note.** Feature sets are per package, so the feature-matrix keys are only accepted in **package**-scope subcommand tables. Workspace-scope subcommand tables (`[workspace.metadata.cargo-fc.subcommands.<command>]`) accept only the `targets` capability, `expand_targets`, `driver`, and `cargo fc` flags.
+> **Scope note.** Feature sets are per package, so the feature-matrix keys are only accepted in **package**-scope subcommand tables. Workspace-scope subcommand tables (`[workspace.metadata.cargo-fc.subcommands.<command>]`) accept the `targets` capability, `expand_targets`, `driver`, `env`, and `cargo fc` flags.

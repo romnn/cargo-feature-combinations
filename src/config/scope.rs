@@ -2,6 +2,7 @@ use super::{
     Config, FeatureMatrixPatch, FlagConfig, ScopeConfig, TargetOverride, WorkspaceConfig,
     WorkspaceTargetOverride,
 };
+use crate::config::EnvPatch;
 use crate::config::patch::{StringSetPatch, TargetListPatch};
 
 /// One position in the config precedence chain.
@@ -60,6 +61,7 @@ impl ScopeId {
 pub(crate) struct ScopeView<'a> {
     pub(crate) inherits: bool,
     pub(crate) driver: Option<&'a str>,
+    pub(crate) env: Option<&'a EnvPatch>,
     pub(crate) expand_targets: Option<bool>,
     pub(crate) targets: Option<&'a TargetListPatch>,
     pub(crate) exclude_packages: Option<&'a StringSetPatch>,
@@ -203,6 +205,7 @@ fn scope_view(scope: &ScopeConfig) -> ScopeView<'_> {
     ScopeView {
         inherits: scope.should_inherit(),
         driver: scope.driver.as_deref(),
+        env: scope.env.as_ref(),
         expand_targets: scope.expand_targets,
         targets: scope.targets.as_ref(),
         exclude_packages: scope.exclude_packages.as_ref(),

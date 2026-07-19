@@ -46,6 +46,7 @@ Not every setting is meaningful in every scope. The feature-matrix keys, for ins
 | `exclude_packages` | ✓ |  |
 | `targets` (target list) | ✓ | ✓ |
 | `driver` | ✓ | ✓ |
+| `env` (child Cargo process) | ✓ | ✓ |
 
 Each of these can be refined further by target and by command — that's what the rest of this section covers.
 

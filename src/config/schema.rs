@@ -1,3 +1,4 @@
+use super::env::EnvPatch;
 use super::flags::FlagConfig;
 use super::patch::{FeatureSetVecPatch, StringSetPatch, TargetListPatch};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,9 @@ pub struct ScopeConfig {
     /// Build driver override.
     #[serde(default)]
     pub driver: Option<String>,
+    /// Environment patch for matrix-cell Cargo processes.
+    #[serde(default)]
+    pub env: Option<EnvPatch>,
     /// Whether this subcommand may expand configured target lists.
     #[serde(default)]
     pub expand_targets: Option<bool>,
@@ -244,6 +248,7 @@ mod tests {
         let scope: ScopeConfig =
             serde_json::from_value(serde_json::json!({})).expect("deserialize empty");
         assert!(scope.expand_targets.is_none());
+        assert!(scope.env.is_none());
         assert!(scope.features.exclude_features.is_none());
         assert!(scope.features.skip_optional_dependencies.is_none());
     }
@@ -264,6 +269,7 @@ mod tests {
             "inherit",
             "replace",
             "driver",
+            "env",
             "expand_targets",
             "targets",
             "exclude_packages",
