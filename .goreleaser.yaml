@@ -3,11 +3,6 @@ version: 2
 
 dist: goreleaser-dist
 
-before:
-  hooks:
-    - rustup default stable
-    - cargo install --force --locked cargo-zigbuild
-
 homebrew_casks:
   - name: &cargo-feature-combinations cargo-feature-combinations
     ids:

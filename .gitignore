@@ -17,6 +17,7 @@ examples/**/target
 # goreleaser artifacts
 /goreleaser-dist
 .intentionally-empty-file.o
+*_compiler_family.o
 
 # Editor directories and files
 .idea
