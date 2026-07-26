@@ -70,12 +70,6 @@ allow_attributes_without_reason = "deny"
 
 struct_excessive_bools = "allow"
 
-[features]
-default = []
-
-[package.metadata.cargo-fc]
-exclude_features = ["default"]
-
 [dependencies]
 color-eyre = "0.6"
 cargo_metadata = "0.23"

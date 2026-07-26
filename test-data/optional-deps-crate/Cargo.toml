@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
 A = []
 B = ["A"]
 C = ["dep:optDepC"]
@@ -15,7 +14,5 @@ oDepB = { path = "optDepB", package = "optDepB", optional = true }
 optDepC = { path = "optDepC", optional = true }
 
 [package.metadata.cargo-feature-combinations]
-# Exclude the declared `default` feature from the matrix to simplify testing.
-exclude_features = ["default"]
 # Enable skipping optional dependencies for this fixture crate.
 skip_optional_dependencies = true

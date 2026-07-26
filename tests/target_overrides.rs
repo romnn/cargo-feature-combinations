@@ -18,7 +18,6 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
             edition = "2024"
 
             [features]
-            default = []
             cuda = []
             metal = []
             common = []
@@ -72,9 +71,6 @@ impl CfgEvaluator for StubEval {
 #[test]
 fn target_override_additive_exclude_features_affects_matrix() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
-        [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default"]
-
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
         exclude_features = { add = ["metal"] }
     "#};
@@ -118,7 +114,7 @@ fn target_override_additive_exclude_features_affects_matrix() -> eyre::Result<()
 fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default", "metal"]
+        exclude_features = ["metal"]
 
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
         exclude_features = ["cuda"]
@@ -155,9 +151,6 @@ fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
 #[test]
 fn legacy_replace_true_rejects_add_remove() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
-        [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default"]
-
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
         replace = true
         exclude_features = { add = ["metal"] }

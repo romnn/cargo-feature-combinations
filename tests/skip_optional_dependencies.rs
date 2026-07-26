@@ -30,7 +30,6 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
             edition = "2024"
 
             [features]
-            default = []
             A = []
             B = ["A"]
             C = ["dep:optDepC"]
@@ -106,14 +105,8 @@ fn as_vec_string(sets: &[Vec<&str>]) -> Vec<Vec<String>> {
 
 #[test]
 fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
-    // Mirror the `simple` test from cargo-all-features/tests/settings.rs, but
-    // explicitly exclude the implicit `default` feature using
-    // `exclude_features` so that the remaining behaviour matches.
-    let settings = indoc::indoc! {r#"
-        exclude_features = ["default"]
-    "#};
-
-    let combos = feature_sets_for_settings(settings)?;
+    // Mirror the `simple` test from cargo-all-features/tests/settings.rs.
+    let combos = feature_sets_for_settings("")?;
 
     let expected: Vec<Vec<&str>> = vec![
         vec![],
@@ -142,10 +135,9 @@ fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
 #[test]
 fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<()> {
     // Mirror the `skip_opt_deps` test from cargo-all-features/tests/settings.rs.
-    let settings = indoc::indoc! {r#"
-        exclude_features = ["default"]
+    let settings = indoc::indoc! {r"
         skip_optional_dependencies = true
-    "#};
+    "};
 
     let combos = feature_sets_for_settings(settings)?;
 
@@ -168,7 +160,6 @@ fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<(
 #[test]
 fn optional_dependency_features_can_be_added_back_via_include_sets() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
-        exclude_features = ["default"]
         skip_optional_dependencies = true
         include_feature_sets = [["oDepB"], ["C", "A"]]
     "#};

@@ -23,6 +23,11 @@ Every cargo argument is passed through **except** the three that would conflict 
 - `--all-features`
 - `--no-default-features`
 
+cargo-fc passes `--no-default-features` to every invocation, then enables the features in the
+current row. The empty row (`[]`) therefore enables no features. A row containing `default`
+reproduces an ordinary Cargo default-feature invocation; do not exclude `default` when the matrix
+must cover that configuration.
+
 Everything else is forwarded verbatim, so this works as expected:
 
 ```bash

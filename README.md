@@ -183,6 +183,11 @@ entry after a refactoring can never silently change the matrix. This matches
 Cargo's own strictness for `--features`, which rejects even `default` when the
 package declares no such feature.
 
+cargo-fc starts every invocation with `--no-default-features`, then enables the
+features in that matrix row. The empty row therefore enables no features; the
+`default` row reproduces an ordinary Cargo default-feature build. Keep
+`default` in the matrix when that coverage matters.
+
 For example:
 
 ```toml
@@ -196,7 +201,7 @@ exclude_feature_sets = [["foo", "bar"]]
 exclude_feature_sets = [[]]
 
 # Exclude features from the feature combination matrix
-exclude_features = ["default", "full"]
+exclude_features = ["full"]
 
 # Skip implicit features that correspond to optional dependencies from the
 # matrix.
@@ -239,8 +244,8 @@ allow_feature_sets = [
     ["ssr"],
 ]
 
-# When enabled, never include the empty feature set (no `--features`), even if
-# it would otherwise be generated.
+# When enabled, never include the empty feature set (no enabled features), even
+# if it would otherwise be generated.
 no_empty_feature_set = true
 
 # Override the default safety limit of 100000 generated feature combinations.
@@ -308,7 +313,6 @@ exclude_packages = ["package-a", "package-b"]
 
 ```toml
 [features]
-default = []
 core = []
 cli = ["core"]
 
@@ -317,7 +321,6 @@ tokio = { version = "1", optional = true }
 serde = { version = "1", optional = true }
 
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
 skip_optional_dependencies = true
 ```
 
@@ -643,7 +646,7 @@ Example (exclude different features per OS):
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_features = { add = ["metal"] }
@@ -689,7 +692,7 @@ removing an ambient child variable remains meaningful on a fresh config.
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 isolated_feature_sets = [
   ["gpu"],
   ["ui"],
@@ -701,7 +704,7 @@ inherit = false
 
 # Start from a fresh default config on Linux: `isolated_feature_sets` and
 # `skip_optional_dependencies` are not inherited from the base config.
-exclude_features = ["default", "cuda"] # using array shorthand, i.e. override
+exclude_features = ["experimental", "cuda"] # using array shorthand, i.e. override
 ```
 </details>
 

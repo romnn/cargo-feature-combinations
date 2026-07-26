@@ -616,7 +616,7 @@ mod tests {
     #[test]
     fn feature_names_accept_known_names_in_all_scopes() {
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
-            "exclude_features": ["default"],
+            "exclude_features": ["cuda"],
             "mutually_exclusive_features": [["cuda", "coreml"]],
             "subcommands": {
                 "test": { "only_features": { "add": ["cuda"] } },
@@ -634,7 +634,7 @@ mod tests {
 
         super::validate_feature_names(
             &config,
-            &features(&["default", "cuda", "coreml"]),
+            &features(&["cuda", "coreml"]),
             "pkg",
             "package.metadata.cargo-fc",
         )

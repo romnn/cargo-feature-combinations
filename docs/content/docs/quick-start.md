@@ -71,9 +71,6 @@ exclude_feature_sets = [["postgres", "sqlite"]]
 
 # Ignore the implicit features generated for optional dependencies.
 skip_optional_dependencies = true
-
-# Drop the `default` feature from the varied set.
-exclude_features = ["default"]
 ```
 
 Re-run `cargo fc check` and the matrix reflects the configuration. Continue with [Configuration]({{< relref "configuration/_index.md" >}}) to learn the full model, or browse the [Recipes]({{< relref "recipes/_index.md" >}}) for ready-made setups.

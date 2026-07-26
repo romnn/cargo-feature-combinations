@@ -15,7 +15,7 @@ Configuration goes in `Cargo.toml` metadata tables. There are two scopes:
 ```toml
 # crate Cargo.toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["unstable"]
 ```
 
 ```toml
@@ -54,8 +54,8 @@ Each of these can be refined further by target and by command — that's what th
 
 ```toml
 [package.metadata.cargo-fc]
-# Don't vary `default`; it's implied by everything anyway.
-exclude_features = ["default"]
+# Do not vary an unsupported experimental feature.
+exclude_features = ["unstable"]
 
 # These two features are mutually exclusive.
 exclude_feature_sets = [["postgres", "sqlite"]]

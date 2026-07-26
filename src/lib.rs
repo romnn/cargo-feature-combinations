@@ -1189,7 +1189,7 @@ mod test {
     #[test]
     fn find_metadata_value_finds_each_alias() -> eyre::Result<()> {
         for &alias in METADATA_KEYS {
-            let meta = json!({ alias: { "exclude_features": ["default"] } });
+            let meta = json!({ alias: { "exclude_features": ["foo"] } });
             let (value, matched) =
                 find_metadata_value(&meta).ok_or_else(|| eyre::eyre!("no match for {alias}"))?;
             assert_eq!(matched, alias);

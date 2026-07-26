@@ -24,7 +24,6 @@ fn dummy_crate(features_toml: &str, settings: &str) -> eyre::Result<TempDir> {
             edition = "2024"
 
             {features_toml}
-            default = []
 
             [package.metadata.cargo-feature-combinations]
             {settings}
@@ -56,7 +55,6 @@ fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<Tem
             edition = "2024"
 
             {features_toml}
-            default = []
 
             [dependencies]
             optDep = {{ path = "optDep", optional = true }}
@@ -147,7 +145,7 @@ fn simple_implication() -> eyre::Result<()> {
             B = ["A"]
             C = []
         "#},
-        r#"exclude_features = ["default"]"#,
+        "",
     )?;
 
     // B implies A, so [A, B] and [A, B, C] are redundant
@@ -188,7 +186,7 @@ fn transitive_chain() -> eyre::Result<()> {
             B = ["A"]
             C = ["B"]
         "#},
-        r#"exclude_features = ["default"]"#,
+        "",
     )?;
 
     sim_assert_eq!(
@@ -211,7 +209,6 @@ fn include_features_no_false_pruning() -> eyre::Result<()> {
             B = ["A"]
         "#},
         indoc::indoc! {r#"
-            exclude_features = ["default"]
             include_features = ["A"]
         "#},
     )?;
@@ -232,10 +229,9 @@ fn disabled_via_config() -> eyre::Result<()> {
             A = []
             B = ["A"]
         "#},
-        indoc::indoc! {r#"
-            exclude_features = ["default"]
+        indoc::indoc! {r"
             prune_implied = false
-        "#},
+        "},
     )?;
 
     // All 4 combos preserved when pruning is disabled
@@ -253,10 +249,9 @@ fn disabled_via_no_prune_implied_config() -> eyre::Result<()> {
             A = []
             B = ["A"]
         "#},
-        indoc::indoc! {r#"
-            exclude_features = ["default"]
+        indoc::indoc! {r"
             no_prune_implied = true
-        "#},
+        "},
     )?;
 
     sim_assert_eq!(result.kept.len(), 4);
@@ -274,7 +269,6 @@ fn allow_feature_sets_bypasses_pruning() -> eyre::Result<()> {
             B = ["A"]
         "#},
         indoc::indoc! {r#"
-            exclude_features = ["default"]
             allow_feature_sets = [["A"], ["A", "B"], ["B"]]
         "#},
     )?;
@@ -294,7 +288,7 @@ fn dep_syntax_not_treated_as_implication() -> eyre::Result<()> {
             A = []
             B = ["dep:optDep", "A"]
         "#},
-        r#"exclude_features = ["default"]"#,
+        "",
     )?;
 
     // B implies A (plain name), dep:optDep is ignored for the graph.
@@ -315,7 +309,7 @@ fn diamond_graph() -> eyre::Result<()> {
             C = ["A"]
             D = ["B", "C"]
         "#},
-        r#"exclude_features = ["default"]"#,
+        "",
     )?;
 
     sim_assert_eq!(
@@ -343,7 +337,7 @@ fn no_implications_no_pruning() -> eyre::Result<()> {
             B = []
             C = []
         "},
-        r#"exclude_features = ["default"]"#,
+        "",
     )?;
 
     sim_assert_eq!(result.kept.len(), 8); // 2^3 = 8
@@ -364,7 +358,6 @@ fn isolated_feature_sets_with_pruning() -> eyre::Result<()> {
             D = []
         "#},
         indoc::indoc! {r#"
-            exclude_features = ["default"]
             isolated_feature_sets = [["A", "B"], ["C", "D"]]
         "#},
     )?;
@@ -399,7 +392,6 @@ fn exclude_feature_sets_with_pruning() -> eyre::Result<()> {
             C = []
         "#},
         indoc::indoc! {r#"
-            exclude_features = ["default"]
             exclude_feature_sets = [["B", "C"]]
         "#},
     )?;
@@ -425,10 +417,9 @@ fn no_empty_feature_set_with_pruning() -> eyre::Result<()> {
             A = []
             B = ["A"]
         "#},
-        indoc::indoc! {r#"
-            exclude_features = ["default"]
+        indoc::indoc! {r"
             no_empty_feature_set = true
-        "#},
+        "},
     )?;
 
     // Without no_empty_feature_set: [], [A], [B], [A, B]
@@ -572,13 +563,9 @@ fn target_override_changes_matrix_then_pruning_applies() -> eyre::Result<()> {
         edition = "2024"
 
         [features]
-        default = []
         A = []
         B = ["A"]
         C = []
-
-        [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default"]
 
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
         exclude_features = { add = ["C"] }
@@ -621,12 +608,8 @@ fn target_override_disables_pruning_for_specific_target() -> eyre::Result<()> {
         edition = "2024"
 
         [features]
-        default = []
         A = []
         B = ["A"]
-
-        [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default"]
 
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "macos")']
         prune_implied = false
@@ -658,12 +641,8 @@ fn target_override_include_features_interacts_with_pruning() -> eyre::Result<()>
         edition = "2024"
 
         [features]
-        default = []
         A = []
         B = ["A"]
-
-        [package.metadata.cargo-feature-combinations]
-        exclude_features = ["default"]
 
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
         include_features = { add = ["A"] }

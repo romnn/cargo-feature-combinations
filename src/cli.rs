@@ -401,6 +401,10 @@ ENVIRONMENT:
     CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
     VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
 
+cargo-fc passes `--no-default-features` to every Cargo invocation, then enables
+the features in the current matrix row. The empty row therefore enables no
+features; a row containing `default` reproduces Cargo's normal defaults.
+
 Feature sets can be configured in your Cargo.toml configuration.
 The following metadata key aliases are all supported:
 
@@ -429,7 +433,7 @@ mutually_exclusive_features = [
 # exclude_feature_sets = [[]]
 
 # Exclude features from the feature combination matrix
-exclude_features = ["default", "full"] # formerly "denylist"
+exclude_features = ["full"] # formerly "denylist"
 
 # Include features in the feature combination matrix
 #
@@ -472,8 +476,8 @@ allow_feature_sets = [
     ["ssr"],
 ]
 
-# When enabled, never include the empty feature set (no `--features`), even if
-# it would otherwise be generated.
+# When enabled, never include the empty feature set (no enabled features), even
+# if it would otherwise be generated.
 no_empty_feature_set = true
 
 # Override the default safety limit of 100000 generated feature combinations.
@@ -505,7 +509,7 @@ Target-specific configuration can be expressed via Cargo-style `cfg(...)` select
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_features = { add = ["metal"] }

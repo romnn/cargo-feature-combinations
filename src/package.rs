@@ -883,7 +883,6 @@ pub(crate) mod test {
         init();
         let package = package_with_features(&["foo", "bar", "baz"])?;
         let config = ResolvedFeatures {
-            exclude_features: HashSet::from(["default".to_string()]),
             only_features: HashSet::from(["foo".to_string(), "bar".to_string()]),
             ..Default::default()
         };

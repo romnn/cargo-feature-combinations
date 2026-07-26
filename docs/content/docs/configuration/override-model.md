@@ -79,7 +79,7 @@ Sections inherit from everything broader by default (`inherit = true`). When a m
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 isolated_feature_sets = [["gpu"], ["ui"]]
 skip_optional_dependencies = true
 
@@ -87,7 +87,7 @@ skip_optional_dependencies = true
 inherit = false
 # Fresh config on Linux: isolated_feature_sets and skip_optional_dependencies
 # are NOT inherited.
-exclude_features = ["default", "cuda"]
+exclude_features = ["experimental", "cuda"]
 ```
 
 ## How feature-matrix layers resolve

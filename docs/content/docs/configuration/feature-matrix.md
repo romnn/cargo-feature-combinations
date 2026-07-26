@@ -37,10 +37,13 @@ package declares no such feature.
 Features listed here are not varied in the matrix.
 
 ```toml
-exclude_features = ["default", "full"]
+exclude_features = ["full"]
 ```
 
-A common use is dropping `default` (it's implied by an empty `--features` anyway) and any umbrella `full` feature.
+An umbrella such as `full` may be redundant when its component features already vary independently.
+Do not exclude `default` when the matrix must cover ordinary Cargo defaults: cargo-fc disables
+defaults for every invocation, so `[]` enables no features and `["default"]` enables the declared
+default feature set.
 
 ## `only_features`
 

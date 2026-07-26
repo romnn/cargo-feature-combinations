@@ -17,7 +17,7 @@ Overrides live under:
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 exclude_features = { add = ["metal"] }
@@ -26,7 +26,7 @@ exclude_features = { add = ["metal"] }
 exclude_features = { add = ["cuda"] }
 ```
 
-The base excludes `default` everywhere. On Linux, `metal` is *also* excluded (the `add` unions into the inherited value); on macOS, `cuda` is. Remember: an array like `exclude_features = ["metal"]` would have **replaced** the base instead of extending it.
+The base excludes `experimental` everywhere. On Linux, `metal` is *also* excluded (the `add` unions into the inherited value); on macOS, `cuda` is. Remember: an array like `exclude_features = ["metal"]` would have **replaced** the base instead of extending it.
 
 ## Example: remove a host library path while cross-compiling
 
@@ -65,12 +65,12 @@ Sections inherit the base by default (`inherit = true`). A matching target secti
 
 ```toml
 [package.metadata.cargo-fc]
-exclude_features = ["default"]
+exclude_features = ["experimental"]
 skip_optional_dependencies = true
 
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 inherit = false
-exclude_features = ["default", "cuda"]   # fresh config; nothing inherited
+exclude_features = ["experimental", "cuda"]   # fresh config; nothing inherited
 ```
 
 ## Workspace target overrides
