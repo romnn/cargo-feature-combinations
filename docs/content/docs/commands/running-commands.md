@@ -37,6 +37,31 @@ cargo fc test --release -- --nocapture
 
 Arguments after `--` are passed to the invoked program (for example the test binary), never interpreted by `cargo fc`.
 
+## Running only maximal feature sets
+
+Use `--maximal-features` when a command needs broad feature reachability but not every feature
+interaction as a separate invocation. Cargo-fc keeps only the maximal feature sets of each
+package-target matrix: combinations that are not a subset of another generated combination. In an
+unconstrained matrix the full feature set is itself a combination, so everything collapses into a
+single all-features run. Mutually exclusive features, excluded combinations, isolated feature sets,
+and target-specific feature rules stay in force and keep one run per remaining maximal alternative.
+The same collapse applies to `cargo fc matrix` output.
+
+Unused-dependency auditing with
+[`cargo-udeps`](https://github.com/est31/cargo-udeps) is a useful example:
+
+```bash
+cargo +nightly fc udeps --maximal-features --all-targets -p my-crate
+```
+
+This makes dependencies behind valid feature gates visible without Cargo's naive `--all-features`,
+which may combine backends or platform features that the matrix deliberately keeps apart. Cargo-fc
+has no udeps-specific behavior: it only supplies the generated
+`--no-default-features --features=...` arguments and forwards the custom command.
+
+Maximal mode is not a replacement for an exhaustive matrix when feature interactions are the thing
+being tested. Keep ordinary `cargo fc check`, `clippy`, and `test` runs for that coverage.
+
 ## Package selection
 
 In a workspace, `cargo fc` runs the selected packages. Use cargo's own selection flags:

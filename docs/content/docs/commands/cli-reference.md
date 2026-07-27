@@ -38,6 +38,7 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `--pedantic` | Treat warnings like errors in the summary and under `--fail-fast`. |
 | `--show-pruned` | Show pruned (redundant) combinations in the summary. |
 | `--no-prune-implied` | Disable automatic pruning of redundant combinations. |
+| `--maximal-features` | Run only maximal feature sets: combinations that are not a subset of another generated combination. An unconstrained matrix collapses into a single all-features invocation per package-target, while matrix constraints keep one invocation per alternative. |
 | `--packages-only` | In `matrix` mode, emit one row per package-target instead of per combination. |
 | `--only-packages-with-lib-target` | Only consider packages that have a library target. |
 | `--aggregate-targets` | Batch a combination's configured targets into a single Cargo invocation (one `--target` each). Faster on many cores; falls back to serial for `run` and pruned summaries. |

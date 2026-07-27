@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.2]
+
+### Added
+
+- Added `--maximal-features` to run only the maximal feature sets of each
+  package-target matrix: combinations that are not a subset of another
+  generated combination. An unconstrained matrix collapses into a single
+  all-features invocation per package-target, while mutually exclusive
+  features, excluded combinations, and other matrix constraints keep one
+  invocation per remaining maximal alternative. Implied-feature pruning still
+  applies, so a collapsed row runs as its canonical pruned spelling. The flag
+  suits commands that need broad feature reachability without per-interaction
+  coverage — for example unused-dependency auditing via
+  `cargo +nightly fc udeps --maximal-features` — and also collapses
+  `cargo fc matrix` output.
+
+### Changed
+
+- Generated Cargo invocations now qualify features as
+  `--features=<package>/<feature>`, so the planned package's features stay
+  selected even when forwarded arguments broaden Cargo's package selection
+  (for example `--workspace`).
+- cargo-fc's help, documentation, and examples no longer suggest excluding the
+  `default` feature from matrices. cargo-fc passes `--no-default-features` and
+  enables each row's features explicitly, so a row containing `default`
+  reproduces an ordinary Cargo default-feature invocation and belongs in the
+  matrix when that configuration must stay covered.
+
 ## [0.4.1]
 
 ### Added

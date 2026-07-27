@@ -644,6 +644,21 @@ struct CombinationResult {
     flags: ResolvedFlags,
 }
 
+/// Format the generated `--features` flag for one combination.
+///
+/// Features are qualified as `<package>/<feature>` so they keep selecting the
+/// planned package's features even when forwarded Cargo arguments broaden the
+/// package selection (for example `--workspace`).
+fn feature_selection_flag(package_name: &str, features: &[String]) -> String {
+    format!(
+        "--features={}",
+        features
+            .iter()
+            .map(|feature| format!("{package_name}/{feature}"))
+            .join(",")
+    )
+}
+
 /// Run a single cargo invocation for one feature combination and collect
 /// its output into a [`Summary`].
 fn run_single_combination(
@@ -694,7 +709,7 @@ fn run_single_combination(
         apply_errors_only_rustflags(&mut cmd, inv.env);
     }
 
-    let features_flag = format!("--features={}", features.iter().join(","));
+    let features_flag = feature_selection_flag(package.name.as_str(), features);
     let mut generated_args = Vec::new();
     if diagnostics_only {
         generated_args.push(crate::diagnostics_only::MESSAGE_FORMAT);
@@ -1237,8 +1252,8 @@ fn append_pruned_summaries(
 mod test {
     use super::{
         ResolvedEnv, Summary, SummaryTarget, aggregate_invocation_plans, apply_cargo_driver,
-        apply_errors_only_rustflags, error_counts, errors_only_rustflags_env, force_color_env,
-        print_summary, warning_counts,
+        apply_errors_only_rustflags, error_counts, errors_only_rustflags_env,
+        feature_selection_flag, force_color_env, print_summary, warning_counts,
     };
     use crate::config::ResolvedFlags;
     use crate::package::test::{effective_target, package};
@@ -1265,6 +1280,17 @@ mod test {
             num_suppressed: 0,
             equivalent_to: None,
         }
+    }
+
+    #[test]
+    fn feature_selection_is_qualified_to_the_planned_package() {
+        let features = string_vec(&["backend-a", "shared"]);
+
+        sim_assert_eq!(
+            feature_selection_flag("my-crate", &features),
+            "--features=my-crate/backend-a,my-crate/shared"
+        );
+        sim_assert_eq!(feature_selection_flag("my-crate", &[]), "--features=");
     }
 
     #[test]

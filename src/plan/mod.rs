@@ -5,3 +5,6 @@ pub mod targets;
 
 /// Resolve target assignments into runnable feature-combination plans.
 pub mod execution;
+
+/// Collapse execution plans to maximal feature sets (`--maximal-features`).
+pub mod maximal;

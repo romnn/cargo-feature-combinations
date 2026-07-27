@@ -440,8 +440,11 @@ fn print_matrix_command(
         default_diagnostics_allowed: false,
         matrix: true,
     };
-    let plan_set =
+    let mut plan_set =
         plan::execution::build_execution_plans(target_plans, options.flags, &context, evaluator)?;
+    if options.maximal_features {
+        plan::maximal::retain_maximal_feature_sets(&mut plan_set);
+    }
     hints::note_matrix_noop_flags(options);
     matrix::print_matrix_for_execution_plans(&plan_set, pretty)?;
     Ok(None)
@@ -471,6 +474,9 @@ fn run_cargo_command(
         &context,
         evaluator,
     )?;
+    if options.maximal_features {
+        plan::maximal::retain_maximal_feature_sets(&mut plan_set);
+    }
     driver::finalize_plan_drivers(&mut plan_set, env)?;
     maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
     let mode = runner::resolve_execution_mode(

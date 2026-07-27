@@ -93,6 +93,10 @@ cargo fc --summary-only build
 
 # Print all combinations of features in JSON (useful for usage in github actions)
 cargo fc matrix --pretty
+
+# Run only the maximal feature sets, e.g. to audit unused dependencies behind
+# feature gates without combining mutually exclusive features
+cargo +nightly fc udeps --maximal-features --all-targets
 ```
 
 For details, please refer to `--help`:

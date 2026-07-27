@@ -51,6 +51,8 @@ pub struct Options {
     pub env_set: Vec<(String, EnvValue)>,
     /// Explicit child-process environment removals from `--unset-env KEY`.
     pub env_remove: Vec<String>,
+    /// Whether to retain only maximal compatible feature sets.
+    pub maximal_features: bool,
     /// Explicit cargo-fc flag overrides provided by CLI flags or environment.
     pub flags: FlagConfig,
 }
@@ -369,6 +371,12 @@ OPTIONS:
     --no-prune-implied      Disable automatic pruning of redundant feature
                             combinations implied by other features
     --show-pruned           Show pruned feature combinations in the summary
+    --maximal-features      Run only maximal feature sets: combinations that
+                            are not a subset of another generated combination.
+                            An unconstrained matrix collapses into a single
+                            all-features invocation per package-target, while
+                            mutually exclusive features and other matrix
+                            constraints keep one invocation per alternative
     --aggregate-targets     Batch each combination's configured targets into a
                             single Cargo invocation (one `--target` per target)
                             instead of one invocation per target. Faster on
@@ -789,6 +797,7 @@ fn consume_flag_or_command(
         "--fail-fast" => options.flags.fail_fast = Some(true),
         "--no-prune-implied" => options.flags.no_prune_implied = Some(true),
         "--show-pruned" => options.flags.show_pruned = Some(true),
+        "--maximal-features" => options.maximal_features = true,
         "--aggregate-targets" => options.flags.aggregate_targets = Some(true),
         "--no-targets" => options.flags.no_targets = Some(true),
         "--install-missing-targets" => options.flags.install_missing_targets = Some(true),
@@ -866,6 +875,7 @@ fn cargo_fc_bool_inline_flag(arg: &str) -> Option<&'static str> {
         "--fail-fast",
         "--no-prune-implied",
         "--show-pruned",
+        "--maximal-features",
         "--aggregate-targets",
         "--no-targets",
         "--install-missing-targets",
@@ -1078,6 +1088,16 @@ mod test {
 
         assert_eq!(options.flags.fail_fast, Some(true));
         assert_eq!(options.flags.summary_only, Some(true));
+    }
+
+    #[test]
+    fn maximal_features_is_consumed_after_custom_subcommand() -> eyre::Result<()> {
+        let (options, forwarded) =
+            parse_args(&["+nightly", "udeps", "--maximal-features", "--all-targets"])?;
+
+        assert!(options.maximal_features);
+        sim_assert_eq!(forwarded, vec!["+nightly", "udeps", "--all-targets"]);
+        Ok(())
     }
 
     #[test]
