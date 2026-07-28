@@ -96,6 +96,7 @@ cargo fc matrix --pretty
 
 # Run only the maximal feature sets, e.g. to audit unused dependencies behind
 # feature gates without combining mutually exclusive features
+# (requires cargo-udeps to be installed)
 cargo +nightly fc udeps --maximal-features --all-targets
 ```
 
@@ -477,6 +478,7 @@ fail_fast = true
 no_prune_implied = true
 prune_implied = true
 show_pruned = true
+maximal_features = true
 aggregate_targets = true
 no_targets = true
 install_missing_targets = true

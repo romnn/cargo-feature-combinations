@@ -14,6 +14,7 @@ macro_rules! for_each_flag_config_field {
             no_prune_implied,
             prune_implied,
             show_pruned,
+            maximal_features,
             aggregate_targets,
             no_targets,
             install_missing_targets,
@@ -34,6 +35,7 @@ macro_rules! for_each_simple_resolved_flag_field {
             packages_only,
             fail_fast,
             show_pruned,
+            maximal_features,
             aggregate_targets,
             no_targets,
             install_missing_targets,
@@ -91,6 +93,9 @@ pub struct FlagConfig {
     /// Whether pruned combinations should be shown in the summary.
     #[serde(default)]
     pub show_pruned: Option<bool>,
+    /// Whether to run only maximal feature sets.
+    #[serde(default)]
+    pub maximal_features: Option<bool>,
     /// Whether compatible target invocations may be aggregated.
     #[serde(default)]
     pub aggregate_targets: Option<bool>,
@@ -190,6 +195,8 @@ pub struct ResolvedFlags {
     pub no_prune_implied: bool,
     /// Show pruned combinations in the final summary.
     pub show_pruned: bool,
+    /// Run only the maximal feature sets of this package-target matrix.
+    pub maximal_features: bool,
     /// Use aggregate target execution when the whole run can do so.
     pub aggregate_targets: bool,
     /// Ignore configured target lists during target selection.

@@ -1,15 +1,22 @@
 //! Collapse execution plans to their maximal feature sets.
 //!
-//! Backs `--maximal-features`: keep only combinations that are not a subset of
-//! another generated combination, so commands that need broad feature
-//! reachability (for example `cargo udeps`) run once per package-target
-//! instead of once per feature interaction, without losing matrix constraints.
+//! Backs the `maximal_features` flag (`--maximal-features` on the CLI, or any
+//! config scope such as `[workspace.metadata.cargo-fc.subcommands.udeps]`):
+//! keep only combinations that are not a subset of another generated
+//! combination, so commands that need broad feature reachability (for example
+//! `cargo udeps`) run once per package-target instead of once per feature
+//! interaction, without losing matrix constraints.
 
 use super::execution::ExecutionPlanSet;
 use crate::implication::PrunedCombination;
 use std::collections::BTreeMap;
 
-/// Collapse each package-target matrix to its maximal feature sets.
+/// Collapse each package-target matrix with a resolved `maximal_features`
+/// flag to its maximal feature sets.
+///
+/// The flag follows the normal scope chain (workspace, package, target, and
+/// `subcommands` tables, with `--maximal-features` overlaid last), so one
+/// package can collapse while another keeps its full matrix.
 ///
 /// A purely additive matrix becomes one row whose feature set is the union of
 /// all features. Matrix constraints remain authoritative: mutually exclusive
@@ -19,17 +26,31 @@ use std::collections::BTreeMap;
 /// boundaries here.
 ///
 /// Pruned (implied-equivalent) combinations rejoin the search so a union row
-/// that was pruned still covers its subsets. Afterwards the plan set has no
-/// pruned rows left to display, so `show_pruned` is disabled.
-pub fn retain_maximal_feature_sets(plan_set: &mut ExecutionPlanSet<'_>) {
+/// that was pruned still covers its subsets. `show_pruned` stays enabled only
+/// while some package-target still has pruned rows left to display.
+pub fn maybe_retain_maximal_feature_sets(plan_set: &mut ExecutionPlanSet<'_>) {
+    let mut collapsed_any = false;
     for plan in &mut plan_set.plans {
         for package_plan in &mut plan.package_plans {
+            if !package_plan.flags.maximal_features {
+                continue;
+            }
+            collapsed_any = true;
             let pruned = std::mem::take(&mut package_plan.pruned);
             package_plan.combinations =
                 maximal_feature_sets(std::mem::take(&mut package_plan.combinations), pruned);
         }
     }
-    plan_set.show_pruned = false;
+    // Only a collapse consumes pruned rows; without one, `show_pruned` keeps
+    // its resolved value even when no pruned rows happen to exist.
+    if collapsed_any {
+        plan_set.show_pruned = plan_set.show_pruned
+            && plan_set.plans.iter().any(|plan| {
+                plan.package_plans
+                    .iter()
+                    .any(|package_plan| !package_plan.pruned.is_empty())
+            });
+    }
 }
 
 /// Keep only combinations that are not a strict subset of another combination.
@@ -89,7 +110,7 @@ fn maximal_feature_sets(
 
 #[cfg(test)]
 mod test {
-    use super::{maximal_feature_sets, retain_maximal_feature_sets};
+    use super::{maximal_feature_sets, maybe_retain_maximal_feature_sets};
     use crate::implication::PrunedCombination;
     use crate::package::test::{effective_target, package};
     use crate::plan::execution::{ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan};
@@ -111,7 +132,10 @@ mod test {
             combinations,
             pruned: Vec::new(),
             matrix: serde_json::Map::new(),
-            flags: crate::config::ResolvedFlags::default(),
+            flags: crate::config::ResolvedFlags {
+                maximal_features: true,
+                ..crate::config::ResolvedFlags::default()
+            },
             driver: None,
             env: crate::config::ResolvedEnv::default(),
             ignored_diagnostics_config: false,
@@ -153,7 +177,7 @@ mod test {
             show_target: false,
         };
 
-        retain_maximal_feature_sets(&mut plan_set);
+        maybe_retain_maximal_feature_sets(&mut plan_set);
 
         sim_assert_eq!(only_combinations(&plan_set)?, [string_vec(&["a", "b"])]);
         assert!(!plan_set.show_pruned);
@@ -182,7 +206,7 @@ mod test {
             show_target: false,
         };
 
-        retain_maximal_feature_sets(&mut plan_set);
+        maybe_retain_maximal_feature_sets(&mut plan_set);
 
         sim_assert_eq!(
             only_combinations(&plan_set)?,
@@ -268,6 +292,64 @@ mod test {
         );
     }
 
+    /// The flag resolves per package-target: only flagged packages collapse,
+    /// and `show_pruned` survives while an uncollapsed package still has
+    /// pruned rows to display.
+    #[test]
+    fn maximal_features_apply_per_package_scope() -> eyre::Result<()> {
+        let flagged = package("flagged")?;
+        let unflagged = package("unflagged")?;
+        let mut unflagged_plan = package_plan(
+            &unflagged,
+            vec![Vec::new(), string_vec(&["base"]), string_vec(&["extended"])],
+        );
+        unflagged_plan.flags.maximal_features = false;
+        unflagged_plan.pruned = vec![PrunedCombination {
+            features: string_vec(&["base", "extended"]),
+            equivalent_to: string_vec(&["extended"]),
+        }];
+        let mut plan_set = ExecutionPlanSet {
+            plans: vec![ExecutionPlan {
+                target: TargetTriple("test-target".to_string()),
+                package_plans: vec![
+                    package_plan(
+                        &flagged,
+                        vec![Vec::new(), string_vec(&["a"]), string_vec(&["b"])],
+                    ),
+                    unflagged_plan,
+                ],
+            }],
+            show_pruned: true,
+            show_target: false,
+        };
+
+        maybe_retain_maximal_feature_sets(&mut plan_set);
+
+        let [plan] = plan_set.plans.as_slice() else {
+            eyre::bail!("expected one target plan, got {}", plan_set.plans.len());
+        };
+        let [flagged_plan, unflagged_plan] = plan.package_plans.as_slice() else {
+            eyre::bail!(
+                "expected two package plans, got {}",
+                plan.package_plans.len()
+            );
+        };
+        // The flagged package collapses; a and b are incompatible only if the
+        // matrix says so, and here no [a, b] row exists, so both rows remain.
+        sim_assert_eq!(
+            flagged_plan.combinations,
+            vec![string_vec(&["a"]), string_vec(&["b"])]
+        );
+        // The unflagged package keeps its full matrix and its pruned rows.
+        sim_assert_eq!(
+            unflagged_plan.combinations,
+            vec![Vec::new(), string_vec(&["base"]), string_vec(&["extended"])]
+        );
+        sim_assert_eq!(unflagged_plan.pruned.len(), 1);
+        assert!(plan_set.show_pruned);
+        Ok(())
+    }
+
     #[test]
     fn maximal_features_uses_the_canonical_implied_feature_representative() -> eyre::Result<()> {
         let package = package("implied")?;
@@ -288,7 +370,7 @@ mod test {
             show_target: false,
         };
 
-        retain_maximal_feature_sets(&mut plan_set);
+        maybe_retain_maximal_feature_sets(&mut plan_set);
 
         sim_assert_eq!(only_combinations(&plan_set)?, [string_vec(&["extended"])]);
         Ok(())

@@ -51,8 +51,6 @@ pub struct Options {
     pub env_set: Vec<(String, EnvValue)>,
     /// Explicit child-process environment removals from `--unset-env KEY`.
     pub env_remove: Vec<String>,
-    /// Whether to retain only maximal compatible feature sets.
-    pub maximal_features: bool,
     /// Explicit cargo-fc flag overrides provided by CLI flags or environment.
     pub flags: FlagConfig,
 }
@@ -312,7 +310,7 @@ fn consume_flag_or_command(
         "--fail-fast" => options.flags.fail_fast = Some(true),
         "--no-prune-implied" => options.flags.no_prune_implied = Some(true),
         "--show-pruned" => options.flags.show_pruned = Some(true),
-        "--maximal-features" => options.maximal_features = true,
+        "--maximal-features" => options.flags.maximal_features = Some(true),
         "--aggregate-targets" => options.flags.aggregate_targets = Some(true),
         "--no-targets" => options.flags.no_targets = Some(true),
         "--install-missing-targets" => options.flags.install_missing_targets = Some(true),
@@ -453,7 +451,7 @@ mod test {
         let (options, forwarded) =
             parse_args(&["+nightly", "udeps", "--maximal-features", "--all-targets"])?;
 
-        assert!(options.maximal_features);
+        assert_eq!(options.flags.maximal_features, Some(true));
         sim_assert_eq!(forwarded, vec!["+nightly", "udeps", "--all-targets"]);
         Ok(())
     }

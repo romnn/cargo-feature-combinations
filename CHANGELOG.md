@@ -15,6 +15,13 @@
   coverage — for example unused-dependency auditing via
   `cargo +nightly fc udeps --maximal-features` — and also collapses
   `cargo fc matrix` output.
+- `maximal_features` is also a configurable flag default like every other
+  cargo-fc boolean flag: it resolves per package-target through the normal
+  workspace, package, target, and `subcommands` precedence chain, with the
+  explicit CLI flag overlaid last. For example,
+  `[workspace.metadata.cargo-fc.subcommands.udeps] maximal_features = true`
+  makes `cargo fc udeps` always run maximal feature sets, and one package can
+  collapse while another keeps its full matrix.
 
 ### Changed
 

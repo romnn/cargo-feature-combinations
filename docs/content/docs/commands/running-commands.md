@@ -59,6 +59,19 @@ which may combine backends or platform features that the matrix deliberately kee
 has no udeps-specific behavior: it only supplies the generated
 `--no-default-features --features=...` arguments and forwards the custom command.
 
+Like every other boolean flag, `maximal_features` can also be set as a
+[config default]({{< relref "../configuration/flags.md" >}}) in any scope. For example, to make
+`cargo fc udeps` always run maximal without the CLI flag:
+
+```toml
+[workspace.metadata.cargo-fc.subcommands.udeps]
+maximal_features = true
+```
+
+The flag resolves per package-target through the normal precedence chain, so one package can
+collapse while another keeps its full matrix; `--maximal-features` on the CLI still overrides
+config for a single invocation.
+
 Maximal mode is not a replacement for an exhaustive matrix when feature interactions are the thing
 being tested. Keep ordinary `cargo fc check`, `clippy`, and `test` runs for that coverage.
 

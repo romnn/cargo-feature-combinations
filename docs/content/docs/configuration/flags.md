@@ -38,6 +38,7 @@ packages_only = true
 fail_fast = true
 prune_implied = true
 show_pruned = true
+maximal_features = true
 aggregate_targets = true
 no_targets = true
 install_missing_targets = true
@@ -46,6 +47,7 @@ only_packages_with_lib_target = true
 
 - `dedupe = true` implies diagnostics-only output.
 - `prune_implied = false` turns off [automatic pruning]({{< relref "feature-matrix.md#automatic-pruning" >}}).
+- `maximal_features = true` runs [only maximal feature sets]({{< relref "../commands/running-commands.md#running-only-maximal-feature-sets" >}}), resolved per package-target like every other flag.
 
 ## Precedence
 

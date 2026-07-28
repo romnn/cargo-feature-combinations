@@ -69,8 +69,11 @@ fn matrix_rows_for_command(
         default_diagnostics_allowed: false,
         matrix: true,
     };
-    let plan_set =
+    let mut plan_set =
         build_execution_plans(&target_plans, FlagConfig::default(), &context, evaluator)?;
+    // Mirror production planning, which always runs the maximal-features pass
+    // after building execution plans.
+    cargo_feature_combinations::plan::maximal::maybe_retain_maximal_feature_sets(&mut plan_set);
     Ok(build_matrix_rows(&plan_set))
 }
 
@@ -124,6 +127,48 @@ fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<
     let mut eval = PairEval::default();
     let no_command_rows = matrix_rows_for_command(&meta, None, &env, &mut eval)?;
     assert!(any_row_has_feature(&no_command_rows, "gpu"));
+    Ok(())
+}
+
+#[test]
+fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Result<()> {
+    // `maximal_features` is enabled only for `check`, so its matrix collapses
+    // to the single all-features row while `build` keeps the full powerset.
+    let temp = single_crate(
+        r#"
+        [package]
+        name = "solo"
+        version = "0.1.0"
+        edition = "2021"
+        [features]
+        a = []
+        b = []
+        [package.metadata.cargo-fc.subcommands.check]
+        maximal_features = true
+        "#,
+    )?;
+    let meta = metadata(&temp)?;
+    let env = HostEnv("host-triple");
+
+    let mut eval = PairEval::default();
+    let check_rows = matrix_rows_for_command(&meta, Some("check"), &env, &mut eval)?;
+    let check_features: Vec<_> = check_rows
+        .iter()
+        .filter_map(|row| row.get("features").and_then(|value| value.as_str()))
+        .collect();
+    assert_eq!(
+        check_features,
+        vec!["a,b"],
+        "`cargo fc check` should collapse to the single maximal feature set"
+    );
+
+    let mut eval = PairEval::default();
+    let build_rows = matrix_rows_for_command(&meta, Some("build"), &env, &mut eval)?;
+    assert_eq!(
+        build_rows.len(),
+        4,
+        "`cargo fc build` should keep the full powerset"
+    );
     Ok(())
 }
 
