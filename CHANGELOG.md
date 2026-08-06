@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.4.3]
+
 ### Added
 
 - A leading `+toolchain` is now consumed by cargo-fc and applied to every Cargo

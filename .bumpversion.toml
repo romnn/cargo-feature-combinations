@@ -7,6 +7,7 @@ pre_commit_hooks = [
   "cargo metadata --offline --format-version 1 >/dev/null"
 ]
 additional_files = [
+  "CHANGELOG.md",
   "Cargo.lock"
 ]
 
