@@ -1,45 +1,27 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
 name: build
 on:
   push: {}
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  schedule:
-    # 8AM first day of the month in JAN and JUNE to keep workflow badges up-to-date
-    - cron: "0 8 1 1,6 *"
+
+env:
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+  MISE_AUTO_INSTALL: "0"
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-24.04]
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: task build --output group --output-group-error-only
-
   goreleaser:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: arduino/setup-task@v2
+      - uses: jdx/mise-action@v4
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Setup goreleaser
-        run: |
-          brew install zig
-          brew install goreleaser
+          install: false
+          cache: true
+          env: false
+      - run: mise install task
       - name: Release (dry-run)
         run: task build:goreleaser

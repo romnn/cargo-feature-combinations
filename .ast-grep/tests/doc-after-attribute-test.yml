@@ -1,0 +1,15 @@
+id: doc-after-attribute
+valid:
+  - |
+    /// Documents the function.
+    #[must_use]
+    fn documented() -> bool {
+        true
+    }
+invalid:
+  - |
+    #[must_use]
+    /// Documents the function.
+    fn misplaced() -> bool {
+        true
+    }

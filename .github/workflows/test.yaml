@@ -1,40 +1,53 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
 name: test
 on:
   push: {}
   workflow_call: {}
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  schedule:
-    # 8AM first day of the month in JAN and JUNE to keep workflow badges up-to-date
-    - cron: "0 8 1 1,6 *"
+
+env:
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+  MISE_AUTO_INSTALL: "0"
 
 jobs:
   test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
+          install: false
+          cache: true
+          env: false
+      - run: >-
+          mise install task aqua:nextest-rs/nextest/cargo-nextest
+          github:romnn/cargo-feature-combinations
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install nextest
-        run: brew install cargo-nextest
-      - name: Test
-        run: task test --output group --output-group-error-only
+        with:
+          cache-on-failure: true
+      - name: Feature-combination tests
+        run: task test:fc
+      - name: Doc-tests
+        run: task test:doc
 
   publish:
     name: publish (dry-run)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Publish crates (dry-run)
         uses: romnn/publish-crates@main
         with:

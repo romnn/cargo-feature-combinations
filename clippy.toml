@@ -1,7 +1,13 @@
-# unwrap/expect/panic are denied in production code (workspace lints), but
-# they are the idiomatic failure mode inside tests — a failing test SHOULD
-# panic. These flags scope the denies to non-test code.
+# unwrap/expect/panic/indexing are denied in production (workspace lints) but are the
+# idiomatic failure mode in tests, so these settings scope the denies to non-test code.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
+
+# `..` appends to Clippy's built-in proper-noun list instead of replacing it.
+doc-valid-idents = [".."]
+
+disallowed-macros = [
+  { path = "std::dbg", reason = "remove before commit" },
+]

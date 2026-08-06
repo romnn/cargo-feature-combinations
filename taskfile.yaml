@@ -3,7 +3,7 @@ version: "3"
 
 vars:
   ZIGBUILD_IMAGE: ghcr.io/rust-cross/cargo-zigbuild:latest
-  GORELEASER_VERSION: "2.17.0"
+  GORELEASER_VERSION: "2.17.1"
 
 tasks:
   default:
@@ -37,8 +37,9 @@ tasks:
     requires:
       vars: [GORELEASER_ARGS]
     cmds:
-      # The image ships zig, cargo-zigbuild, rust and every release target; only goreleaser
-      # is missing. safe.directory: the bind-mounted repo is owned by another uid.
+      # The image ships zig, cargo-zigbuild, Rust, and every release target; only goreleaser
+      # is missing.
+      # safe.directory is required because the bind-mounted repo is owned by another UID.
       # prettier-ignore
       - >-
         docker run --rm
@@ -47,7 +48,7 @@ tasks:
         -v "${PWD}:/workspace" -w /workspace
         {{.ZIGBUILD_IMAGE}}
         bash -euo pipefail -c '
-        fix_perms() { for d in target target-goreleaser goreleaser-dist; do [ -e "$d" ] && chown -R "${HOST_UID}:${HOST_GID}" "$d" || true; done; };
+        fix_perms() { for d in target goreleaser-dist; do [ -e "$d" ] && chown -R "${HOST_UID}:${HOST_GID}" "$d" || true; done; };
         trap fix_perms EXIT;
         case "$(uname -m)" in x86_64) arch=x86_64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported arch" >&2; exit 1 ;; esac;
         curl -sSfL "https://github.com/goreleaser/goreleaser/releases/download/v{{.GORELEASER_VERSION}}/goreleaser_Linux_${arch}.tar.gz" | tar -xz -C /usr/local/bin goreleaser;
@@ -82,7 +83,7 @@ tasks:
     desc: "check cargo workspace for all combinations of features"
     dir: "{{.ROOT_DIR}}"
     cmds:
-      - cargo fc check --workspace --all-targets {{.CLI_ARGS}}
+      - cargo fc check --all-targets {{.CLI_ARGS}}
 
   clean:
     desc: "clean cargo workspace"
@@ -138,15 +139,38 @@ tasks:
       - hugo server --disableFastRender {{.CLI_ARGS}}
 
   outdated:
-    desc: "check for outdated cargo workspace dependencies"
+    desc: "list outdated deps (incl. new majors): adoptable now vs still in cooldown"
     cmds:
-      - cargo outdated --workspace --ignore-external-rel --exit-code 1 -v {{.CLI_ARGS}}
+      - cooldown outdated --sync {{.CLI_ARGS}}
+
+  outdated:minor:
+    desc: "list outdated deps within the current major only"
+    cmds:
+      - cooldown outdated --no-major --sync {{.CLI_ARGS}}
+
+  upgrade:
+    desc: "upgrade all deps incl. cross-major bumps, within the cooldown"
+    aliases: [update]
+    cmds:
+      - cooldown upgrade --major --sync {{.CLI_ARGS}}
+
+  upgrade:minor:
+    desc: "upgrade all deps within their current major, within the cooldown"
+    cmds:
+      - cooldown upgrade --no-major --sync {{.CLI_ARGS}}
+
+  upgrade:latest:
+    desc: "upgrade ignoring the cooldown window — use deliberately"
+    prompt:
+      - "DANGER: this bypasses the supply-chain cooldown and adopts brand-new (possibly compromised) releases. Prefer 'task upgrade' / 'task upgrade:minor'. Continue?"
+    cmds:
+      - cooldown upgrade --latest {{.CLI_ARGS}}
 
   unused:
     desc: "check for unused cargo workspace dependencies"
     aliases: [unused-dependencies]
     cmds:
-      - cargo +nightly udeps --workspace --all-targets {{.CLI_ARGS}}
+      - cargo +nightly fc udeps --maximal-features --all-targets {{.CLI_ARGS}}
 
   audit:
     desc: "audit cargo workspace dependencies"
@@ -161,17 +185,22 @@ tasks:
   test:
     desc: "test cargo workspace"
     cmds:
-      - cargo nextest run --workspace --all-targets {{.CLI_ARGS}}
+      - cargo nextest run -P default --workspace --all-targets --no-tests warn {{.CLI_ARGS}}
 
   test:fc:
     desc: "test cargo workspace for all combinations of features"
     cmds:
-      - cargo fc nextest run --workspace --all-targets {{.CLI_ARGS}}
+      - cargo fc nextest run -P default --all-targets --no-tests warn {{.CLI_ARGS}}
+
+  test:doc:
+    desc: "test cargo workspace documentation"
+    cmds:
+      - cargo test --doc --workspace {{.CLI_ARGS}}
 
   lint:ast-grep:
     desc: "lint with ast-grep rules"
     cmds:
-      - sg scan
+      - ast-grep scan
 
   lint:
     desc: "lint cargo workspace"

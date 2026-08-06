@@ -56,45 +56,41 @@ builds:
     builder: rust
     binary: *cargo-feature-combinations
     targets:
-      # linux
+      # Linux
       - x86_64-unknown-linux-musl
       - aarch64-unknown-linux-musl
-      # apple
+      # Apple
       - x86_64-apple-darwin
       - aarch64-apple-darwin
-      # windows
+      # Windows
       - x86_64-pc-windows-gnu
       - aarch64-pc-windows-gnullvm
-    dir: ./
     tool: cargo
     command: zigbuild
     flags:
       - "--release"
       - "--package=cargo-feature-combinations"
       - "--bin=cargo-feature-combinations"
-      - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
   - id: *cargo-fc
     builder: rust
     binary: *cargo-fc
     targets:
-      # linux
+      # Linux
       - x86_64-unknown-linux-musl
       - aarch64-unknown-linux-musl
-      # apple
+      # Apple
       - x86_64-apple-darwin
       - aarch64-apple-darwin
-      # windows
+      # Windows
       - x86_64-pc-windows-gnu
       - aarch64-pc-windows-gnullvm
-    dir: ./
     tool: cargo
     command: zigbuild
     flags:
       - "--release"
       - "--package=cargo-feature-combinations"
       - "--bin=cargo-fc"
-      - "--target-dir=./target" # TODO: can we remove this once rust support is better?
 
 archives:
   - id: *cargo-feature-combinations

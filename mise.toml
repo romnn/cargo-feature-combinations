@@ -5,9 +5,10 @@ task = "latest"
 ast-grep = "latest"
 typos = "latest"
 actionlint = "latest"
-goreleaser = "latest"
 "aqua:jqlang/jq" = "latest"
 "aqua:charmbracelet/freeze" = "latest"
+"github:romnn/cooldown" = { version = "latest", minimum_release_age = "0" }
+"github:romnn/bumpversion" = { version = "latest", matching = "bumpversion", minimum_release_age = "0" }
 
 # Documentation site (docs/, Hugo + hugo-book theme).
 # - go: the theme is a Hugo module, so `hugo` shells out to `go` at build time.
@@ -22,10 +23,10 @@ go = "latest"
 "github:rust-cross/cargo-zigbuild" = "latest"
 "github:romnn/cargo-watchdoc" = { version = "latest", minimum_release_age = "0" }
 "aqua:rustsec/rustsec/cargo-audit" = "latest"
-"github:romnn/cooldown" = { version = "latest", minimum_release_age = "0" }
 "github:romnn/cargo-feature-combinations" = { version = "latest", matching = "cargo-fc", minimum_release_age = "0" }
 "github:est31/cargo-udeps" = "latest"
 "aqua:nextest-rs/nextest/cargo-nextest" = "latest"
 
 [settings]
 lockfile = true
+lockfile_platforms = ["linux-x64", "macos-arm64", "windows-x64"]

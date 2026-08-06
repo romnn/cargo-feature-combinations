@@ -1,13 +1,13 @@
 .DS_Store
 
 # taskfile
-/.task
+/.task/
 
 # plans
 /plan
 
 # build artifacts from the example workspaces used to generate screenshots
-/target
+/target/
 examples/**/target
 
 # local env files
@@ -15,7 +15,7 @@ examples/**/target
 .env.*.local
 
 # goreleaser artifacts
-/goreleaser-dist
+/goreleaser-dist/
 .intentionally-empty-file.o
 *_compiler_family.o
 

@@ -1,8 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
 name: release
 on:
   push:
     tags:
       - "*"
+
+env:
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+  MISE_AUTO_INSTALL: "0"
 
 permissions:
   contents: write
@@ -15,9 +20,13 @@ jobs:
   publish-crate:
     runs-on: ubuntu-24.04
     needs: [tests]
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Publish crates
         uses: romnn/publish-crates@main
         with:
@@ -28,17 +37,27 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     needs: [tests]
+    timeout-minutes: 45
     outputs:
-      precompiled-binaries: ${{ steps.upload.outputs.artifact-path }}
+      precompiled-binaries: ${{ steps.upload.outputs.artifact-url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true
-      - uses: arduino/setup-task@v2
+      - name: Allow CI-only release file churn
+        shell: bash
+        run: |
+          allowed_dirty_files=(
+            mise.lock
+          )
+          git update-index --skip-worktree -- "${allowed_dirty_files[@]}"
+      - uses: jdx/mise-action@v4
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          version: "3.42.1"
+          install: false
+          cache: true
+          env: false
+      - run: mise install task
       - name: Release
         run: task release
         env:
@@ -46,7 +65,7 @@ jobs:
           TAP_GITHUB_TOKEN: "${{ secrets.TAP_GITHUB_TOKEN }}"
       - name: Upload precompiled binaries
         id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: goreleaser-dist
           path: goreleaser-dist

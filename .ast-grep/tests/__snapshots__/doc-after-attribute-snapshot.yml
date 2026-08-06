@@ -1,0 +1,18 @@
+id: doc-after-attribute
+snapshots:
+  ? |
+    #[must_use]
+    /// Documents the function.
+    fn misplaced() -> bool {
+        true
+    }
+  : labels:
+    - source: |
+        /// Documents the function.
+      style: primary
+      start: 12
+      end: 40
+    - source: '#[must_use]'
+      style: secondary
+      start: 0
+      end: 11

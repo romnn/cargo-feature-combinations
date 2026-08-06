@@ -3,8 +3,8 @@ current_version = "0.4.2"
 commit = true
 tag = true
 pre_commit_hooks = [
-  # update lockfile with new version
-  "cargo update --offline"
+  # Refresh workspace package versions without updating dependencies.
+  "cargo metadata --offline --format-version 1 >/dev/null"
 ]
 additional_files = [
   "Cargo.lock"

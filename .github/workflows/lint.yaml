@@ -1,25 +1,29 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
 name: lint
 on:
   push: {}
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  schedule:
-    # 8AM first day of the month in JAN and JUNE to keep workflow badges up-to-date
-    - cron: "0 8 1 1,6 *"
+
+env:
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+  MISE_AUTO_INSTALL: "0"
 
 jobs:
   lint:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-24.04]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
+          install: false
+          cache: true
+          env: false
+      - run: >-
+          mise install task zig ast-grep github:romnn/cargo-feature-combinations
+          aqua:rustsec/rustsec/cargo-audit github:est31/cargo-udeps
+          github:rust-cross/cargo-zigbuild
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
       - name: Install Rust stable
@@ -27,44 +31,27 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: |
-          brew install ast-grep
-          brew install cargo-audit
-          brew install cargo-udeps
-      - name: Audit
-        # Advisories shouldn't fail the lint run — a new RUSTSEC advisory can land
-        # without any change on our side. Surface it, but don't block.
-        continue-on-error: true
-        run: task audit --output group --output-group-error-only
-      - name: Check for unused dependencies
-        run: task unused-dependencies --output group --output-group-error-only
-        env:
-          RUSTUP_TOOLCHAIN: nightly
-      - name: Lint
-        run: task lint --output group --output-group-error-only
-
-  goreleaser:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
-      - run: brew install goreleaser
-      - name: Check goreleaser config
-        run: goreleaser check
+          cache-on-failure: true
+      - name: Audit
+        # A new advisory can land without a repository change, so surface it without blocking.
+        continue-on-error: true
+        run: task audit
+      - name: Check for unused dependencies
+        run: task unused-dependencies
+      - name: Lint (all feature combinations × targets)
+        run: task lint:fc
 
   spellcheck:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-task@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: Homebrew/actions/setup-homebrew@master
-      - uses: dtolnay/rust-toolchain@stable
-      - run: |
-          brew install typos-cli
+          install: false
+          cache: true
+          env: false
+      - run: mise install task typos
       - name: Spellcheck
-        run: task spellcheck --output group --output-group-error-only
+        run: task spellcheck

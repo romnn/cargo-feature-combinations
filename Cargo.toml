@@ -50,12 +50,16 @@ lto = true
 codegen-units = 1
 strip = "symbols"
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+warnings = { level = "warn", priority = -1 }
 unsafe_code = "deny"
 unused_must_use = "deny"
 missing_docs = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 unwrap_used = "deny"
@@ -65,9 +69,13 @@ unreachable = "deny"
 unimplemented = "deny"
 todo = "deny"
 indexing_slicing = "deny"
+missing_errors_doc = "warn"
+await_holding_lock = "deny"
 # Every `#[allow(...)]` must carry a `reason = "..."` justifying the escape hatch.
 allow_attributes_without_reason = "deny"
 
+map_unwrap_or = "allow"
+assigning_clones = "allow"
 struct_excessive_bools = "allow"
 
 [dependencies]
@@ -97,3 +105,17 @@ semver = "1"
 cargo_metadata = { version = "0.23", features = ["builder"] }
 assert_fs = "1"
 indoc = "2"
+
+[workspace.metadata.cargo-fc]
+install_missing_targets = true
+dedupe = true
+aggregate_targets = false
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-gnu",
+  "aarch64-apple-darwin",
+]
+
+[workspace.metadata.cargo-fc.subcommands.udeps]
+maximal_features = true
+expand_targets = true
