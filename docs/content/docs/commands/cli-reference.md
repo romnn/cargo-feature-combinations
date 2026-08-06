@@ -54,8 +54,9 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 
 | Variable | Effect |
 |---|---|
-| `CARGO` | Program used for plain Cargo invocations. |
+| `CARGO` | Program used for plain Cargo invocations. Set in child processes to the `+toolchain` cargo when an override is given, unless child `env` config overrides it. |
 | `CARGO_DRIVER` | Set in child processes to the resolved driver unless child `env` config or CLI overrides it. |
+| `RUSTUP_TOOLCHAIN` | Set in child processes to the `+toolchain` override unless child `env` config overrides it. |
 | `CARGO_FC_VERBOSE` | Boolean default for verbose `cargo fc` headers. |
 
 ## Notes

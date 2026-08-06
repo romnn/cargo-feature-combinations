@@ -98,6 +98,21 @@ cargo fc matrix --pretty
 # feature gates without combining mutually exclusive features
 # (requires cargo-udeps to be installed)
 cargo +nightly fc udeps --maximal-features --all-targets
+
+# `+toolchain` may also come after `fc`, which is the only spelling that
+# survives a cargo alias (rustup reads `+toolchain` from the first argument
+# only, long before the alias is expanded)
+cargo fc +nightly udeps --maximal-features --all-targets
+```
+
+A `+toolchain` given to `cargo fc` is resolved with rustup and applied to every
+invocation via `RUSTUP_TOOLCHAIN` and `CARGO`, so it also reaches `rustc`, the
+build driver, and the cargo a wrapper alias spawns. This makes a toolchain
+pinnable from `.cargo/config.toml`:
+
+```toml
+[alias]
+unused = "fc +nightly udeps --maximal-features --all-targets"
 ```
 
 For details, please refer to `--help`:

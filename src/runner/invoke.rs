@@ -3,6 +3,7 @@
 use crate::cli::{CargoSubcommand, cargo_subcommand};
 use crate::config::{ResolvedEnv, ResolvedFlags};
 use crate::print_warning;
+use crate::toolchain::ToolchainOverride;
 
 use color_eyre::eyre;
 use itertools::Itertools;
@@ -163,6 +164,7 @@ fn print_package_cmd(
     all_args: &[&str],
     diagnostics_only: bool,
     driver: Option<&str>,
+    toolchain: Option<&str>,
     progress: Progress,
     stderr: &mut StandardStream,
 ) {
@@ -220,7 +222,17 @@ fn print_package_cmd(
         inv.features.iter().join(", ")
     );
     if inv.flags.verbose {
-        let _ = write!(stderr, " [{} {}]", driver_label(driver), all_args.join(" "));
+        // Spelled the way a user would type it, even though the override is
+        // applied through the environment rather than an argument.
+        let toolchain = toolchain
+            .map(|name| format!(" +{name}"))
+            .unwrap_or_default();
+        let _ = write!(
+            stderr,
+            " [{}{toolchain} {}]",
+            driver_label(driver),
+            all_args.join(" "),
+        );
     }
     stderr.reset().ok();
     let _ = writeln!(stderr);
@@ -250,6 +262,35 @@ fn feature_selection_flag(package_name: &str, features: &[String]) -> String {
             .map(|feature| format!("{package_name}/{feature}"))
             .join(",")
     )
+}
+
+/// Build the child process for one invocation: the program to spawn and the
+/// environment it runs with, but not yet its arguments or working directory.
+fn cargo_command(inv: &Invocation<'_>, toolchain: Option<&ToolchainOverride>) -> process::Command {
+    let cargo: std::ffi::OsString = match (inv.driver, toolchain) {
+        (Some(driver), _) => std::ffi::OsString::from(driver),
+        // `$CARGO` is the binary of whatever toolchain launched cargo-fc, so it
+        // would silently ignore the requested override.
+        (None, Some(toolchain)) => toolchain.cargo().as_os_str().to_owned(),
+        (None, None) => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
+    };
+    let mut cmd = process::Command::new(&cargo);
+    inv.env.apply_to(&mut cmd);
+    if let Some(toolchain) = toolchain {
+        toolchain.apply_to(&mut cmd, inv.env);
+    }
+    // Propagate the resolved driver to the child via `CARGO_DRIVER` so wrapper
+    // aliases (e.g. `lint = "run --package clippy-wrapper -- lint"`) can spawn
+    // the same driver for their inner Cargo invocation. Without this, the inner
+    // command falls back to plain `cargo` and native-C deps fail to
+    // cross-compile even though this outer invocation used `cargo-zigbuild`.
+    apply_cargo_driver(&mut cmd, &cargo, inv.env);
+    force_color(&mut cmd, inv.env);
+
+    if inv.flags.errors_only {
+        apply_errors_only_rustflags(&mut cmd, inv.env);
+    }
+    cmd
 }
 
 /// Run a single cargo invocation for one feature combination and collect
@@ -284,23 +325,7 @@ pub(super) fn run_single_combination(
         )
     };
 
-    let cargo: std::ffi::OsString = match inv.driver {
-        Some(driver) => std::ffi::OsString::from(driver),
-        None => std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()),
-    };
-    let mut cmd = process::Command::new(&cargo);
-    inv.env.apply_to(&mut cmd);
-    // Propagate the resolved driver to the child via `CARGO_DRIVER` so wrapper
-    // aliases (e.g. `lint = "run --package clippy-wrapper -- lint"`) can spawn
-    // the same driver for their inner Cargo invocation. Without this, the inner
-    // command falls back to plain `cargo` and native-C deps fail to
-    // cross-compile even though this outer invocation used `cargo-zigbuild`.
-    apply_cargo_driver(&mut cmd, &cargo, inv.env);
-    force_color(&mut cmd, inv.env);
-
-    if inv.flags.errors_only {
-        apply_errors_only_rustflags(&mut cmd, inv.env);
-    }
+    let mut cmd = cargo_command(inv, ctx.toolchain);
 
     let features_flag = feature_selection_flag(package.name.as_str(), features);
     let mut generated_args = Vec::new();
@@ -314,7 +339,15 @@ pub(super) fn run_single_combination(
     generated_args.push("--no-default-features");
     generated_args.push(&features_flag);
     let args = ctx.invocation_args.with_generated_args(generated_args);
-    print_package_cmd(inv, &args, diagnostics_only, inv.driver, progress, stderr);
+    print_package_cmd(
+        inv,
+        &args,
+        diagnostics_only,
+        inv.driver,
+        ctx.toolchain.map(ToolchainOverride::name),
+        progress,
+        stderr,
+    );
 
     cmd.args(&args).current_dir(working_dir);
     let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only)?;

@@ -39,6 +39,8 @@ pub mod target;
 mod target_install;
 /// IO utilities.
 mod tee;
+/// `+toolchain` overrides applied to every Cargo invocation.
+mod toolchain;
 /// Workspace-level configuration and package discovery.
 pub mod workspace;
 

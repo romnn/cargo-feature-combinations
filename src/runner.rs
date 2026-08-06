@@ -16,6 +16,7 @@ use crate::implication::PrunedCombination;
 use crate::invocation_args::{GeneratedArgPlacement, PreparedInvocationArgs};
 use crate::plan::execution::ExecutionPlanSet;
 use crate::target::{EffectiveTarget, TargetTriple};
+use crate::toolchain::{self, ToolchainOverride};
 use crate::{print_note, print_warning};
 
 use color_eyre::eyre;
@@ -111,6 +112,8 @@ struct AggregateInvocationPlan<'a> {
 /// Pre-computed state shared across all feature combinations in one execution.
 struct RunContext<'a> {
     invocation_args: &'a PreparedInvocationArgs<'a>,
+    /// `+toolchain` consumed from the forwarded args, if cargo-fc resolved one.
+    toolchain: Option<&'a ToolchainOverride>,
 }
 
 /// Execution mode over the same execution plans.
@@ -192,12 +195,16 @@ pub(crate) fn resolve_execution_mode(
 /// fail while reading cargo's output.
 pub fn run_execution_plans(
     plan_set: &ExecutionPlanSet,
-    cargo_args: Vec<&str>,
+    mut cargo_args: Vec<&str>,
     mode: TargetExecutionMode,
     generated_arg_placement: GeneratedArgPlacement,
 ) -> eyre::Result<ExitCode> {
     let start = Instant::now();
 
+    // Taken before the args are split, because a `+toolchain` reaching the child
+    // is a hard error there: `$CARGO` names a toolchain-pinned binary, and only
+    // rustup's proxy ever understands the token.
+    let toolchain = toolchain::take_override(&mut cargo_args, &toolchain::RustupToolchainResolver)?;
     let invocation_args = PreparedInvocationArgs::new(cargo_args, generated_arg_placement);
 
     let removed_feature_args = invocation_args.removed_feature_args();
@@ -228,6 +235,7 @@ pub fn run_execution_plans(
 
     let ctx = RunContext {
         invocation_args: &invocation_args,
+        toolchain: toolchain.as_ref(),
     };
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);

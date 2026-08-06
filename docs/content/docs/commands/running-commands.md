@@ -91,13 +91,29 @@ cargo fc check --workspace --exclude examples
 
 ## Toolchains
 
-A leading `+toolchain` works exactly like it does with cargo:
+A leading `+toolchain` works exactly like it does with cargo, and it may come either before or after `fc`:
 
 ```bash
+cargo +nightly fc check
 cargo fc +nightly check
 ```
 
-The toolchain is forwarded to every invocation. When `cargo fc` installs missing target components (see [Installing targets]({{< relref "../targets/installing-targets.md" >}})), it passes the same override to `rustup`.
+`cargo fc` resolves the override through `rustup` and pins every invocation to that toolchain via `RUSTUP_TOOLCHAIN` and `CARGO`, so the toolchain also reaches `rustc`, any [build driver]({{< relref "../targets/drivers.md" >}}), and the Cargo a wrapper alias spawns. A child `env` setting for either variable wins. When `cargo fc` installs missing target components (see [Installing targets]({{< relref "../targets/installing-targets.md" >}})), it passes the same override to `rustup`.
+
+Because the token never has to survive as an argument, the second form works from a cargo alias body — which the first form cannot do, since `rustup` only reads `+toolchain` from the very first argument, long before the alias is expanded:
+
+```toml
+# .cargo/config.toml
+[alias]
+unused = "fc +nightly udeps --maximal-features --all-targets"
+```
+
+```bash
+# Runs cargo-udeps on nightly, no `+nightly` needed at the prompt
+cargo unused
+```
+
+An unknown toolchain is an error rather than a silent fallback to the current one. If `rustup` is not installed at all, `+toolchain` is left in the forwarded arguments for the build driver to interpret.
 
 ## Built-in commands and aliases
 

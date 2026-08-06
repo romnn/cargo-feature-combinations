@@ -77,11 +77,22 @@ OPTIONS:
                             Cargo invocation (repeatable)
 
 ENVIRONMENT:
-    CARGO                   Program used for plain Cargo invocations
+    CARGO                   Program used for plain Cargo invocations. Set in
+                            child processes to the +toolchain cargo when an
+                            override is given, unless explicitly set or removed
+                            by child env configuration
     CARGO_DRIVER            Set in child processes to the resolved driver unless
                             explicitly set or removed by child env configuration
+    RUSTUP_TOOLCHAIN        Set in child processes to the +toolchain override
+                            unless explicitly set or removed by child env
+                            configuration
     CARGO_FC_VERBOSE        Boolean default for verbose cargo-fc headers
     VERBOSE                 Deprecated fallback for CARGO_FC_VERBOSE
+
+A leading +toolchain is resolved with rustup and applied to every invocation
+through the environment instead of being forwarded as an argument. It may come
+before or after `fc`, so unlike a rustup-consumed +toolchain it also works from
+a cargo alias body, e.g. `unused = "fc +nightly udeps --maximal-features"`.
 
 cargo-fc passes `--no-default-features` to every Cargo invocation, then enables
 the features in the current matrix row. The empty row therefore enables no

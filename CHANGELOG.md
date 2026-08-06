@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A leading `+toolchain` is now consumed by cargo-fc and applied to every Cargo
+  invocation through `RUSTUP_TOOLCHAIN` and `CARGO`, instead of being forwarded
+  as an argument. Forwarding never worked when cargo-fc ran as a cargo
+  subcommand: rustup consumes `+toolchain` from the first argument and Cargo
+  then points `CARGO` at a toolchain-pinned binary, which rejects `+nightly` as
+  an unknown subcommand. Applying the override through the environment also
+  reaches `rustc`, the build driver, and the Cargo that a wrapper alias spawns,
+  and it is what makes a toolchain pinnable from a cargo alias body:
+  `unused = "fc +nightly udeps --maximal-features --all-targets"`. A child `env`
+  setting for either variable still wins. An unknown toolchain is now an error
+  instead of a silent fallback to the current one; without rustup installed the
+  token is left in the forwarded arguments as before.
+
 ## [0.4.2]
 
 ### Added
