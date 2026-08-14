@@ -44,6 +44,7 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `--aggregate-targets` | Batch a combination's configured targets into a single Cargo invocation (one `--target` each). Faster on many cores; falls back to serial for `run` and pruned summaries. |
 | `--no-targets` | Ignore configured target lists for this run; use Cargo's default single target. |
 | `--install-missing-targets` | Install missing Rust target components with `rustup` before running. Explicit opt-in — may mutate the toolchain and use the network. |
+| `--no-omit-host-target-flag` | Inject `--target` for a configured target that is the host too, so it builds under `target/<triple>/` instead of sharing `target/debug` with an ordinary `cargo build`. See [Configured targets]({{< relref "../targets/configured-targets.md#the-host-target-runs-as-a-plain-build" >}}). |
 | `--driver <bin>` | Program invoked in place of `cargo` for each build (e.g. `cargo-zigbuild`, `cross`). See [Build drivers]({{< relref "../targets/drivers.md" >}}). |
 | `--env <KEY=VALUE>` | Set a variable in every matrix-cell Cargo process (repeatable; the last value for a key wins). Overrides scoped [`env` config]({{< relref "../configuration/environment.md" >}}). |
 | `--unset-env <KEY>` | Remove a variable from every matrix-cell Cargo process (repeatable). Applied before CLI `--env` additions. |

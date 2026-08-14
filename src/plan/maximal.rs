@@ -175,6 +175,7 @@ mod test {
             }],
             show_pruned: true,
             show_target: false,
+            host: None,
         };
 
         maybe_retain_maximal_feature_sets(&mut plan_set);
@@ -204,6 +205,7 @@ mod test {
             }],
             show_pruned: false,
             show_target: false,
+            host: None,
         };
 
         maybe_retain_maximal_feature_sets(&mut plan_set);
@@ -321,6 +323,7 @@ mod test {
             }],
             show_pruned: true,
             show_target: false,
+            host: None,
         };
 
         maybe_retain_maximal_feature_sets(&mut plan_set);
@@ -368,6 +371,7 @@ mod test {
             }],
             show_pruned: true,
             show_target: false,
+            host: None,
         };
 
         maybe_retain_maximal_feature_sets(&mut plan_set);

@@ -49,7 +49,7 @@ By default `cargo fc` won't touch the toolchain. Preinstall the target with `rus
 
 ## The driver `cargo-zigbuild` is missing.
 
-When a non-host target is planned, `cargo fc` defaults to `cargo-zigbuild` so native-C deps cross-compile. Install `zig` and `cargo-zigbuild`, or force plain cargo with `--driver cargo` (or `driver = "cargo"` in config). See [Build drivers]({{< relref "targets/drivers.md" >}}).
+`cargo fc` builds every non-host target with `cargo-zigbuild` so native-C deps cross-compile. Install `zig` and `cargo-zigbuild`, or force plain cargo with `--driver cargo` (or `driver = "cargo"` in config). See [Build drivers]({{< relref "targets/drivers.md" >}}).
 
 ## `CARGO_BUILD_TARGET` is being ignored.
 

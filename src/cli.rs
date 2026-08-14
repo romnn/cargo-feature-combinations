@@ -42,8 +42,8 @@ pub struct Options {
     ///
     /// Set by `--driver <bin>`. Overrides both the `[workspace.metadata.cargo-fc]
     /// .driver` config and cargo-fc's automatic driver selection. When unset,
-    /// cargo-fc uses plain `cargo` for host-only runs and defaults to
-    /// `cargo-zigbuild` when any non-host target is planned (so native-C deps
+    /// cargo-fc picks per target: plain `cargo` for the host target, and
+    /// `cargo-zigbuild` for every non-host target (so native-C deps
     /// cross-compile). Set it to `cargo` to force plain cargo, or to any other
     /// cargo wrapper (`cross`, `cargo-careful`, …).
     pub driver: Option<String>,
@@ -314,6 +314,9 @@ fn consume_flag_or_command(
         "--aggregate-targets" => options.flags.aggregate_targets = Some(true),
         "--no-targets" => options.flags.no_targets = Some(true),
         "--install-missing-targets" => options.flags.install_missing_targets = Some(true),
+        // The only cargo-fc flag whose default is on, so the CLI spelling is the
+        // one that turns it off.
+        "--no-omit-host-target-flag" => options.flags.omit_host_target_flag = Some(false),
         "--dedupe" | "--dedup" => {
             options.flags.dedupe = Some(true);
             options.flags.diagnostics_only = Some(true);
@@ -392,6 +395,7 @@ fn cargo_fc_bool_inline_flag(arg: &str) -> Option<&'static str> {
         "--aggregate-targets",
         "--no-targets",
         "--install-missing-targets",
+        "--no-omit-host-target-flag",
         "--dedupe",
         "--dedup",
         "--summary-only",
@@ -639,6 +643,15 @@ mod test {
         let (options, forwarded) = parse_args(&["check", "--workspace", "--exclude", " skip "])?;
 
         assert!(options.exclude_packages.contains("skip"));
+        sim_assert_eq!(forwarded, vec!["check".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_no_omit_host_target_flag_turns_the_default_off() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["check", "--no-omit-host-target-flag"])?;
+
+        assert_eq!(options.flags.omit_host_target_flag, Some(false));
         sim_assert_eq!(forwarded, vec!["check".to_string()]);
         Ok(())
     }

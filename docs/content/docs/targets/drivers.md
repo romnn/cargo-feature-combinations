@@ -5,13 +5,15 @@ weight: 2
 
 # Build drivers
 
-A "driver" is the program `cargo fc` invokes in place of `cargo` for each build. The default depends on whether you're cross-compiling.
+A "driver" is the program `cargo fc` invokes in place of `cargo` for each build. The default depends on the target being built.
 
 ## Why a driver
 
-Cross-compiling a crate with native-C build dependencies (for example `aws-lc-sys`, pulled in via `rustls`) needs a cross C toolchain — the host `cc` can't target another OS. To make that transparent, **when any non-host target is planned, `cargo fc` invokes [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) instead of plain `cargo`**, so zig supplies the cross C compiler and linker for every target.
+Cross-compiling a crate with native-C build dependencies (for example `aws-lc-sys`, pulled in via `rustls`) needs a cross C toolchain — the host `cc` can't target another OS. To make that transparent, **`cargo fc` chooses the driver per target: the host target builds with plain `cargo`, every non-host target with [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild)**, so zig supplies the cross C compiler and linker exactly where one is needed.
 
 This means for cross-compilation you need `cargo-zigbuild` and `zig` installed. **Host-only runs use plain `cargo`** and need nothing extra.
+
+The choice is per target rather than per run for a reason: a driver that rewrites the C and linker environment changes the fingerprints of every unit that reads it. Driving the host target through zig just because some *other* target in the same run needs it would make `cargo fc` and everyday `cargo check` / `cargo test` invalidate each other's artifacts on every switch, even though both build the same target into the same directory.
 
 ## Choosing the driver
 

@@ -64,11 +64,19 @@ OPTIONS:
                             Install missing Rust target components with rustup
                             before running Cargo. Explicit opt-in because this
                             may mutate the toolchain and use the network.
+    --no-omit-host-target-flag
+                            Inject --target <triple> for a configured target
+                            that is the host too, so it builds under
+                            target/<triple>/ like every other configured target.
+                            By default the host row passes no --target and lands
+                            in target/debug, sharing artifacts with an ordinary
+                            cargo build. Also settable via
+                            [workspace.metadata.cargo-fc].omit_host_target_flag.
     --driver <bin>          Program invoked in place of `cargo` for each build
-                            (e.g. `cargo-zigbuild`, `cross`). Defaults to plain
-                            `cargo` for host-only runs and to `cargo-zigbuild`
-                            when any non-host target is planned, so native-C
-                            dependencies cross-compile. Also settable via
+                            (e.g. `cargo-zigbuild`, `cross`). Chosen per target
+                            when unset: plain `cargo` for the host target, and
+                            `cargo-zigbuild` for every non-host target, so
+                            native-C dependencies cross-compile. Also settable via
                             [workspace.metadata.cargo-fc].driver; pass `cargo` to
                             force plain cargo.
     --env <KEY=VALUE>       Set an environment variable in each matching Cargo

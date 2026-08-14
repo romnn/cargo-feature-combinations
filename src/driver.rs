@@ -1,9 +1,13 @@
 use crate::plan::execution::ExecutionPlanSet;
 use crate::print_warning;
-use crate::target::TargetEnvironment;
+use crate::target::TargetTriple;
 use color_eyre::eyre;
 use std::io;
 use std::process::{Command, Stdio};
+
+/// The driver cargo-fc reaches for on its own when a target cannot be built by
+/// plain cargo.
+const CROSS_TARGET_DRIVER: &str = "cargo-zigbuild";
 
 /// Finalize the spawned build driver for every package-target plan.
 ///
@@ -11,67 +15,88 @@ use std::process::{Command, Stdio};
 /// into [`crate::plan::execution::PackageExecutionPlan::driver`]. This pass
 /// turns each into the program actually spawned: an explicit config/CLI driver
 /// is normalized (`"cargo"` -> plain `$CARGO`), while an unset driver falls
-/// back to cargo-fc's cross-target default (`cargo-zigbuild` when available and
-/// any planned target is a cross target, else plain `cargo`).
-pub(crate) fn finalize_plan_drivers(
-    plan_set: &mut ExecutionPlanSet,
-    env: &impl TargetEnvironment,
-) -> eyre::Result<()> {
+/// back to cargo-fc's built-in default for that plan's target.
+pub(crate) fn finalize_plan_drivers(plan_set: &mut ExecutionPlanSet) -> eyre::Result<()> {
     let needs_default = plan_set
         .plans
         .iter()
         .flat_map(|plan| &plan.package_plans)
         .any(|pp| pp.driver.is_none());
-    let default = if needs_default {
-        usable_default_driver(plan_set, env)
-    } else {
-        None
-    };
+    let mut default = needs_default.then(|| DefaultDriver::new(plan_set.host.clone()));
 
     for plan in &mut plan_set.plans {
+        let fallback = default
+            .as_mut()
+            .and_then(|default| default.for_target(&plan.target));
         for pp in &mut plan.package_plans {
-            pp.driver = finalize_driver(pp.driver.as_deref(), default.as_deref())?;
+            pp.driver = finalize_driver(pp.driver.as_deref(), fallback.as_deref())?;
         }
     }
     Ok(())
 }
 
-fn usable_default_driver(
-    plan_set: &ExecutionPlanSet,
-    env: &impl TargetEnvironment,
-) -> Option<String> {
-    let default = cross_target_default_driver(plan_set, env)?;
-    if driver_is_available(&default) {
-        Some(default)
-    } else {
-        print_warning!(
-            "build driver `{default}` was selected automatically for a cross-target run but was not found; using plain cargo"
-        );
-        None
-    }
+/// cargo-fc's built-in driver default, resolved per target.
+///
+/// The default belongs to the target, not to the run: a plan for the host
+/// target compiles exactly the way an ordinary `cargo` invocation would, so
+/// routing it through the cross driver only makes its artifacts
+/// fingerprint-incompatible with everyday `cargo check` / `cargo test` in the
+/// same target directory — the two then invalidate each other on every switch.
+/// Only the targets plain cargo cannot build get [`CROSS_TARGET_DRIVER`].
+struct DefaultDriver {
+    /// `None` when host detection failed. Every target then falls back to plain
+    /// cargo, mirroring missing-target installation behavior.
+    host: Option<TargetTriple>,
+    /// Whether [`CROSS_TARGET_DRIVER`] has been looked up yet, and what the
+    /// lookup found.
+    cross: CrossDriverProbe,
 }
 
-/// cargo-fc's built-in driver default: `cargo-zigbuild` when any planned target
-/// is a cross target, else plain `cargo`. Host detection failure degrades to
-/// plain cargo with a warning, mirroring missing-target installation behavior.
-pub(crate) fn cross_target_default_driver(
-    plan_set: &ExecutionPlanSet,
-    env: &impl TargetEnvironment,
-) -> Option<String> {
-    if plan_set.plans.is_empty() {
-        return None;
+/// Result of looking up [`CROSS_TARGET_DRIVER`] on `PATH`, memoized so a run
+/// with many cross targets probes (and warns) once.
+enum CrossDriverProbe {
+    Unprobed,
+    Available,
+    Missing,
+}
+
+impl DefaultDriver {
+    fn new(host: Option<TargetTriple>) -> Self {
+        Self {
+            host,
+            cross: CrossDriverProbe::Unprobed,
+        }
     }
-    let host = match env.host_target() {
-        Ok(host) => host,
-        Err(err) => {
-            print_warning!(
-                "could not detect host target to select a build driver: {err}; using plain cargo"
-            );
+
+    /// Whether `target` is a cross target that plain cargo cannot be trusted to
+    /// build. An undetectable host answers `false` for every target.
+    fn needs_cross_driver(&self, target: &TargetTriple) -> bool {
+        self.host.as_ref().is_some_and(|host| host != target)
+    }
+
+    /// The driver to fall back to for `target`, or `None` for plain cargo.
+    ///
+    /// The cross driver is probed at most once per run, and only if a cross
+    /// target actually reaches this.
+    fn for_target(&mut self, target: &TargetTriple) -> Option<String> {
+        if !self.needs_cross_driver(target) {
             return None;
         }
-    };
-    let cross = plan_set.plans.iter().any(|plan| plan.target != host);
-    cross.then(|| "cargo-zigbuild".to_string())
+        if matches!(self.cross, CrossDriverProbe::Unprobed) {
+            self.cross = if driver_is_available(CROSS_TARGET_DRIVER) {
+                CrossDriverProbe::Available
+            } else {
+                print_warning!(
+                    "build driver `{CROSS_TARGET_DRIVER}` was selected automatically for a cross-target run but was not found; using plain cargo"
+                );
+                CrossDriverProbe::Missing
+            };
+        }
+        match self.cross {
+            CrossDriverProbe::Available => Some(CROSS_TARGET_DRIVER.to_string()),
+            CrossDriverProbe::Unprobed | CrossDriverProbe::Missing => None,
+        }
+    }
 }
 
 fn driver_is_available(driver: &str) -> bool {
@@ -117,27 +142,9 @@ fn normalize_driver(driver: &str) -> eyre::Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cross_target_default_driver, finalize_driver};
-    use crate::plan;
-    use crate::target;
+    use super::{DefaultDriver, finalize_driver};
+    use crate::target::{self, TargetTriple};
     use color_eyre::eyre;
-
-    fn execution_plan_set(
-        targets: &[&str],
-        show_pruned: bool,
-    ) -> plan::execution::ExecutionPlanSet<'static> {
-        plan::execution::ExecutionPlanSet {
-            plans: targets
-                .iter()
-                .map(|target| plan::execution::ExecutionPlan {
-                    target: target::TargetTriple((*target).to_string()),
-                    package_plans: Vec::new(),
-                })
-                .collect(),
-            show_pruned,
-            show_target: targets.len() > 1,
-        }
-    }
 
     struct DriverTestEnv {
         host: Option<&'static str>,
@@ -157,23 +164,23 @@ mod tests {
     }
 
     #[test]
-    fn cross_target_default_is_plain_cargo_for_host_only_plan() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["host"], false),
-            &DriverTestEnv { host: Some("host") },
-        );
+    fn default_driver_is_plain_cargo_for_the_host_target() {
+        let default =
+            DefaultDriver::new(target::detect_host(&DriverTestEnv { host: Some("host") }));
 
-        assert_eq!(default, None);
+        assert!(!default.needs_cross_driver(&TargetTriple("host".to_string())));
     }
 
+    /// The host target keeps plain cargo even when the same run also plans a
+    /// cross target, so its artifacts stay interchangeable with an ordinary
+    /// `cargo` build.
     #[test]
-    fn cross_target_default_is_zigbuild_for_cross_plan() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["host", "wasm"], false),
-            &DriverTestEnv { host: Some("host") },
-        );
+    fn default_driver_is_per_target_not_per_run() {
+        let default =
+            DefaultDriver::new(target::detect_host(&DriverTestEnv { host: Some("host") }));
 
-        assert_eq!(default, Some("cargo-zigbuild".to_string()));
+        assert!(!default.needs_cross_driver(&TargetTriple("host".to_string())));
+        assert!(default.needs_cross_driver(&TargetTriple("wasm".to_string())));
     }
 
     #[test]
@@ -210,12 +217,9 @@ mod tests {
     }
 
     #[test]
-    fn cross_target_default_falls_back_to_plain_cargo_when_host_detection_fails() {
-        let default = cross_target_default_driver(
-            &execution_plan_set(&["wasm"], false),
-            &DriverTestEnv { host: None },
-        );
+    fn default_driver_falls_back_to_plain_cargo_when_host_detection_fails() {
+        let default = DefaultDriver::new(target::detect_host(&DriverTestEnv { host: None }));
 
-        assert_eq!(default, None);
+        assert!(!default.needs_cross_driver(&TargetTriple("wasm".to_string())));
     }
 }

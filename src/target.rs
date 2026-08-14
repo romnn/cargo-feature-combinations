@@ -1,5 +1,24 @@
+use crate::print_warning;
 use color_eyre::eyre::{self, WrapErr};
 use std::process::Command;
+
+/// Resolve the host triple for a run, warning once when it cannot be detected.
+///
+/// Execution treats the host specially in two places — it keeps plain `cargo`
+/// as its driver and needs no injected `--target` — so both fall back to the
+/// conservative choice when this returns `None`: every target gets the cross
+/// driver default and keeps its explicit `--target` flag.
+pub fn detect_host(env: &impl TargetEnvironment) -> Option<TargetTriple> {
+    match env.host_target() {
+        Ok(host) => Some(host),
+        Err(err) => {
+            print_warning!(
+                "could not detect the host target: {err}; no target will be treated as native"
+            );
+            None
+        }
+    }
+}
 
 /// A Rust target triple.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

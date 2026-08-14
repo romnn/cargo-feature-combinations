@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Added
+
+- `omit_host_target_flag` config key and the matching `--no-omit-host-target-flag`
+  flag, opting out of the host `--target` omission below. Set it to `false` to
+  build the host row under `target/<triple>/` like every other configured
+  target — for uniform artifact paths, or to keep `build.rustflags` off build
+  scripts and proc macros. It resolves per package-target like every other flag,
+  and is the only cargo-fc flag whose default is on.
+
+### Changed
+
+- A configured target that is the host no longer gets an injected
+  `--target <triple>`. Cargo already defaults to the host, so the flag changed
+  nothing about what was built — but it moved the output from `target/debug`
+  into `target/<triple>/`, where an ordinary `cargo build` (which passes no
+  `--target`) could not reuse any of it, and it stopped Cargo from applying
+  `build.rustflags` to build scripts and proc macros, fingerprinting those units
+  differently from every other build in the same directory. A workspace that
+  lists its host among `targets` therefore maintained a second full copy of the
+  host build. An aggregated invocation that mixes the host with cross targets
+  still passes every `--target`, including the host's, and `--target` on the CLI
+  or `CARGO_BUILD_TARGET` are untouched.
+
+- The automatic build driver is now chosen per target instead of per run. The
+  host target builds with plain `cargo` and only non-host targets fall back to
+  `cargo-zigbuild`; previously a single non-host target in the configured list
+  switched every row, host included, to the cross driver. `cargo-zigbuild`
+  rewrites the C and linker environment, so the host rows it produced were
+  fingerprint-incompatible with an ordinary `cargo check` / `cargo test` in the
+  same target directory: alternating between the two rebuilt the graph each
+  time (87 crates in one workspace measured here), which read as cargo-fc not
+  caching at all. Host rows now reuse — and are reused by — everyday Cargo
+  builds. Explicit `--driver` and `driver` config are unaffected, and a target
+  override can still pin either choice per package, target, or subcommand.
+
 ## [0.4.3]
 
 ### Added

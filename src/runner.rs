@@ -273,11 +273,7 @@ fn serial_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
             } else {
                 SummaryTarget::Hidden
             };
-            let inject_targets = if pp.target.source.should_inject_target_arg() {
-                vec![pp.target.triple.0.clone()]
-            } else {
-                Vec::new()
-            };
+            let inject_targets = plan_set.inject_target_args([&pp.target], pp.flags);
 
             steps.push(Step::StartSerialBlock);
             for combo in &pp.combinations {
@@ -311,12 +307,7 @@ fn aggregate_steps<'a>(plan_set: &'a ExecutionPlanSet<'a>) -> Vec<Step<'a>> {
                 [single] => SummaryTarget::Single(single.clone()),
                 _ => SummaryTarget::Group(triples),
             };
-            let inject_targets = inv_plan
-                .targets
-                .iter()
-                .filter(|t| t.source.should_inject_target_arg())
-                .map(|t| t.triple.0.clone())
-                .collect();
+            let inject_targets = plan_set.inject_target_args(&inv_plan.targets, inv_plan.flags);
 
             Step::Run(InvocationStep {
                 package: inv_plan.package,
@@ -588,6 +579,7 @@ mod test {
             ],
             show_pruned: false,
             show_target: true,
+            host: None,
         };
 
         let simplified: Vec<_> = aggregate_invocation_plans(&plan_set)
@@ -655,6 +647,7 @@ mod test {
             ],
             show_pruned: false,
             show_target: true,
+            host: None,
         };
 
         let simplified: Vec<_> = aggregate_invocation_plans(&plan_set)
@@ -708,6 +701,7 @@ mod test {
             ],
             show_pruned: false,
             show_target: true,
+            host: None,
         };
 
         let simplified = aggregate_invocation_plans(&plan_set)
@@ -761,6 +755,7 @@ mod test {
             ],
             show_pruned: false,
             show_target: true,
+            host: None,
         };
 
         let simplified = aggregate_invocation_plans(&plan_set)

@@ -44,7 +44,7 @@ If `cargo fc` is not found, confirm that Cargo's binary directory (`~/.cargo/bin
 ## Requirements
 
 - **Rust and Cargo.** `cargo fc` drives your normal toolchain; use `+toolchain` just as you would with cargo (for example `cargo fc +nightly check`).
-- **`cargo-zigbuild` and `zig`** — only if you cross-compile. When a non-host target is planned, `cargo fc` defaults to the `cargo-zigbuild` driver so native-C dependencies cross-compile cleanly. Host-only runs use plain `cargo` and need nothing extra. See [Build drivers]({{< relref "targets/drivers.md" >}}).
+- **`cargo-zigbuild` and `zig`** — only if you cross-compile. `cargo fc` builds every non-host target with the `cargo-zigbuild` driver so native-C dependencies cross-compile cleanly. The host target always uses plain `cargo`, so host-only runs need nothing extra. See [Build drivers]({{< relref "targets/drivers.md" >}}).
 
 ## Use in GitHub Actions
 

@@ -78,6 +78,51 @@ pub struct ExecutionPlanSet<'a> {
     /// Whether the `target = ...` field should be shown (not the implicit
     /// single-host default).
     pub show_target: bool,
+    /// The host triple, once resolved for a run. `None` while planning, for
+    /// `cargo fc matrix` (which spawns nothing), and when host detection fails.
+    ///
+    /// Execution reads it to decide which plans are native: the driver default
+    /// and the injected `--target` flags both differ for the host.
+    pub host: Option<TargetTriple>,
+}
+
+impl ExecutionPlanSet<'_> {
+    /// The `--target <triple>` flags cargo-fc must inject for one invocation.
+    ///
+    /// An invocation that builds only the host target gets none: Cargo already
+    /// defaults to the host, and passing the flag anyway moves the build under
+    /// `target/<triple>/`, where an ordinary `cargo build` — which passes no
+    /// `--target` — cannot reuse any of it. Cargo also applies `build.rustflags`
+    /// to build scripts and proc macros only when no `--target` is given, so the
+    /// flag would additionally fingerprint those units differently from every
+    /// other build in the same directory.
+    ///
+    /// An aggregated invocation that mixes the host with cross targets keeps
+    /// every flag, including the host's: dropping one would silently narrow what
+    /// Cargo builds.
+    ///
+    /// `omit_host_target_flag = false` opts out, for a workspace that wants the
+    /// host row to build under `target/<triple>/` like every other configured
+    /// target — for uniform artifact paths, or to keep `build.rustflags` off
+    /// host units.
+    pub(crate) fn inject_target_args<'t>(
+        &self,
+        targets: impl IntoIterator<Item = &'t EffectiveTarget>,
+        flags: ResolvedFlags,
+    ) -> Vec<String> {
+        let triples: Vec<String> = targets
+            .into_iter()
+            .filter(|target| target.source.should_inject_target_arg())
+            .map(|target| target.triple.0.clone())
+            .collect();
+        if flags.inject_host_target_flag {
+            return triples;
+        }
+        match (triples.as_slice(), self.host.as_ref()) {
+            ([only], Some(host)) if only.as_str() == host.as_str() => Vec::new(),
+            _ => triples,
+        }
+    }
 }
 
 /// Build owned execution plans from target plans and command context.
@@ -133,7 +178,7 @@ pub fn build_execution_plans<'a>(
                 context,
                 evaluator,
             )? {
-                PackagePlanOutcome::Kept(package_plan) => package_plan,
+                PackagePlanOutcome::Kept(package_plan) => *package_plan,
                 PackagePlanOutcome::TargetSelectionSkipped => {
                     status.target_selection_skipped = true;
                     continue;
@@ -162,6 +207,8 @@ pub fn build_execution_plans<'a>(
         plans,
         show_pruned,
         show_target,
+        // Planning never shells out to `rustc -vV`; execution fills this in.
+        host: None,
     })
 }
 
@@ -233,7 +280,7 @@ fn resolve_package_execution_plan<'a>(
         (combinations, prune_result.pruned)
     };
 
-    Ok(PackagePlanOutcome::Kept(PackageExecutionPlan {
+    Ok(PackagePlanOutcome::Kept(Box::new(PackageExecutionPlan {
         package: planned.package,
         target: planned.target.clone(),
         combinations,
@@ -243,7 +290,7 @@ fn resolve_package_execution_plan<'a>(
         driver: resolved.driver,
         env: resolved.env,
         ignored_diagnostics_config: resolved.ignored_diagnostics_config,
-    }))
+    })))
 }
 
 #[derive(Default)]
@@ -254,7 +301,9 @@ struct PackagePlanningStatus {
 }
 
 enum PackagePlanOutcome<'a> {
-    Kept(PackageExecutionPlan<'a>),
+    /// Boxed to keep the outcome small: a resolved plan dwarfs the two skip
+    /// variants, which carry nothing.
+    Kept(Box<PackageExecutionPlan<'a>>),
     TargetSelectionSkipped,
     Filtered,
 }
@@ -281,7 +330,9 @@ fn is_configured_target_source(source: TargetSource) -> bool {
 mod test {
     use super::{ExecutionPlanSet, PlanBuildContext, build_execution_plans};
     use crate::cfg_eval::CfgEvaluator;
-    use crate::config::{Config, FlagConfig, ScopeConfig, TargetOverride, WorkspaceTargetOverride};
+    use crate::config::{
+        Config, FlagConfig, ResolvedFlags, ScopeConfig, TargetOverride, WorkspaceTargetOverride,
+    };
     use crate::package::Package as _;
     use crate::package::test::{effective_target, package};
     use crate::plan::targets::{PlannedPackage, TargetPlan, TargetPlans};
@@ -541,5 +592,115 @@ mod test {
             ],
         );
         Ok(())
+    }
+
+    fn plan_set_with_host(host: Option<&str>) -> ExecutionPlanSet<'static> {
+        ExecutionPlanSet {
+            plans: Vec::new(),
+            show_pruned: false,
+            show_target: false,
+            host: host.map(|host| TargetTriple(host.to_string())),
+        }
+    }
+
+    fn configured(triple: &str) -> EffectiveTarget {
+        EffectiveTarget {
+            triple: TargetTriple(triple.to_string()),
+            source: TargetSource::WorkspaceConfig,
+        }
+    }
+
+    /// Resolves through [`FlagConfig`] rather than setting the resolved field,
+    /// so these cases also pin the default and the polarity flip.
+    fn flags(omit_host_target_flag: Option<bool>) -> ResolvedFlags {
+        ResolvedFlags::from_config(FlagConfig {
+            omit_host_target_flag,
+            ..FlagConfig::default()
+        })
+    }
+
+    /// The host row must run exactly like a bare `cargo check`, so it lands in
+    /// `target/debug` where an ordinary build can reuse it.
+    #[test]
+    fn host_only_invocation_injects_no_target_flag() {
+        let plan_set = plan_set_with_host(Some("host"));
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&configured("host")], flags(None)),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn cross_only_invocation_keeps_its_target_flag() {
+        let plan_set = plan_set_with_host(Some("host"));
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&configured("wasm")], flags(None)),
+            vec!["wasm".to_string()]
+        );
+    }
+
+    /// Dropping the host flag from an aggregated group would narrow what Cargo
+    /// builds to the cross targets alone.
+    #[test]
+    fn aggregated_group_keeps_the_host_flag_alongside_cross_targets() {
+        let plan_set = plan_set_with_host(Some("host"));
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&configured("host"), &configured("wasm")], flags(None)),
+            vec!["host".to_string(), "wasm".to_string()]
+        );
+    }
+
+    #[test]
+    fn undetectable_host_keeps_every_configured_target_flag() {
+        let plan_set = plan_set_with_host(None);
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&configured("host")], flags(None)),
+            vec!["host".to_string()]
+        );
+    }
+
+    /// `--target` on the CLI and `CARGO_BUILD_TARGET` reach Cargo on their own.
+    #[test]
+    fn sources_cargo_already_sees_are_never_injected() {
+        let plan_set = plan_set_with_host(Some("host"));
+        let cli = EffectiveTarget {
+            triple: TargetTriple("wasm".to_string()),
+            source: TargetSource::Cli,
+        };
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&cli], flags(None)),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn omit_host_target_flag_false_injects_the_host_flag() {
+        let plan_set = plan_set_with_host(Some("host"));
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&configured("host")], flags(Some(false))),
+            vec!["host".to_string()]
+        );
+    }
+
+    /// The opt-out only ever adds the host's own flag back; a source Cargo
+    /// already sees stays uninjected.
+    #[test]
+    fn omit_host_target_flag_false_still_skips_cli_targets() {
+        let plan_set = plan_set_with_host(Some("host"));
+        let cli = EffectiveTarget {
+            triple: TargetTriple("host".to_string()),
+            source: TargetSource::Cli,
+        };
+
+        sim_assert_eq!(
+            plan_set.inject_target_args([&cli], flags(Some(false))),
+            Vec::<String>::new()
+        );
     }
 }

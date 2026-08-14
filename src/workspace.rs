@@ -350,6 +350,30 @@ mod test {
     }
 
     #[test]
+    fn workspace_config_reads_omit_host_target_flag() -> eyre::Result<()> {
+        init();
+
+        let package = crate::package::test::package_with_features(&[])?;
+        let metadata = workspace_builder()
+            .packages(vec![package.clone()])
+            .workspace_members(vec![package.id.clone()])
+            .workspace_metadata(json!({
+                "cargo-fc": {
+                    "omit_host_target_flag": false
+                }
+            }))
+            .build()?;
+
+        let config = metadata.workspace_config()?;
+
+        assert_eq!(
+            config.base.settings.flags.omit_host_target_flag,
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn workspace_metadata_rejects_unknown_flag_keys() -> eyre::Result<()> {
         init();
 

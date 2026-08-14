@@ -19,12 +19,15 @@ macro_rules! for_each_flag_config_field {
             no_targets,
             install_missing_targets,
             only_packages_with_lib_target,
+            omit_host_target_flag,
         );
     };
 }
 
-// Fields copied by the default `unwrap_or(false)` rule. Diagnostics and
-// normalized pruning are resolved explicitly because they have implications.
+// Fields copied by the default `unwrap_or(false)` rule.
+// Diagnostics, normalized pruning, and the host `--target` flag are resolved
+// explicitly because they have implications or default to something other than
+// `false`.
 macro_rules! for_each_simple_resolved_flag_field {
     ($callback:ident) => {
         $callback!(
@@ -54,8 +57,9 @@ for_each_flag_config_field!(define_flag_keys);
 /// Raw configurable cargo-fc flag defaults.
 ///
 /// Each field is tri-state: absent means "inherit from the next broader
-/// scope", while `true`/`false` explicitly override broader config. CLI flags
-/// are converted into this same shape with `true` entries and overlaid last.
+/// scope", while `true`/`false` explicitly override broader config.
+/// CLI flags are converted into this same shape and overlaid last, as `true`
+/// entries except for the opt-out spelling of a default-on flag.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FlagConfig {
     /// Whether to hide cargo output and only print summaries.
@@ -108,6 +112,12 @@ pub struct FlagConfig {
     /// Whether packages without a library target should be skipped.
     #[serde(default)]
     pub only_packages_with_lib_target: Option<bool>,
+    /// Whether a configured target that is the host should build without an
+    /// injected `--target <triple>`.
+    ///
+    /// Defaults to `true`, unlike every other flag here.
+    #[serde(default)]
+    pub omit_host_target_flag: Option<bool>,
 }
 
 impl FlagConfig {
@@ -205,6 +215,14 @@ pub struct ResolvedFlags {
     pub install_missing_targets: bool,
     /// Skip packages that do not expose a library target.
     pub only_packages_with_lib_target: bool,
+    /// Inject `--target <triple>` even for a configured target that is the
+    /// host.
+    ///
+    /// The inverse of the `omit_host_target_flag` config key, so that the
+    /// all-`false` default resolves to the default-on omission — the same shape
+    /// as [`no_prune_implied`](Self::no_prune_implied) and its `prune_implied`
+    /// spelling.
+    pub inject_host_target_flag: bool,
 }
 
 impl ResolvedFlags {
@@ -227,6 +245,7 @@ impl ResolvedFlags {
         out.diagnostics_only = config.diagnostics_only.unwrap_or(false) || dedupe;
         out.dedupe = dedupe;
         out.no_prune_implied = no_prune_implied;
+        out.inject_host_target_flag = !config.omit_host_target_flag.unwrap_or(true);
         out
     }
 
@@ -398,6 +417,8 @@ mod tests {
         expected_simple_resolved.remove("diagnostics_only");
         expected_simple_resolved.remove("dedupe");
         expected_simple_resolved.remove("no_prune_implied");
+        // Resolves to `!inject_host_target_flag`, and defaults to `true`.
+        expected_simple_resolved.remove("omit_host_target_flag");
         assert_eq!(simple_resolved, expected_simple_resolved);
     }
 

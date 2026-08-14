@@ -53,6 +53,23 @@ For a command that supports targets, each package's target is resolved as:
 > [!WARNING]
 > **Configured lists intentionally beat `CARGO_BUILD_TARGET`.** Repository config is the declarative matrix and shouldn't be silently collapsed by a developer's ambient environment — this differs from Cargo's own `[build].target` precedence. To run a single target for one invocation, pass `--target <triple>` (overrides all configured lists) or `--no-targets` (ignore configured lists, fall back to Cargo's default single target).
 
+## The host target runs as a plain build
+
+When a configured list names the host, `cargo fc` runs that target the way a bare `cargo check` would: no `--target` flag, and plain `cargo` as the [driver]({{< relref "drivers.md" >}}).
+
+The flag would change nothing about *what* is built — Cargo already defaults to the host — but it changes *where* and *how*. Output moves from `target/debug` into `target/<triple>/`, so an ordinary `cargo build` in the same workspace can reuse none of it, and Cargo stops applying `build.rustflags` to build scripts and proc macros, fingerprinting those units differently from every other build in that directory. Listing your host among `targets` would otherwise cost a second full copy of the host build.
+
+An `--aggregate-targets` invocation that groups the host with cross targets keeps every `--target`, the host's included — dropping one there would narrow what Cargo builds.
+
+To build the host row under `target/<triple>/` like every other configured target — for uniform artifact paths in CI, or to keep `build.rustflags` off build scripts and proc macros — turn the omission off:
+
+```toml
+[workspace.metadata.cargo-fc]
+omit_host_target_flag = false
+```
+
+Or per invocation with `--no-omit-host-target-flag`. This resolves per package-target like every other [flag]({{< relref "../configuration/flags.md" >}}), and only controls the injected flag; the host row's [driver]({{< relref "drivers.md" >}}) stays plain `cargo` unless you set `driver` yourself.
+
 ## Which commands expand targets
 
 Configured targets apply only to commands that accept Cargo's `--target` flag. The built-ins `check`, `clippy`, `build`, `doc`, `test`, `run`, and `cargo fc matrix` get this automatically. Aliases that resolve to a built-in inherit it.

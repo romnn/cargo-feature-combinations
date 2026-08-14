@@ -585,11 +585,19 @@ includes values in diagnostics or matrix JSON. This differs from Cargo's own
 
 Cross-compiling a crate with native-C build dependencies (e.g. `aws-lc-sys` via
 `rustls`) needs a cross C toolchain — the host `cc` can't target another OS. To
-make that transparent, **when any non-host target is planned cargo-fc invokes
-[`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) instead of plain
-`cargo`**, so zig supplies the cross C compiler and linker for every target. You
-must have `cargo-zigbuild` (and `zig`) installed; host-only runs use plain
-`cargo`.
+make that transparent, **cargo-fc picks the driver per target: the host target
+builds with plain `cargo`, every non-host target with
+[`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild)**, so zig
+supplies the cross C compiler and linker exactly where one is needed. You must
+have `cargo-zigbuild` (and `zig`) installed to build a non-host target;
+host-only runs need nothing extra.
+
+Leaving the host target on plain `cargo` is what keeps its artifacts
+interchangeable with an ordinary `cargo build` / `cargo check` in the same target
+directory. A driver that rewrites the C and linker environment changes the
+fingerprints of every unit that reads it, so driving the host target through zig
+would make cargo-fc and everyday Cargo invalidate each other's work on every
+switch.
 
 Override the driver with `--driver <bin>` or in config:
 

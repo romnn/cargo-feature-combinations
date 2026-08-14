@@ -304,6 +304,7 @@ mod test {
                 .collect(),
             show_pruned: false,
             show_target: targets.len() > 1,
+            host: None,
         }
     }
 

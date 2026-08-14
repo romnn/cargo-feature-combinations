@@ -475,7 +475,8 @@ fn run_cargo_command(
         evaluator,
     )?;
     plan::maximal::maybe_retain_maximal_feature_sets(&mut plan_set);
-    driver::finalize_plan_drivers(&mut plan_set, env)?;
+    plan_set.host = target::detect_host(env);
+    driver::finalize_plan_drivers(&mut plan_set)?;
     maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
     let mode = runner::resolve_execution_mode(
         &dispatch.cargo_args,
@@ -644,6 +645,7 @@ mod test {
                 .collect(),
             show_pruned,
             show_target: targets.len() > 1,
+            host: None,
         }
     }
 
@@ -926,6 +928,7 @@ mod test {
             plans: vec![plan("t1", Some("cargo-zigbuild")), plan("t2", None)],
             show_pruned: false,
             show_target: true,
+            host: None,
         };
 
         assert_eq!(
