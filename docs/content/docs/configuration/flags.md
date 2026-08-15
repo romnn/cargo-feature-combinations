@@ -81,6 +81,6 @@ dedupe = true
 
 ## Notes
 
-- Inline values for boolean CLI flags are rejected (`--summary-only=false` fails). Configure false defaults in `Cargo.toml` instead.
+- Any default configured here can be turned back off for one invocation with an inline value on the matching CLI flag: `--summary-only=false`, `--dedupe=off`, `--omit-host-target-flag=0`. See the [CLI reference]({{< relref "../commands/cli-reference.md" >}}).
 - `verbose` can also be set with the `CARGO_FC_VERBOSE` environment variable (see the [CLI reference]({{< relref "../commands/cli-reference.md" >}})).
 - `--env` and `--unset-env` override the resolved [child-process environment]({{< relref "environment.md" >}}); they are value options rather than boolean flag defaults.

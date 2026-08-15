@@ -180,7 +180,7 @@ fn resolve_flags(
     let mut ignored_diagnostics_config = false;
     for layer in layers {
         let mut flags = combine_flags(layer)?;
-        flags.validate()?;
+        flags.normalize(super::FlagSource::Config)?;
         if layer.scope.is_command() {
             if flags.mentions_diagnostics() {
                 ignored_diagnostics_config = false;

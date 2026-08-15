@@ -127,9 +127,9 @@ pub(crate) fn note_matrix_noop_flags(options: &Options) {
             ignored.push(label);
         }
     }
-    // Spelled as an opt-out, so `Some(false)` is what the user typed.
-    if flags.omit_host_target_flag == Some(false) {
-        ignored.push("--no-omit-host-target-flag");
+    // Only ever set explicitly, so either polarity means the user typed it.
+    if flags.omit_host_target_flag.is_some() {
+        ignored.push("--omit-host-target-flag");
     }
     if options.driver.is_some() {
         ignored.push("--driver");

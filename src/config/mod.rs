@@ -11,9 +11,10 @@ mod validate;
 
 pub use env::{EnvPatch, EnvValue, ResolvedEnv};
 pub(crate) use flags::{
-    FLAG_KEYS, combine_bool, combine_driver, combine_flag_configs, combine_u128,
+    DEPRECATED_NO_PRUNE_IMPLIED, FLAG_KEYS, FlagSource, combine_bool, combine_driver,
+    combine_flag_configs, combine_u128,
 };
-pub use flags::{FlagConfig, ResolvedFlags};
+pub use flags::{DeprecatedFlagKeys, FlagConfig, ResolvedFlags};
 pub use resolve::ResolvedFeatures;
 pub use schema::{
     CommandCapabilities, Config, FeatureMatrixPatch, RootConfig, ScopeConfig, SectionConfig,

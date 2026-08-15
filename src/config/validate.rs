@@ -1,8 +1,9 @@
 use super::env::{validate_name, validate_value};
-use super::flags::FLAG_KEYS;
 use super::patch::{FeatureSetVecPatch, StringSetPatch};
 use super::schema::{RootConfig, ScopeConfig, WorkspaceConfig};
 use super::scope::ScopeId;
+use super::{DEPRECATED_NO_PRUNE_IMPLIED, FLAG_KEYS};
+use crate::print_warning;
 use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -139,6 +140,11 @@ fn validate_scope(value: &serde_json::Value, section: &str, scope: ScopeId) -> e
         }
         if let Err(reason) = valid_in(kind, scope) {
             eyre::bail!("`{key}` is not valid in [{section}]: {reason}");
+        }
+        if key == DEPRECATED_NO_PRUNE_IMPLIED {
+            print_warning!(
+                "[{section}].{DEPRECATED_NO_PRUNE_IMPLIED} is deprecated; use prune_implied instead"
+            );
         }
         validate_value_shape(key, value, kind, section)?;
     }

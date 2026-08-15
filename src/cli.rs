@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::config::env::{validate_name, validate_value};
-use crate::config::{EnvValue, FlagConfig};
+use crate::config::{EnvValue, FlagConfig, FlagSource};
+use crate::print_warning;
 
 /// High-level command requested by the user.
 #[derive(Debug)]
@@ -73,16 +74,18 @@ fn verbose_from_env() -> Option<bool> {
     std::env::var("CARGO_FC_VERBOSE")
         .ok()
         .as_deref()
-        .and_then(verbose_from_env_value)
+        .and_then(parse_bool)
         .or_else(|| {
             std::env::var("VERBOSE")
                 .ok()
                 .as_deref()
-                .and_then(verbose_from_env_value)
+                .and_then(parse_bool)
         })
 }
 
-fn verbose_from_env_value(value: &str) -> Option<bool> {
+/// Parse a boolean written the way an environment variable or an inline flag
+/// value spells it.
+fn parse_bool(value: &str) -> Option<bool> {
     let normalized = value.trim().to_lowercase();
     if VALID_BOOLS.contains(&normalized.as_str()) {
         Some(true)
@@ -141,12 +144,6 @@ fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)
             break;
         }
 
-        if let Some(flag) = cargo_fc_bool_inline_flag(arg) {
-            eyre::bail!(
-                "{flag} does not accept an inline value; configure false values in Cargo.toml"
-            );
-        }
-
         if let Some(consumed) =
             consume_value_option(args, index, &mut options, &mut raw_manifest_path)?
         {
@@ -154,7 +151,7 @@ fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)
             continue;
         }
 
-        if consume_flag_or_command(arg, &mut options, &mut subcommand_seen, subcommand_blocked) {
+        if consume_flag_or_command(arg, &mut options, &mut subcommand_seen, subcommand_blocked)? {
             index += 1;
             continue;
         }
@@ -179,6 +176,10 @@ fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)
             .wrap_err_with(|| format!("manifest {} does not exist", manifest_path.display()))?;
         options.manifest_path = Some(manifest_path);
     }
+
+    // Flags typed on the command line are one more config layer, held to the
+    // same contradiction rules before they are overlaid onto the narrowest one.
+    options.flags.normalize(FlagSource::CommandLine)?;
 
     Ok((options, forwarded))
 }
@@ -298,30 +299,14 @@ fn consume_flag_or_command(
     options: &mut Options,
     subcommand_seen: &mut bool,
     subcommand_blocked: bool,
-) -> bool {
-    match arg {
-        "--only-packages-with-lib-target" => {
-            options.flags.only_packages_with_lib_target = Some(true);
-        }
-        "--pedantic" => options.flags.pedantic = Some(true),
-        "--errors-only" => options.flags.errors_only = Some(true),
-        "--packages-only" => options.flags.packages_only = Some(true),
-        "--diagnostics-only" => options.flags.diagnostics_only = Some(true),
-        "--fail-fast" => options.flags.fail_fast = Some(true),
-        "--no-prune-implied" => options.flags.no_prune_implied = Some(true),
-        "--show-pruned" => options.flags.show_pruned = Some(true),
-        "--maximal-features" => options.flags.maximal_features = Some(true),
-        "--aggregate-targets" => options.flags.aggregate_targets = Some(true),
-        "--no-targets" => options.flags.no_targets = Some(true),
-        "--install-missing-targets" => options.flags.install_missing_targets = Some(true),
-        // The only cargo-fc flag whose default is on, so the CLI spelling is the
-        // one that turns it off.
-        "--no-omit-host-target-flag" => options.flags.omit_host_target_flag = Some(false),
-        "--dedupe" | "--dedup" => {
-            options.flags.dedupe = Some(true);
-            options.flags.diagnostics_only = Some(true);
-        }
-        "--summary-only" | "--summary" | "--silent" => options.flags.summary_only = Some(true),
+) -> eyre::Result<bool> {
+    let (flag, value) = split_inline_value(arg);
+
+    if set_bool_flag(&mut options.flags, flag, value)? {
+        return Ok(true);
+    }
+
+    match flag {
         "--workspace" => {}
         "--pretty" if matches!(options.command, Some(Command::FeatureMatrix { .. })) => {
             if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
@@ -338,9 +323,84 @@ fn consume_flag_or_command(
             options.command = Some(Command::Version);
             *subcommand_seen = true;
         }
-        _ => return false,
+        // Anything else belongs to cargo, inline value included.
+        _ => return Ok(false),
     }
-    true
+
+    // What remains are commands and switches with no configurable default, so
+    // unlike the flags above they have nothing for a value to override.
+    if value.is_some() {
+        eyre::bail!("{flag} does not accept a value");
+    }
+    Ok(true)
+}
+
+/// Split `--flag=value` into the flag token and its inline value.
+fn split_inline_value(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once('=') {
+        Some((flag, value)) => (flag, Some(value)),
+        None => (arg, None),
+    }
+}
+
+/// Apply a cargo-fc boolean flag, reporting whether `flag` is one at all.
+///
+/// Every flag here mirrors a [`FlagConfig`] key, so each takes an optional
+/// inline value — `--flag` alone means `--flag=true`, and `--flag=false` turns
+/// off a default configured in `Cargo.toml`. Cargo-fc claims only tokens it
+/// already owns, because a `--no-<flag>` spelling would swallow flags that
+/// belong to cargo (`--no-fail-fast` for `test`, `--no-dedupe` for `tree`).
+///
+/// # Errors
+///
+/// Returns an error if an inline value is not a recognized boolean.
+fn set_bool_flag(flags: &mut FlagConfig, flag: &str, value: Option<&str>) -> eyre::Result<bool> {
+    let enabled = || match value {
+        Some(value) => parse_bool(value).ok_or_else(|| {
+            eyre::eyre!(
+                "invalid value `{value}` for {flag}; expected true/false, yes/no, on/off or 1/0"
+            )
+        }),
+        None => Ok(true),
+    };
+
+    match flag {
+        "--only-packages-with-lib-target" => {
+            flags.only_packages_with_lib_target = Some(enabled()?);
+        }
+        "--pedantic" => flags.pedantic = Some(enabled()?),
+        "--errors-only" => flags.errors_only = Some(enabled()?),
+        "--packages-only" => flags.packages_only = Some(enabled()?),
+        "--diagnostics-only" => flags.diagnostics_only = Some(enabled()?),
+        "--fail-fast" => flags.fail_fast = Some(enabled()?),
+        "--prune-implied" => flags.prune_implied = Some(enabled()?),
+        "--no-prune-implied" => {
+            let enabled = enabled()?;
+            print_warning!(
+                "`--no-prune-implied` is deprecated; use `--prune-implied={}` instead",
+                !enabled,
+            );
+            flags.deprecated.deprecated_no_prune_implied = Some(enabled);
+        }
+        "--show-pruned" => flags.show_pruned = Some(enabled()?),
+        "--maximal-features" => flags.maximal_features = Some(enabled()?),
+        "--aggregate-targets" => flags.aggregate_targets = Some(enabled()?),
+        "--no-targets" => flags.no_targets = Some(enabled()?),
+        "--install-missing-targets" => flags.install_missing_targets = Some(enabled()?),
+        "--omit-host-target-flag" => flags.omit_host_target_flag = Some(enabled()?),
+        "--dedupe" | "--dedup" => {
+            let enabled = enabled()?;
+            flags.dedupe = Some(enabled);
+            // Dedupe consumes the diagnostics-only stream, so enabling it here
+            // implies that mode; turning it off says nothing about diagnostics.
+            if enabled {
+                flags.diagnostics_only = Some(true);
+            }
+        }
+        "--summary-only" | "--summary" | "--silent" => flags.summary_only = Some(enabled()?),
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 fn forward_leading_cargo_arg(
@@ -381,39 +441,10 @@ fn insert_trimmed(values: &mut HashSet<String>, value: &str) {
     }
 }
 
-fn cargo_fc_bool_inline_flag(arg: &str) -> Option<&'static str> {
-    [
-        "--only-packages-with-lib-target",
-        "--pedantic",
-        "--errors-only",
-        "--packages-only",
-        "--diagnostics-only",
-        "--fail-fast",
-        "--no-prune-implied",
-        "--show-pruned",
-        "--maximal-features",
-        "--aggregate-targets",
-        "--no-targets",
-        "--install-missing-targets",
-        "--no-omit-host-target-flag",
-        "--dedupe",
-        "--dedup",
-        "--summary-only",
-        "--summary",
-        "--silent",
-        "--workspace",
-        "--pretty",
-    ]
-    .into_iter()
-    .find(|flag| {
-        arg.strip_prefix(*flag)
-            .is_some_and(|rest| rest.starts_with('='))
-    })
-}
-
 #[cfg(test)]
 mod test {
-    use super::{Command, parse_normalized_args, verbose_from_env_value};
+    use super::{Command, parse_bool, parse_normalized_args};
+    use crate::config::DEPRECATED_NO_PRUNE_IMPLIED;
     use crate::config::FlagConfig;
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
@@ -424,15 +455,15 @@ mod test {
     }
 
     #[test]
-    fn verbose_env_value_uses_common_boolean_spellings() {
-        assert_eq!(verbose_from_env_value("1"), Some(true));
-        assert_eq!(verbose_from_env_value("on"), Some(true));
-        assert_eq!(verbose_from_env_value("true"), Some(true));
-        assert_eq!(verbose_from_env_value("0"), Some(false));
-        assert_eq!(verbose_from_env_value("off"), Some(false));
-        assert_eq!(verbose_from_env_value("false"), Some(false));
-        assert_eq!(verbose_from_env_value(""), None);
-        assert_eq!(verbose_from_env_value("maybe"), None);
+    fn bool_values_use_common_spellings() {
+        assert_eq!(parse_bool("1"), Some(true));
+        assert_eq!(parse_bool("on"), Some(true));
+        assert_eq!(parse_bool("true"), Some(true));
+        assert_eq!(parse_bool("0"), Some(false));
+        assert_eq!(parse_bool("off"), Some(false));
+        assert_eq!(parse_bool("false"), Some(false));
+        assert_eq!(parse_bool(""), None);
+        assert_eq!(parse_bool("maybe"), None);
     }
 
     #[test]
@@ -647,20 +678,143 @@ mod test {
         Ok(())
     }
 
+    /// Every configurable flag needs a CLI spelling, or a `Cargo.toml` default
+    /// cannot be overridden for a single run.
+    ///
+    /// `verbose` is the deliberate exception: `--verbose` is cargo's own flag
+    /// and is forwarded, so `CARGO_FC_VERBOSE` carries the cargo-fc setting.
     #[test]
-    fn parse_no_omit_host_target_flag_turns_the_default_off() -> eyre::Result<()> {
-        let (options, forwarded) = parse_args(&["check", "--no-omit-host-target-flag"])?;
+    fn every_config_flag_key_is_settable_from_the_cli() -> eyre::Result<()> {
+        for key in crate::config::FLAG_KEYS {
+            // `dedup` is a spelling alias of `dedupe` rather than a field of its
+            // own, and `no_prune_implied` is deprecated: both fold into another
+            // key during normalization, so neither survives to be asserted on.
+            // `parse_deprecated_prune_spelling_still_works` covers the latter.
+            if matches!(*key, "dedup" | "verbose" | DEPRECATED_NO_PRUNE_IMPLIED) {
+                continue;
+            }
+            let flag = format!("--{}=false", key.replace('_', "-"));
+            let (options, forwarded) = parse_args(&["check", &flag])?;
 
+            sim_assert_eq!(forwarded, vec!["check".to_string()], "{flag} reached cargo");
+            sim_assert_eq!(
+                serde_json::to_value(options.flags)?.get(*key),
+                Some(&serde_json::Value::Bool(false)),
+                "{flag} did not set `{key}`",
+            );
+        }
+        Ok(())
+    }
+
+    /// Every boolean flag can turn a `Cargo.toml` default back off for one run,
+    /// which is the whole point of accepting an inline value.
+    #[test]
+    fn parse_bool_flags_accept_an_inline_value() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&[
+            "check",
+            "--summary-only=false",
+            "--fail-fast=off",
+            "--maximal-features=0",
+            "--omit-host-target-flag=no",
+            "--pedantic=true",
+        ])?;
+
+        assert_eq!(options.flags.summary_only, Some(false));
+        assert_eq!(options.flags.fail_fast, Some(false));
+        assert_eq!(options.flags.maximal_features, Some(false));
         assert_eq!(options.flags.omit_host_target_flag, Some(false));
+        assert_eq!(options.flags.pedantic, Some(true));
         sim_assert_eq!(forwarded, vec!["check".to_string()]);
         Ok(())
     }
 
+    /// A bare flag keeps meaning "on", so existing invocations are unaffected.
     #[test]
-    fn parse_rejects_inline_values_for_cargo_fc_bool_flags() {
-        let err = parse_args(&["check", "--summary-only=false"])
-            .expect_err("inline bool values should fail clearly");
+    fn parse_bare_bool_flag_still_enables() -> eyre::Result<()> {
+        let (options, _forwarded) = parse_args(&["check", "--summary-only"])?;
 
-        assert!(err.to_string().contains("--summary-only"));
+        assert_eq!(options.flags.summary_only, Some(true));
+        Ok(())
+    }
+
+    /// `--dedupe` implies diagnostics-only output, but `--dedupe=false` must not
+    /// silently enable a mode the user never asked for.
+    #[test]
+    fn parse_dedupe_only_implies_diagnostics_when_enabled() -> eyre::Result<()> {
+        let (enabled, _) = parse_args(&["clippy", "--dedupe"])?;
+        assert_eq!(enabled.flags.dedupe, Some(true));
+        assert_eq!(enabled.flags.diagnostics_only, Some(true));
+
+        let (disabled, _) = parse_args(&["clippy", "--dedupe=false"])?;
+        assert_eq!(disabled.flags.dedupe, Some(false));
+        assert_eq!(disabled.flags.diagnostics_only, None);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_prune_implied_sets_the_current_key() -> eyre::Result<()> {
+        let (enabled, _) = parse_args(&["check", "--prune-implied"])?;
+        assert_eq!(enabled.flags.prune_implied, Some(true));
+
+        let (disabled, _) = parse_args(&["check", "--prune-implied=false"])?;
+        assert_eq!(disabled.flags.prune_implied, Some(false));
+        Ok(())
+    }
+
+    /// The deprecated spelling keeps working and folds into the current key,
+    /// inverted, so nothing downstream of parsing sees it.
+    #[test]
+    fn parse_deprecated_prune_spelling_still_works() -> eyre::Result<()> {
+        let (disabled, _) = parse_args(&["check", "--no-prune-implied"])?;
+        assert_eq!(disabled.flags.prune_implied, Some(false));
+        assert_eq!(disabled.flags.deprecated.deprecated_no_prune_implied, None);
+
+        let (enabled, _) = parse_args(&["check", "--no-prune-implied=false"])?;
+        assert_eq!(enabled.flags.prune_implied, Some(true));
+        Ok(())
+    }
+
+    /// Naming one setting twice is a mistake, not a race the flag order
+    /// silently settles.
+    #[test]
+    fn parse_rejects_both_prune_spellings_together() {
+        let err = parse_args(&["check", "--no-prune-implied", "--prune-implied"])
+            .expect_err("mixing prune spellings should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("`--no-prune-implied`"), "{message}");
+        assert!(message.contains("pass only one"), "{message}");
+    }
+
+    #[test]
+    fn parse_rejects_unparsable_inline_bool_values() {
+        let err = parse_args(&["check", "--summary-only=maybe"])
+            .expect_err("a non-boolean value should fail clearly");
+
+        assert!(err.to_string().contains("--summary-only"), "{err}");
+        assert!(err.to_string().contains("maybe"), "{err}");
+    }
+
+    /// `--workspace` and the commands have no configurable default, so a value
+    /// is a mistake rather than an override.
+    #[test]
+    fn parse_rejects_values_for_switches_without_a_default() {
+        let err = parse_args(&["check", "--workspace=true"])
+            .expect_err("--workspace should not accept a value");
+
+        assert!(err.to_string().contains("does not accept a value"), "{err}");
+    }
+
+    /// A cargo flag that happens to carry an inline value must reach cargo
+    /// untouched.
+    #[test]
+    fn parse_forwards_inline_values_of_cargo_flags() -> eyre::Result<()> {
+        let (_options, forwarded) = parse_args(&["check", "--features=a,b"])?;
+
+        sim_assert_eq!(
+            forwarded,
+            vec!["check".to_string(), "--features=a,b".to_string()]
+        );
+        Ok(())
     }
 }

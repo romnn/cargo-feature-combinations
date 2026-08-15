@@ -2,9 +2,26 @@
 
 ## Unreleased
 
+## [0.4.4]
+
 ### Added
 
-- `omit_host_target_flag` config key and the matching `--no-omit-host-target-flag`
+- Every cargo-fc boolean flag now takes an optional inline value, so a default
+  set in `Cargo.toml` can be turned back off for one invocation:
+  `--summary-only=false`, `--dedupe=off`, `--fail-fast=0`. A bare flag still
+  means `=true`, and `yes`/`no`, `on`/`off`, `1`/`0` are accepted alongside
+  `true`/`false` — the spellings `CARGO_FC_VERBOSE` already took. Previously an
+  inline value was rejected outright and config-only defaults such as
+  `dedupe = true` could not be overridden from the command line at all. There
+  are deliberately no `--no-<flag>` spellings: those tokens belong to cargo
+  (`--no-fail-fast` for `test`, `--no-dedupe` for `tree`), which cargo-fc
+  forwards untouched.
+
+- `--prune-implied`, the CLI spelling of the config key of the same name.
+  Pruning is on by default, so `--prune-implied=false` is the way to disable it
+  for one run.
+
+- `omit_host_target_flag` config key and the matching `--omit-host-target-flag`
   flag, opting out of the host `--target` omission below. Set it to `false` to
   build the host row under `target/<triple>/` like every other configured
   target — for uniform artifact paths, or to keep `build.rustflags` off build
@@ -36,6 +53,17 @@
   caching at all. Host rows now reuse — and are reused by — everyday Cargo
   builds. Explicit `--driver` and `driver` config are unaffected, and a target
   override can still pin either choice per package, target, or subcommand.
+
+### Deprecated
+
+- The `no_prune_implied` config key and the `--no-prune-implied` flag, in favour
+  of `prune_implied` / `--prune-implied` with an inline value. One setting no
+  longer has two spellings that must be kept from contradicting each other. Both
+  deprecated spellings are still parsed and fold into `prune_implied`, now with
+  a warning pointing at the current name, and naming a setting in both spellings
+  at once — in one config scope or on one command line — is a hard error rather
+  than a silently resolved contradiction. They are no longer documented and will
+  be removed in a future release.
 
 ## [0.4.3]
 

@@ -68,7 +68,7 @@ To build the host row under `target/<triple>/` like every other configured targe
 omit_host_target_flag = false
 ```
 
-Or per invocation with `--no-omit-host-target-flag`. This resolves per package-target like every other [flag]({{< relref "../configuration/flags.md" >}}), and only controls the injected flag; the host row's [driver]({{< relref "drivers.md" >}}) stays plain `cargo` unless you set `driver` yourself.
+Or per invocation with `--omit-host-target-flag=false`. This resolves per package-target like every other [flag]({{< relref "../configuration/flags.md" >}}), and only controls the injected flag; the host row's [driver]({{< relref "drivers.md" >}}) stays plain `cargo` unless you set `driver` yourself.
 
 ## Which commands expand targets
 

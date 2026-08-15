@@ -490,7 +490,6 @@ pedantic = true
 errors_only = true
 packages_only = true
 fail_fast = true
-no_prune_implied = true
 prune_implied = true
 show_pruned = true
 maximal_features = true
@@ -500,9 +499,8 @@ install_missing_targets = true
 only_packages_with_lib_target = true
 ```
 
-`dedupe = true` implies diagnostics-only output. `prune_implied` is the positive
-config spelling for `no_prune_implied`; configure only one spelling in a given
-scope.
+`dedupe = true` implies diagnostics-only output. `prune_implied = false` turns
+off automatic pruning.
 
 Flag precedence is broad-to-narrow:
 

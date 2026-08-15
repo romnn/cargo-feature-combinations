@@ -205,14 +205,14 @@ Pruning is **on by default and needs no configuration** — whatever your featur
 
 {{< terminal name="pruned" >}}
 
-You should not need to change this, but you can turn it off to check every generated combination regardless of unification — with `--no-prune-implied` for one run, or in config:
+You should not need to change this, but you can turn it off to check every generated combination regardless of unification — with `--prune-implied=false` for one run, or in config:
 
 ```toml
 [workspace.metadata.cargo-fc]
 prune_implied = false
 ```
 
-See also [`--show-pruned` and `--no-prune-implied`]({{< relref "../commands/output-modes.md#pruning---show-pruned-and---no-prune-implied" >}}).
+See also [`--show-pruned` and `--prune-implied`]({{< relref "../commands/output-modes.md#pruning---show-pruned-and---prune-implied" >}}).
 
 ---
 

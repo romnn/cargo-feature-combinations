@@ -11,7 +11,6 @@ macro_rules! for_each_flag_config_field {
             errors_only,
             packages_only,
             fail_fast,
-            no_prune_implied,
             prune_implied,
             show_pruned,
             maximal_features,
@@ -47,19 +46,55 @@ macro_rules! for_each_simple_resolved_flag_field {
     };
 }
 
+/// Deprecated spelling of `prune_implied`, inverted. Still accepted in config
+/// and as `--no-prune-implied`, and folded into `prune_implied` by
+/// [`FlagConfig::normalize`].
+pub(crate) const DEPRECATED_NO_PRUNE_IMPLIED: &str = "no_prune_implied";
+
+// The wire spellings accepted in config: every canonical field name, plus the
+// alias spellings whose Rust field is named differently.
 macro_rules! define_flag_keys {
     ($($field:ident),+ $(,)?) => {
-        pub(crate) const FLAG_KEYS: &[&str] = &[$(stringify!($field),)+ "dedup"];
+        pub(crate) const FLAG_KEYS: &[&str] =
+            &[$(stringify!($field),)+ "dedup", DEPRECATED_NO_PRUNE_IMPLIED];
     };
 }
 for_each_flag_config_field!(define_flag_keys);
+
+/// Where a raw flag set was written, so a contradiction between two spellings
+/// is reported in the spelling the user actually typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlagSource {
+    /// A `Cargo.toml` scope, spelling keys `like_this`.
+    Config,
+    /// Command-line flags, spelling them `--like-this`.
+    CommandLine,
+}
+
+impl FlagSource {
+    /// Render a flag key the way this source spells it.
+    fn spell(self, key: &str) -> String {
+        match self {
+            Self::Config => format!("`{key}`"),
+            Self::CommandLine => format!("`--{}`", key.replace('_', "-")),
+        }
+    }
+
+    /// How this source asks for one of two contradictory spellings.
+    fn use_one(self) -> &'static str {
+        match self {
+            Self::Config => "configure only one spelling in the same scope",
+            Self::CommandLine => "pass only one",
+        }
+    }
+}
 
 /// Raw configurable cargo-fc flag defaults.
 ///
 /// Each field is tri-state: absent means "inherit from the next broader
 /// scope", while `true`/`false` explicitly override broader config.
-/// CLI flags are converted into this same shape and overlaid last, as `true`
-/// entries except for the opt-out spelling of a default-on flag.
+/// CLI flags are converted into this same shape and overlaid last; an inline
+/// value is what lets them set either polarity.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FlagConfig {
     /// Whether to hide cargo output and only print summaries.
@@ -88,10 +123,10 @@ pub struct FlagConfig {
     /// Whether execution should stop at the first bad combination.
     #[serde(default)]
     pub fail_fast: Option<bool>,
-    /// Whether to disable automatic implied-feature pruning.
-    #[serde(default)]
-    pub no_prune_implied: Option<bool>,
-    /// Positive spelling kept for existing config and readability.
+    /// Whether automatic implied-feature pruning stays on.
+    ///
+    /// Replaces the deprecated `no_prune_implied` spelling, which
+    /// [`DeprecatedFlagKeys`] still accepts.
     #[serde(default)]
     pub prune_implied: Option<bool>,
     /// Whether pruned combinations should be shown in the summary.
@@ -118,19 +153,59 @@ pub struct FlagConfig {
     /// Defaults to `true`, unlike every other flag here.
     #[serde(default)]
     pub omit_host_target_flag: Option<bool>,
+    /// Deprecated flag spellings, still accepted as input.
+    #[serde(flatten)]
+    pub deprecated: DeprecatedFlagKeys,
+}
+
+/// Deprecated cargo-fc flag keys kept as accepted input spellings.
+///
+/// Each field carries a `deprecated_` prefix so every use site reads as
+/// backward compatibility, while `serde(rename)` keeps the original wire
+/// spelling working in `Cargo.toml`. [`FlagConfig::normalize`] folds these into
+/// their current fields, so nothing downstream of config parsing sees them.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DeprecatedFlagKeys {
+    /// Former name of `prune_implied`, carrying the inverse meaning.
+    #[serde(default, rename = "no_prune_implied")]
+    pub deprecated_no_prune_implied: Option<bool>,
 }
 
 impl FlagConfig {
+    /// Reject contradictions expressible in one raw scope, then fold deprecated
+    /// spellings into the fields that replaced them.
+    ///
+    /// Every layer passes through here before it is overlaid, so resolution and
+    /// everything downstream of it only ever see current spellings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one scope both sets a deprecated spelling and the
+    /// current one that replaced it, or if it asks for `dedupe` while
+    /// disabling the diagnostics-only output dedupe consumes.
+    pub(crate) fn normalize(&mut self, source: FlagSource) -> color_eyre::eyre::Result<()> {
+        self.validate(source)?;
+        if let Some(no_prune_implied) = self.deprecated.deprecated_no_prune_implied.take() {
+            self.prune_implied = Some(!no_prune_implied);
+        }
+        Ok(())
+    }
+
     /// Validate contradictions that can be expressed inside one raw scope.
-    pub(crate) fn validate(self) -> color_eyre::eyre::Result<()> {
-        if self.no_prune_implied.is_some() && self.prune_implied.is_some() {
+    fn validate(self, source: FlagSource) -> color_eyre::eyre::Result<()> {
+        if self.deprecated.deprecated_no_prune_implied.is_some() && self.prune_implied.is_some() {
             color_eyre::eyre::bail!(
-                "`no_prune_implied` and `prune_implied` are contradictory; configure only one spelling in the same scope"
+                "{} and {} are contradictory; {}",
+                source.spell(DEPRECATED_NO_PRUNE_IMPLIED),
+                source.spell("prune_implied"),
+                source.use_one(),
             );
         }
         if self.dedupe == Some(true) && self.diagnostics_only == Some(false) {
             color_eyre::eyre::bail!(
-                "`dedupe = true` requires diagnostics-only output; do not set `diagnostics_only = false` in the same scope"
+                "{} requires diagnostics-only output; do not disable {} at the same time",
+                source.spell("dedupe"),
+                source.spell("diagnostics_only"),
             );
         }
         Ok(())
@@ -144,6 +219,10 @@ impl FlagConfig {
             };
         }
         for_each_flag_config_field!(overlay_fields);
+        overlay_bool(
+            &mut self.deprecated.deprecated_no_prune_implied,
+            other.deprecated.deprecated_no_prune_implied,
+        );
         if other.diagnostics_only == Some(false) && other.dedupe != Some(true) {
             self.dedupe = Some(false);
         }
@@ -152,14 +231,6 @@ impl FlagConfig {
             && self.diagnostics_only == Some(false)
         {
             self.diagnostics_only = None;
-        }
-        if let Some(value) = other.no_prune_implied {
-            self.no_prune_implied = Some(value);
-            self.prune_implied = None;
-        }
-        if let Some(value) = other.prune_implied {
-            self.prune_implied = Some(value);
-            self.no_prune_implied = None;
         }
     }
 
@@ -221,7 +292,7 @@ pub struct ResolvedFlags {
     /// The inverse of the `omit_host_target_flag` config key, so that the
     /// all-`false` default resolves to the default-on omission — the same shape
     /// as [`no_prune_implied`](Self::no_prune_implied) and its `prune_implied`
-    /// spelling.
+    /// key.
     pub inject_host_target_flag: bool,
 }
 
@@ -237,10 +308,19 @@ impl ResolvedFlags {
         }
         for_each_simple_resolved_flag_field!(set_defaulted_fields);
 
-        let no_prune_implied = config
-            .no_prune_implied
-            .or_else(|| config.prune_implied.map(|enabled| !enabled))
-            .unwrap_or(false);
+        // `normalize` has folded the deprecated spelling into `prune_implied`
+        // for anything resolved through a scope chain. Reading it as a fallback
+        // keeps this entry point correct for callers that resolve a raw scope
+        // directly.
+        let no_prune_implied = !config
+            .prune_implied
+            .or_else(|| {
+                config
+                    .deprecated
+                    .deprecated_no_prune_implied
+                    .map(|no_prune_implied| !no_prune_implied)
+            })
+            .unwrap_or(true);
         let dedupe = config.dedupe.unwrap_or(false);
         out.diagnostics_only = config.diagnostics_only.unwrap_or(false) || dedupe;
         out.dedupe = dedupe;
@@ -313,7 +393,19 @@ pub(crate) fn combine_flag_configs<'a>(
         };
     }
     for_each_flag_config_field!(combine);
-    out.validate()?;
+
+    // Not reached by the macro above, which walks canonical fields only.
+    let deprecated_name = match field_prefix {
+        Some(prefix) => format!("{prefix}.{DEPRECATED_NO_PRUNE_IMPLIED}"),
+        None => DEPRECATED_NO_PRUNE_IMPLIED.to_string(),
+    };
+    if let Some(value) = combine_bool(&deprecated_name, source_kind, &entries, |flags| {
+        flags.deprecated.deprecated_no_prune_implied
+    })? {
+        out.deprecated.deprecated_no_prune_implied = Some(value);
+    }
+
+    out.normalize(FlagSource::Config)?;
     Ok(out)
 }
 
@@ -453,17 +545,57 @@ mod tests {
         Ok(())
     }
 
+    /// One scope may name the setting once, whichever spelling it uses.
     #[test]
     fn contradictory_prune_spellings_in_one_scope_error() {
-        let err = FlagConfig {
-            no_prune_implied: Some(true),
+        let err = both_prune_spellings()
+            .normalize(super::FlagSource::Config)
+            .expect_err("contradictory prune spelling should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("`no_prune_implied`"), "{message}");
+        assert!(message.contains("same scope"), "{message}");
+    }
+
+    /// The same contradiction typed as flags names the flags, not the keys.
+    #[test]
+    fn contradictory_prune_spellings_on_the_cli_error() {
+        let err = both_prune_spellings()
+            .normalize(super::FlagSource::CommandLine)
+            .expect_err("contradictory prune spelling should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("`--no-prune-implied`"), "{message}");
+        assert!(message.contains("pass only one"), "{message}");
+    }
+
+    /// The deprecated spelling folds into the current field, inverted, so
+    /// nothing downstream of normalization sees it.
+    #[test]
+    fn deprecated_prune_spelling_folds_into_the_current_key() -> color_eyre::eyre::Result<()> {
+        let mut flags = FlagConfig {
+            deprecated: super::DeprecatedFlagKeys {
+                deprecated_no_prune_implied: Some(true),
+            },
+            ..FlagConfig::default()
+        };
+
+        flags.normalize(super::FlagSource::Config)?;
+
+        assert_eq!(flags.prune_implied, Some(false));
+        assert_eq!(flags.deprecated.deprecated_no_prune_implied, None);
+        assert!(ResolvedFlags::from_config(flags).no_prune_implied);
+        Ok(())
+    }
+
+    fn both_prune_spellings() -> FlagConfig {
+        FlagConfig {
             prune_implied: Some(true),
+            deprecated: super::DeprecatedFlagKeys {
+                deprecated_no_prune_implied: Some(true),
+            },
             ..FlagConfig::default()
         }
-        .validate()
-        .expect_err("contradictory prune spelling should fail");
-
-        assert!(err.to_string().contains("no_prune_implied"));
     }
 
     #[test]

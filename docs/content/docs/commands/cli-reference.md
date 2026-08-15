@@ -37,14 +37,14 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `--errors-only` | Allow all warnings, show errors only (`-A warnings`). Appends to `RUSTFLAGS`. |
 | `--pedantic` | Treat warnings like errors in the summary and under `--fail-fast`. |
 | `--show-pruned` | Show pruned (redundant) combinations in the summary. |
-| `--no-prune-implied` | Disable automatic pruning of redundant combinations. |
+| `--prune-implied` | Automatic pruning of redundant combinations, on by default; `=false` disables it for the run. |
 | `--maximal-features` | Run only maximal feature sets: combinations that are not a subset of another generated combination. An unconstrained matrix collapses into a single all-features invocation per package-target, while matrix constraints keep one invocation per alternative. |
 | `--packages-only` | In `matrix` mode, emit one row per package-target instead of per combination. |
 | `--only-packages-with-lib-target` | Only consider packages that have a library target. |
 | `--aggregate-targets` | Batch a combination's configured targets into a single Cargo invocation (one `--target` each). Faster on many cores; falls back to serial for `run` and pruned summaries. |
 | `--no-targets` | Ignore configured target lists for this run; use Cargo's default single target. |
 | `--install-missing-targets` | Install missing Rust target components with `rustup` before running. Explicit opt-in — may mutate the toolchain and use the network. |
-| `--no-omit-host-target-flag` | Inject `--target` for a configured target that is the host too, so it builds under `target/<triple>/` instead of sharing `target/debug` with an ordinary `cargo build`. See [Configured targets]({{< relref "../targets/configured-targets.md#the-host-target-runs-as-a-plain-build" >}}). |
+| `--omit-host-target-flag` | Build a configured target that is the host without an injected `--target`, sharing `target/debug` with an ordinary `cargo build`. On by default; `=false` builds it under `target/<triple>/` like every other configured target. See [Configured targets]({{< relref "../targets/configured-targets.md#the-host-target-runs-as-a-plain-build" >}}). |
 | `--driver <bin>` | Program invoked in place of `cargo` for each build (e.g. `cargo-zigbuild`, `cross`). See [Build drivers]({{< relref "../targets/drivers.md" >}}). |
 | `--env <KEY=VALUE>` | Set a variable in every matrix-cell Cargo process (repeatable; the last value for a key wins). Overrides scoped [`env` config]({{< relref "../configuration/environment.md" >}}). |
 | `--unset-env <KEY>` | Remove a variable from every matrix-cell Cargo process (repeatable). Applied before CLI `--env` additions. |
@@ -62,7 +62,8 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 
 ## Notes
 
-- Cargo-fc boolean flags do **not** accept an inline value (`--summary-only=false` is rejected). Configure false defaults in `Cargo.toml` instead.
+- Cargo-fc boolean flags take an optional inline value: `--summary-only` means `--summary-only=true`, and `--summary-only=false` turns a `Cargo.toml` default back off for one invocation. `no`, `off`, and `0` are accepted alongside `false` (and `yes`/`on`/`1` alongside `true`). There are no `--no-<flag>` spellings — those tokens belong to cargo (`--no-fail-fast` for `test`, `--no-dedupe` for `tree`) and cargo-fc forwards them untouched.
+- Switches with no configurable default — `--workspace`, `--pretty`, `--help`, `--version` — take no value.
 - `--dedupe` implies `--diagnostics-only`. Setting `--dedupe` together with `diagnostics_only = false` in config is rejected as contradictory.
 - Everything after `--` is forwarded to the invoked program and never interpreted by `cargo fc`.
 - `--env` requires `KEY=VALUE`, split at the first `=`; `KEY=` sets an empty value.

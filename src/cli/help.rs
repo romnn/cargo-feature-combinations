@@ -12,6 +12,10 @@ SUBCOMMAND:
     version                 Print version information
 
 OPTIONS:
+    Every cargo-fc boolean flag below takes an optional value: `--flag` means
+    `--flag=true`, and `--flag=false` (also no/off/0) turns off a default set in
+    Cargo.toml for one invocation.
+
     -h, --help              Print help information
     -V, --version           Print version information
     --manifest-path <path>  Path to Cargo.toml to inspect
@@ -42,8 +46,9 @@ OPTIONS:
                             Only consider packages with a library target
     --pedantic              Treat warnings like errors in summary and
                             when using --fail-fast
-    --no-prune-implied      Disable automatic pruning of redundant feature
-                            combinations implied by other features
+    --prune-implied         Automatic pruning of redundant feature combinations
+                            implied by other features. On by default; pass
+                            =false to check every generated combination
     --show-pruned           Show pruned feature combinations in the summary
     --maximal-features      Run only maximal feature sets: combinations that
                             are not a subset of another generated combination.
@@ -64,13 +69,12 @@ OPTIONS:
                             Install missing Rust target components with rustup
                             before running Cargo. Explicit opt-in because this
                             may mutate the toolchain and use the network.
-    --no-omit-host-target-flag
-                            Inject --target <triple> for a configured target
-                            that is the host too, so it builds under
+    --omit-host-target-flag Build a configured target that is the host without
+                            an injected --target, so it lands in target/debug
+                            and shares artifacts with an ordinary cargo build.
+                            On by default; pass =false to build it under
                             target/<triple>/ like every other configured target.
-                            By default the host row passes no --target and lands
-                            in target/debug, sharing artifacts with an ordinary
-                            cargo build. Also settable via
+                            Also settable via
                             [workspace.metadata.cargo-fc].omit_host_target_flag.
     --driver <bin>          Program invoked in place of `cargo` for each build
                             (e.g. `cargo-zigbuild`, `cross`). Chosen per target

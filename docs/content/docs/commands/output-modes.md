@@ -65,13 +65,13 @@ Allow all warnings and surface errors only (equivalent to `-A warnings`). This a
 cargo fc --errors-only check
 ```
 
-## Pruning: `--show-pruned` and `--no-prune-implied`
+## Pruning: `--show-pruned` and `--prune-implied`
 
-`cargo fc` prunes redundant feature combinations by default (you never need to enable this). `--show-pruned` includes them in the summary marked `SKIP`; `--no-prune-implied` disables pruning for the run:
+`cargo fc` prunes redundant feature combinations by default (you never need to enable this). `--show-pruned` includes them in the summary marked `SKIP`; `--prune-implied=false` disables pruning for the run:
 
 ```bash
 cargo fc --show-pruned check
-cargo fc --no-prune-implied check
+cargo fc --prune-implied=false check
 ```
 
 See [Automatic pruning]({{< relref "../configuration/feature-matrix.md#automatic-pruning" >}}) for what it does and a worked example.
