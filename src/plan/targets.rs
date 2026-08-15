@@ -966,7 +966,7 @@ mod test {
     fn package_replace_discards_inherited_workspace_targets() -> eyre::Result<()> {
         let pkg = package("native")?;
         let mut cfg = Config::default();
-        cfg.base.settings.replace = true;
+        cfg.base.settings.deprecated.replace = true;
         let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux"]);
         let env = TestEnv::host("host-triple");
@@ -1486,7 +1486,7 @@ mod test {
                 subcommands: BTreeMap::from([(
                     "test".to_string(),
                     CommandCapabilities {
-                        replace: true,
+                        deprecated: crate::config::DeprecatedScopeKeys { replace: true },
                         exclude_packages: Some(StringSetPatch::Override(HashSet::from([
                             "foo".to_string()
                         ]))),

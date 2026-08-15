@@ -380,7 +380,7 @@ fn set_bool_flag(flags: &mut FlagConfig, flag: &str, value: Option<&str>) -> eyr
                 "`--no-prune-implied` is deprecated; use `--prune-implied={}` instead",
                 !enabled,
             );
-            flags.deprecated.deprecated_no_prune_implied = Some(enabled);
+            flags.deprecated.no_prune_implied = Some(enabled);
         }
         "--show-pruned" => flags.show_pruned = Some(enabled()?),
         "--maximal-features" => flags.maximal_features = Some(enabled()?),
@@ -767,7 +767,7 @@ mod test {
     fn parse_deprecated_prune_spelling_still_works() -> eyre::Result<()> {
         let (disabled, _) = parse_args(&["check", "--no-prune-implied"])?;
         assert_eq!(disabled.flags.prune_implied, Some(false));
-        assert_eq!(disabled.flags.deprecated.deprecated_no_prune_implied, None);
+        assert_eq!(disabled.flags.deprecated.no_prune_implied, None);
 
         let (enabled, _) = parse_args(&["check", "--no-prune-implied=false"])?;
         assert_eq!(enabled.flags.prune_implied, Some(true));

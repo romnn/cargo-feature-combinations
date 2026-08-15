@@ -1086,7 +1086,7 @@ mod test {
         config.base.subcommands.insert(
             "build".to_string(),
             config::CommandCapabilities {
-                replace: true,
+                deprecated: config::DeprecatedScopeKeys { replace: true },
                 ..config::CommandCapabilities::default()
             },
         );

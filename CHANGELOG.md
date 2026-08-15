@@ -57,13 +57,20 @@
 ### Deprecated
 
 - The `no_prune_implied` config key and the `--no-prune-implied` flag, in favour
-  of `prune_implied` / `--prune-implied` with an inline value. One setting no
-  longer has two spellings that must be kept from contradicting each other. Both
-  deprecated spellings are still parsed and fold into `prune_implied`, now with
-  a warning pointing at the current name, and naming a setting in both spellings
-  at once — in one config scope or on one command line — is a hard error rather
-  than a silently resolved contradiction. They are no longer documented and will
-  be removed in a future release.
+  of `prune_implied` / `--prune-implied` with an inline value, so that one
+  setting no longer has two spellings that must be kept from contradicting each
+  other.
+
+- Every deprecated spelling now behaves the same way, whichever one it is: it
+  still parses and folds into the key that replaced it, using it warns and names
+  that key, and spelling one setting both ways in a single scope — or on one
+  command line — is a hard error. None of them appear in the documentation any
+  more, and all will be removed in a future release. Bringing
+  `skip_feature_sets`, `denylist`, `exact_combinations`, and `replace` under that
+  contract changes two things: `replace = true` warns at all, which it never did
+  before, and pairing any of these with the key that replaced it is rejected
+  rather than silently merged (the feature keys) or settled by precedence
+  (`replace`).
 
 ## [0.4.3]
 

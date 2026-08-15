@@ -13,10 +13,6 @@ pub struct ScopeConfig {
     /// fresh default config instead of inheriting.
     #[serde(default)]
     pub inherit: Option<bool>,
-    /// Deprecated alias for `inherit = false`, still parsed for backward
-    /// compatibility. Prefer the [`inherit`](Self::inherit) field.
-    #[serde(default)]
-    pub replace: bool,
     /// Build driver override.
     #[serde(default)]
     pub driver: Option<String>,
@@ -38,6 +34,22 @@ pub struct ScopeConfig {
     /// cargo-fc flag defaults.
     #[serde(default, flatten)]
     pub flags: FlagConfig,
+    /// Deprecated scope keys, still accepted as input.
+    #[serde(flatten)]
+    pub deprecated: DeprecatedScopeKeys,
+}
+
+/// Deprecated scope keys kept as accepted input spellings.
+///
+/// Grouping them here is load-bearing rather than tidy: field names match the
+/// TOML spelling exactly, so the `deprecated.` path segment is the only thing
+/// marking a use site as backward compatibility. Never hoist one back up into
+/// [`ScopeConfig`].
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+pub struct DeprecatedScopeKeys {
+    /// Former spelling of `inherit = false`.
+    #[serde(default)]
+    pub replace: bool,
 }
 
 impl ScopeConfig {
@@ -47,7 +59,7 @@ impl ScopeConfig {
     /// the precedence rule, which config validation also uses.
     #[must_use]
     pub(crate) fn should_inherit(&self) -> bool {
-        should_inherit(self.inherit, self.replace)
+        should_inherit(self.inherit, self.deprecated.replace)
     }
 }
 
@@ -146,6 +158,14 @@ pub struct FeatureMatrixPatch {
 }
 
 /// Deprecated package-level feature keys kept as accepted input spellings.
+///
+/// Grouping them here is load-bearing rather than tidy: field names match the
+/// TOML spelling exactly, so the `deprecated.` path segment is the only thing
+/// marking a use site as backward compatibility. Never hoist one back up into
+/// [`RootConfig`].
+///
+/// [`crate::Package::config`] folds these into the keys that replaced them, so
+/// nothing downstream of config parsing sees them.
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub(crate) struct DeprecatedTomlKeys {
     /// Former name of `exclude_feature_sets`.
@@ -179,7 +199,7 @@ mod tests {
             "pedantic": true,
         });
         let scope: ScopeConfig = serde_json::from_value(value).expect("deserialize ScopeConfig");
-        assert!(scope.replace);
+        assert!(scope.deprecated.replace);
         assert_eq!(scope.flags.pedantic, Some(true));
         assert_eq!(scope.features.skip_optional_dependencies, Some(true));
         assert!(matches!(

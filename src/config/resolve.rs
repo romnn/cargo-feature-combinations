@@ -660,7 +660,7 @@ mod tests {
         ws.base.settings.flags.pedantic = Some(true);
         ws.base.settings.driver = Some("cargo-zigbuild".to_string());
         let mut pkg = Config::default();
-        pkg.base.settings.replace = true;
+        pkg.base.settings.deprecated.replace = true;
         pkg.base.settings.flags.verbose = Some(true);
         pkg.base.settings.driver = Some("cross".to_string());
 

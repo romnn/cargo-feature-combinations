@@ -17,8 +17,8 @@ pub(crate) use flags::{
 pub use flags::{DeprecatedFlagKeys, FlagConfig, ResolvedFlags};
 pub use resolve::ResolvedFeatures;
 pub use schema::{
-    CommandCapabilities, Config, FeatureMatrixPatch, RootConfig, ScopeConfig, SectionConfig,
-    TargetOverride, WorkspaceConfig, WorkspaceTargetOverride,
+    CommandCapabilities, Config, DeprecatedScopeKeys, FeatureMatrixPatch, RootConfig, ScopeConfig,
+    SectionConfig, TargetOverride, WorkspaceConfig, WorkspaceTargetOverride,
 };
 pub(crate) use scope::Chain;
 pub(crate) use validate::{

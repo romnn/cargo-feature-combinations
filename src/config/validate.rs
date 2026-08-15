@@ -28,6 +28,19 @@ const FEATURE_MATRIX_KEYS: &[&str] = &[
 
 const DEPRECATED_FEATURE_KEYS: &[&str] = &["skip_feature_sets", "denylist", "exact_combinations"];
 
+/// Every deprecated config key paired with the current key that replaced it.
+///
+/// One table so each deprecation gets the same treatment: a scope may not spell
+/// the same setting both ways, and using the old spelling says which one to
+/// move to.
+const DEPRECATED_KEY_REPLACEMENTS: &[(&str, &str)] = &[
+    ("skip_feature_sets", "exclude_feature_sets"),
+    ("denylist", "exclude_features"),
+    ("exact_combinations", "include_feature_sets"),
+    ("replace", "inherit"),
+    (DEPRECATED_NO_PRUNE_IMPLIED, "prune_implied"),
+];
+
 const PATCH_TYPED_KEYS: &[&str] = &[
     "targets",
     "exclude_packages",
@@ -141,19 +154,41 @@ fn validate_scope(value: &serde_json::Value, section: &str, scope: ScopeId) -> e
         if let Err(reason) = valid_in(kind, scope) {
             eyre::bail!("`{key}` is not valid in [{section}]: {reason}");
         }
-        if key == DEPRECATED_NO_PRUNE_IMPLIED {
-            print_warning!(
-                "[{section}].{DEPRECATED_NO_PRUNE_IMPLIED} is deprecated; use prune_implied instead"
-            );
-        }
         validate_value_shape(key, value, kind, section)?;
     }
+    validate_deprecated_keys(map, section)?;
     if scope == ScopeId::WorkspaceBase && !scope_should_inherit(map) {
         eyre::bail!(
             "`inherit = false` in [{section}] discards everything broader in the precedence chain, but the workspace base is the broadest scope, so there is nothing broader to discard"
         );
     }
     validate_non_inheriting_patch_ops(map, section)?;
+    Ok(())
+}
+
+/// Reject a scope that spells one setting both ways, and point the deprecated
+/// spellings at the current one.
+///
+/// The package-base feature keys are warned about in [`crate::Package::config`]
+/// instead, which can name the package the manifest belongs to; the rejection
+/// rule is shared by every deprecated key regardless of scope.
+fn validate_deprecated_keys(
+    map: &serde_json::Map<String, serde_json::Value>,
+    section: &str,
+) -> eyre::Result<()> {
+    for (key, replacement) in DEPRECATED_KEY_REPLACEMENTS {
+        if !map.contains_key(*key) {
+            continue;
+        }
+        if map.contains_key(*replacement) {
+            eyre::bail!(
+                "`{key}` and `{replacement}` in [{section}] are two spellings of one setting; configure only `{replacement}`"
+            );
+        }
+        if !DEPRECATED_FEATURE_KEYS.contains(key) {
+            print_warning!("[{section}].{key} is deprecated; use {replacement} instead");
+        }
+    }
     Ok(())
 }
 
@@ -1079,6 +1114,50 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("deprecated"), "{message}");
         assert!(message.contains("exclude_features"), "{message}");
+    }
+
+    /// Every deprecated key names a setting that already has a current
+    /// spelling, so a scope using both is ambiguous rather than additive.
+    #[test]
+    fn deprecated_and_current_spelling_in_one_scope_error() {
+        for (deprecated, replacement, value) in [
+            ("denylist", "exclude_features", serde_json::json!(["gpu"])),
+            (
+                "skip_feature_sets",
+                "exclude_feature_sets",
+                serde_json::json!([["gpu"]]),
+            ),
+            (
+                "exact_combinations",
+                "include_feature_sets",
+                serde_json::json!([["gpu"]]),
+            ),
+            ("replace", "inherit", serde_json::json!(true)),
+            ("no_prune_implied", "prune_implied", serde_json::json!(true)),
+        ] {
+            let mut scope = serde_json::Map::new();
+            scope.insert((*deprecated).to_string(), value.clone());
+            scope.insert((*replacement).to_string(), value);
+
+            let err = super::validate_package_metadata(
+                &serde_json::Value::Object(scope),
+                "package.metadata.cargo-fc",
+            )
+            .expect_err("one setting spelled two ways should fail");
+
+            let message = err.to_string();
+            assert!(message.contains(deprecated), "{message}");
+            assert!(message.contains(replacement), "{message}");
+        }
+    }
+
+    /// The deprecated spellings stay accepted on their own.
+    #[test]
+    fn deprecated_spelling_alone_still_validates() -> color_eyre::eyre::Result<()> {
+        super::validate_package_metadata(
+            &serde_json::json!({ "denylist": ["gpu"], "replace": true, "no_prune_implied": true }),
+            "package.metadata.cargo-fc",
+        )
     }
 
     #[test]

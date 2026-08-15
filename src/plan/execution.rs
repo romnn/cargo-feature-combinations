@@ -481,7 +481,7 @@ mod test {
     fn package_replace_does_not_clear_workspace_exclude_packages() -> eyre::Result<()> {
         let package = package("drop")?;
         let mut config = Config::default();
-        config.base.settings.replace = true;
+        config.base.settings.deprecated.replace = true;
         let target_plans = TargetPlans {
             plans: vec![TargetPlan {
                 target: TargetTriple("configured-target".to_string()),

@@ -160,15 +160,18 @@ pub struct FlagConfig {
 
 /// Deprecated cargo-fc flag keys kept as accepted input spellings.
 ///
-/// Each field carries a `deprecated_` prefix so every use site reads as
-/// backward compatibility, while `serde(rename)` keeps the original wire
-/// spelling working in `Cargo.toml`. [`FlagConfig::normalize`] folds these into
-/// their current fields, so nothing downstream of config parsing sees them.
+/// Grouping them here is load-bearing rather than tidy: field names match the
+/// TOML spelling exactly, so the `deprecated.` path segment is the only thing
+/// marking a use site as backward compatibility. Never hoist one back up into
+/// [`FlagConfig`].
+///
+/// [`FlagConfig::normalize`] folds these into the keys that replaced them, so
+/// nothing downstream of config parsing sees them.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DeprecatedFlagKeys {
     /// Former name of `prune_implied`, carrying the inverse meaning.
-    #[serde(default, rename = "no_prune_implied")]
-    pub deprecated_no_prune_implied: Option<bool>,
+    #[serde(default)]
+    pub no_prune_implied: Option<bool>,
 }
 
 impl FlagConfig {
@@ -185,7 +188,7 @@ impl FlagConfig {
     /// disabling the diagnostics-only output dedupe consumes.
     pub(crate) fn normalize(&mut self, source: FlagSource) -> color_eyre::eyre::Result<()> {
         self.validate(source)?;
-        if let Some(no_prune_implied) = self.deprecated.deprecated_no_prune_implied.take() {
+        if let Some(no_prune_implied) = self.deprecated.no_prune_implied.take() {
             self.prune_implied = Some(!no_prune_implied);
         }
         Ok(())
@@ -193,7 +196,7 @@ impl FlagConfig {
 
     /// Validate contradictions that can be expressed inside one raw scope.
     fn validate(self, source: FlagSource) -> color_eyre::eyre::Result<()> {
-        if self.deprecated.deprecated_no_prune_implied.is_some() && self.prune_implied.is_some() {
+        if self.deprecated.no_prune_implied.is_some() && self.prune_implied.is_some() {
             color_eyre::eyre::bail!(
                 "{} and {} are contradictory; {}",
                 source.spell(DEPRECATED_NO_PRUNE_IMPLIED),
@@ -220,8 +223,8 @@ impl FlagConfig {
         }
         for_each_flag_config_field!(overlay_fields);
         overlay_bool(
-            &mut self.deprecated.deprecated_no_prune_implied,
-            other.deprecated.deprecated_no_prune_implied,
+            &mut self.deprecated.no_prune_implied,
+            other.deprecated.no_prune_implied,
         );
         if other.diagnostics_only == Some(false) && other.dedupe != Some(true) {
             self.dedupe = Some(false);
@@ -317,7 +320,7 @@ impl ResolvedFlags {
             .or_else(|| {
                 config
                     .deprecated
-                    .deprecated_no_prune_implied
+                    .no_prune_implied
                     .map(|no_prune_implied| !no_prune_implied)
             })
             .unwrap_or(true);
@@ -400,9 +403,9 @@ pub(crate) fn combine_flag_configs<'a>(
         None => DEPRECATED_NO_PRUNE_IMPLIED.to_string(),
     };
     if let Some(value) = combine_bool(&deprecated_name, source_kind, &entries, |flags| {
-        flags.deprecated.deprecated_no_prune_implied
+        flags.deprecated.no_prune_implied
     })? {
-        out.deprecated.deprecated_no_prune_implied = Some(value);
+        out.deprecated.no_prune_implied = Some(value);
     }
 
     out.normalize(FlagSource::Config)?;
@@ -575,7 +578,7 @@ mod tests {
     fn deprecated_prune_spelling_folds_into_the_current_key() -> color_eyre::eyre::Result<()> {
         let mut flags = FlagConfig {
             deprecated: super::DeprecatedFlagKeys {
-                deprecated_no_prune_implied: Some(true),
+                no_prune_implied: Some(true),
             },
             ..FlagConfig::default()
         };
@@ -583,7 +586,7 @@ mod tests {
         flags.normalize(super::FlagSource::Config)?;
 
         assert_eq!(flags.prune_implied, Some(false));
-        assert_eq!(flags.deprecated.deprecated_no_prune_implied, None);
+        assert_eq!(flags.deprecated.no_prune_implied, None);
         assert!(ResolvedFlags::from_config(flags).no_prune_implied);
         Ok(())
     }
@@ -592,7 +595,7 @@ mod tests {
         FlagConfig {
             prune_implied: Some(true),
             deprecated: super::DeprecatedFlagKeys {
-                deprecated_no_prune_implied: Some(true),
+                no_prune_implied: Some(true),
             },
             ..FlagConfig::default()
         }
