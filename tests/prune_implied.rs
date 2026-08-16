@@ -527,6 +527,7 @@ fn execute_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
         cli_env_set: &[],
         cli_env_remove: &[],
         default_diagnostics_allowed: true,
+        host: None,
         matrix: false,
     };
     let plan_set = build_execution_plans(

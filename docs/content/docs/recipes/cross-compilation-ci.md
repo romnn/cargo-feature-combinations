@@ -45,6 +45,17 @@ A single `cargo fc clippy` iterates every configured target and feature combinat
 
 If a target pulls in native-C build dependencies, `cargo fc` uses [`cargo-zigbuild`]({{< relref "../targets/drivers.md" >}}) automatically for non-host targets. Install `zig` and `cargo-zigbuild` on the runner, or override the driver.
 
+## Features that can't cross-compile
+
+Some feature-gated toolchains only build natively — nvcc has no cross setup, Metal shader compilation needs a macOS host. Don't encode the runner's architecture into the manifest (`cfg(not(target_arch = "x86_64"))` is wrong the day a native aarch64 runner joins); subtract those rows only where they are actually cross-compiled, with the [`cfg(cross)` selector]({{< relref "../configuration/per-target.md#cfgcross" >}}):
+
+```toml
+[package.metadata.cargo-fc.target.'cfg(cross)']
+exclude_features = { add = ["cuda"] }
+```
+
+Every runner then keeps its own native rows: the x86_64 job checks `cuda` on x86_64, an aarch64 job checks it on aarch64, and each skips the other's. The excluded rows only exist on a native runner of that target, so cover each such platform with its own job.
+
 ## Throughput
 
 Add `--aggregate-targets` to batch each combination's targets into one Cargo invocation on many-core runners:

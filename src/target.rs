@@ -4,10 +4,11 @@ use std::process::Command;
 
 /// Resolve the host triple for a run, warning once when it cannot be detected.
 ///
-/// Execution treats the host specially in two places — it keeps plain `cargo`
-/// as its driver and needs no injected `--target` — so both fall back to the
-/// conservative choice when this returns `None`: every target gets the cross
-/// driver default and keeps its explicit `--target` flag.
+/// Called a single time at startup; every consumer receives the result as
+/// data. On `None`, each degrades to its conservative choice: the driver
+/// default and `--target` injection treat every target as cross, target
+/// installation skips itself, and evaluating `cfg(cross)` reports an error at
+/// the expression that needs the host.
 pub fn detect_host(env: &impl TargetEnvironment) -> Option<TargetTriple> {
     match env.host_target() {
         Ok(host) => Some(host),
@@ -138,6 +139,18 @@ pub fn host_triple() -> eyre::Result<TargetTriple> {
     }
 
     eyre::bail!("could not parse host target triple from `rustc -vV`")
+}
+
+/// Whether a planned target is cross-compiled from the given host.
+///
+/// This is the single definition of "cross", shared by the automatic
+/// per-target driver default and the `cfg(cross)` predicate in target
+/// overrides, so the two cannot drift apart. Any triple mismatch counts,
+/// including same-arch changes such as gnu -> musl: those rows do not build
+/// like an ordinary host `cargo` invocation either.
+#[must_use]
+pub fn is_cross(host: &TargetTriple, target: &TargetTriple) -> bool {
+    host != target
 }
 
 /// Parse an explicit Cargo `--target <triple>` / `--target=<triple>` flag from

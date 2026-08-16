@@ -63,12 +63,25 @@ impl RustcCfgSet {
 /// `CfgEvaluator` implementation backed by `rustc --print cfg`.
 ///
 /// Results are cached per target triple for the duration of this evaluator.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RustcCfgEvaluator {
     cache: HashMap<String, RustcCfgSet>,
+    /// The run's host triple, resolved once by the caller. `None` records that
+    /// host detection failed: evaluating `cfg(cross)` then errors, while
+    /// host-independent expressions are unaffected.
+    host: Option<TargetTriple>,
 }
 
 impl RustcCfgEvaluator {
+    /// Create an evaluator for a run whose host resolved to `host`.
+    #[must_use]
+    pub fn new(host: Option<TargetTriple>) -> Self {
+        Self {
+            cache: HashMap::new(),
+            host,
+        }
+    }
+
     fn cfg_set_for(&mut self, target: &TargetTriple) -> eyre::Result<&RustcCfgSet> {
         let key = target.as_str();
 
@@ -113,10 +126,21 @@ impl RustcCfgEvaluator {
 
     fn validate_supported(expr: &Expression) -> eyre::Result<()> {
         for pred in expr.predicates() {
-            if let Predicate::Feature(_) = pred {
-                eyre::bail!(
+            match pred {
+                Predicate::Feature(_) => eyre::bail!(
                     "cfg expressions using `feature = \"...\"` are not supported in cargo-feature-combinations target overrides"
-                )
+                ),
+                // Bare identifiers reach `Flag` only when cfg-expr has no typed
+                // predicate for them (`unix`, `windows`, `test`,
+                // `debug_assertions` and `proc_macro` are typed), so anything
+                // but cargo-fc's own `cross` is a typo or a custom `--cfg` that
+                // `rustc --print cfg` can never report. Evaluating such a flag
+                // would silently be `false` and disable the override with no
+                // diagnostic, so fail loudly instead.
+                Predicate::Flag(name) if name != "cross" => eyre::bail!(
+                    "unknown cfg flag `{name}` in a cargo-feature-combinations target override; the only supported bare flag is `cross`, which matches when the evaluated target differs from the rustc host"
+                ),
+                _ => {}
             }
         }
         Ok(())
@@ -132,11 +156,28 @@ fn endian_str(e: cfg_expr::targets::Endian) -> &'static str {
 
 impl CfgEvaluator for RustcCfgEvaluator {
     fn matches(&mut self, cfg_expr: &str, target: &TargetTriple) -> eyre::Result<bool> {
-        let set = self.cfg_set_for(target)?;
-
         let expr = Expression::parse(cfg_expr)
             .wrap_err_with(|| format!("failed to parse cfg expression `{cfg_expr}`"))?;
         Self::validate_supported(&expr)?;
+
+        // `cross` compares the evaluated target against the rustc host. A
+        // failed host detection is reported here — at the expression that
+        // needs the host — so the eval closure below stays infallible.
+        let uses_cross = expr
+            .predicates()
+            .any(|pred| matches!(pred, Predicate::Flag("cross")));
+        let is_cross = if uses_cross {
+            let host = self.host.as_ref().ok_or_else(|| {
+                eyre::eyre!(
+                    "`cfg(cross)` requires the rustc host target, which could not be detected"
+                )
+            })?;
+            crate::target::is_cross(host, target)
+        } else {
+            false
+        };
+
+        let set = self.cfg_set_for(target)?;
 
         Ok(expr.eval(|pred| match pred {
             Predicate::Target(tp) => {
@@ -172,7 +213,8 @@ impl CfgEvaluator for RustcCfgEvaluator {
                 }
             }
             Predicate::TargetFeature(feat) => set.has_kv("target_feature", feat),
-            Predicate::Flag(name) => set.has_flag(name),
+            // `validate_supported` rejects every bare flag except `cross`.
+            Predicate::Flag(_name) => is_cross,
             Predicate::KeyValue { key, val } => set.has_kv(key, val),
             Predicate::Test => set.has_flag("test"),
             Predicate::DebugAssertions => set.has_flag("debug_assertions"),
@@ -185,12 +227,23 @@ impl CfgEvaluator for RustcCfgEvaluator {
 #[cfg(test)]
 mod test {
     use super::{CfgEvaluator, RustcCfgEvaluator};
-    use crate::target::host_triple;
+    use crate::target::{TargetTriple, host_triple};
     use color_eyre::eyre;
+
+    /// Real triples usable as an injected host and a cross target on any
+    /// machine: both spellings ship in every rustc target list, and
+    /// `rustc --print cfg` works without the target installed.
+    fn linux_x86() -> TargetTriple {
+        TargetTriple("x86_64-unknown-linux-gnu".to_string())
+    }
+
+    fn linux_aarch64() -> TargetTriple {
+        TargetTriple("aarch64-unknown-linux-gnu".to_string())
+    }
 
     #[test]
     fn matches_simple_true_for_target_arch() -> eyre::Result<()> {
-        let mut eval = RustcCfgEvaluator::default();
+        let mut eval = RustcCfgEvaluator::new(None);
         let host = host_triple()?;
 
         // Host must match its own arch.
@@ -216,15 +269,78 @@ mod test {
 
     #[test]
     fn rejects_feature_predicate() -> eyre::Result<()> {
-        let mut eval = RustcCfgEvaluator::default();
-        let host = host_triple()?;
+        let mut eval = RustcCfgEvaluator::new(None);
 
-        let err = match eval.matches(r#"cfg(feature = "foo")"#, &host) {
+        let err = match eval.matches(r#"cfg(feature = "foo")"#, &linux_x86()) {
             Ok(v) => eyre::bail!("expected cfg(feature=...) to be rejected, got {v}"),
             Err(err) => err,
         };
         assert!(err.to_string().contains("not supported"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn cross_flag_tracks_host_vs_target() -> eyre::Result<()> {
+        let host = linux_x86();
+        let cross = linux_aarch64();
+        let mut eval = RustcCfgEvaluator::new(Some(host.clone()));
+
+        assert!(!eval.matches("cfg(cross)", &host)?);
+        assert!(eval.matches("cfg(not(cross))", &host)?);
+        assert!(eval.matches("cfg(cross)", &cross)?);
+        assert!(eval.matches(r#"cfg(all(cross, target_os = "linux"))"#, &cross)?);
+
+        // `cross` is an ordinary predicate to the expression evaluator, so it
+        // composes with every combinator at any nesting depth.
+        assert!(eval.matches("cfg(any(cross, windows))", &cross)?);
+        assert!(!eval.matches("cfg(any(cross, windows))", &host)?);
+        assert!(eval.matches("cfg(not(any(cross, windows)))", &host)?);
+        assert!(eval.matches(
+            r#"cfg(all(unix, not(all(cross, target_arch = "x86_64"))))"#,
+            &cross
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn cross_errors_when_host_is_unknown() -> eyre::Result<()> {
+        let mut eval = RustcCfgEvaluator::new(None);
+
+        let err = match eval.matches("cfg(cross)", &linux_x86()) {
+            Ok(v) => eyre::bail!("expected cfg(cross) without a host to fail, got {v}"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("could not be detected"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unknown_bare_flag() -> eyre::Result<()> {
+        let mut eval = RustcCfgEvaluator::new(None);
+
+        // spellcheck:ignore-next-line -- a deliberate misspelling of `cross` is under test
+        let err = match eval.matches("cfg(corss)", &linux_x86()) {
+            // spellcheck:ignore-next-line
+            Ok(v) => eyre::bail!("expected cfg(corss) to be rejected, got {v}"),
+            Err(err) => err,
+        };
+        assert!(
+            // spellcheck:ignore-next-line
+            err.to_string().contains("unknown cfg flag `corss`"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    /// Bare identifiers that cfg-expr types (`unix`, `test`, and friends) must
+    /// not trip the unknown-flag rejection.
+    #[test]
+    fn typed_bare_identifiers_still_evaluate() -> eyre::Result<()> {
+        let mut eval = RustcCfgEvaluator::new(None);
+
+        assert!(eval.matches("cfg(unix)", &linux_aarch64())?);
+        assert!(!eval.matches("cfg(windows)", &linux_aarch64())?);
         Ok(())
     }
 }

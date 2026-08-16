@@ -57,7 +57,31 @@ Matrix metadata tables merge recursively; other metadata values, including array
 
 ## Which selector matches
 
-A section applies when its `cfg(...)` predicate matches the concrete target being resolved. `cfg(feature = "...")` predicates are **not** supported in target-override keys. If `--target <triple>` or `CARGO_BUILD_TARGET` is set, that value selects matching overrides — this also applies to `cargo fc matrix`.
+A section applies when its `cfg(...)` predicate matches the concrete target being resolved. Predicates are evaluated against the real `rustc --print cfg` output for that target, so all `target_*` predicates (`target_os`, `target_arch`, `target_env`, `target_family`, `target_vendor`, `target_abi`, `target_endian`, `target_pointer_width`, `target_has_atomic`, `target_feature`) and the bare `unix` / `windows` family shorthands work, including for custom targets. If `--target <triple>` or `CARGO_BUILD_TARGET` is set, that value selects matching overrides — this also applies to `cargo fc matrix`.
+
+Two spellings are rejected as hard errors:
+
+- `cfg(feature = "...")` — feature selection is the very thing cargo-fc varies.
+- Any bare flag other than [`cross`](#cfgcross) — a typo like `cfg(corss)` would otherwise silently match nothing and disable the override without a diagnostic. <!-- spellcheck:ignore-line -->
+
+## `cfg(cross)`
+
+`cross` is a cargo-fc predicate, not a rustc cfg: it matches exactly when the section's evaluated target differs from the rustc host — the same rule the [automatic driver default]({{< relref "../targets/drivers.md" >}}) uses to decide between plain `cargo` and `cargo-zigbuild`. Use it for policy about cross-compilation itself, which no `target_*` predicate can express because it depends on the machine running the matrix, not on the target alone:
+
+```toml
+# nvcc cannot cross-compile: drop the CUDA rows only when the target is not
+# the machine doing the build. A native aarch64 host with the CUDA toolkit
+# keeps its cuda rows; an x86_64 host cross-checking aarch64 drops them.
+[package.metadata.cargo-fc.target.'cfg(cross)']
+exclude_features = { add = ["cuda"] }
+
+# Composes with target predicates: compiling Metal shaders needs a macOS
+# host, but type-checking the macOS rows from elsewhere works with stubs.
+[package.metadata.cargo-fc.target.'cfg(all(target_os = "macos", cross))']
+env = { add = { MISTRALRS_METAL_PRECOMPILE = "0" } }
+```
+
+Because `cross` depends on the host, a matrix that uses it is machine-relative: rows excluded under `cfg(cross)` run only on a native host of that target. That is the point — the same checked-in manifest does the right thing on every machine — but it means full coverage of such rows needs one runner per native platform; one machine's green run is not the whole matrix.
 
 ## `inherit = false`
 

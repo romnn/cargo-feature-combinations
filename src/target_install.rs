@@ -3,7 +3,7 @@
 use crate::plan::execution::ExecutionPlanSet;
 use crate::print_note;
 use crate::print_warning;
-use crate::target::{TargetEnvironment, TargetTriple};
+use crate::target::TargetTriple;
 use color_eyre::eyre::{self, WrapErr};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -109,19 +109,15 @@ impl TargetInstaller for RustupTargetInstaller {
 /// target-specific package exclusion have already been resolved.
 pub(crate) fn ensure_missing_targets_installed(
     plan_set: &ExecutionPlanSet<'_>,
-    env: &impl TargetEnvironment,
     installer: &impl TargetInstaller,
 ) -> eyre::Result<()> {
-    let host = match env.host_target() {
-        Ok(host) => host,
-        Err(err) => {
-            print_warning!(
-                "could not detect host target before installing Rust targets: {err}; continuing without installing targets",
-            );
-            return Ok(());
-        }
+    let Some(host) = plan_set.host.as_ref() else {
+        // Startup already warned about the failed detection; without a host
+        // there is no way to tell which planned targets need installing.
+        print_warning!("the rustc host target is unknown; continuing without installing targets",);
+        return Ok(());
     };
-    let contexts = install_contexts(plan_set, &host)?;
+    let contexts = install_contexts(plan_set, host)?;
 
     for context in &contexts {
         install_missing_for_context(context, installer, contexts.len() > 1);
@@ -263,7 +259,7 @@ mod test {
     };
     use crate::package::test::{effective_target, package_with_manifest_path as package};
     use crate::plan::execution::{ExecutionPlan, ExecutionPlanSet, PackageExecutionPlan};
-    use crate::target::{TargetEnvironment, TargetTriple};
+    use crate::target::TargetTriple;
     use color_eyre::eyre;
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeSet;
@@ -304,7 +300,7 @@ mod test {
                 .collect(),
             show_pruned: false,
             show_target: targets.len() > 1,
-            host: None,
+            host: Some(TargetTriple("host".to_string())),
         }
     }
 
@@ -319,33 +315,6 @@ mod test {
             }
         }
         plan_set
-    }
-
-    struct FakeEnv {
-        fail_host: bool,
-    }
-
-    impl FakeEnv {
-        fn new() -> Self {
-            Self { fail_host: false }
-        }
-
-        fn failing() -> Self {
-            Self { fail_host: true }
-        }
-    }
-
-    impl TargetEnvironment for FakeEnv {
-        fn cargo_build_target(&self) -> Option<String> {
-            None
-        }
-
-        fn host_target(&self) -> eyre::Result<TargetTriple> {
-            if self.fail_host {
-                eyre::bail!("host failed");
-            }
-            Ok(TargetTriple("host".to_string()))
-        }
     }
 
     struct FakeInstaller {
@@ -447,7 +416,7 @@ mod test {
         let plans = plan_set(&["host", "wasm", "windows"], &[&package]);
         let installer = FakeInstaller::new(&["windows"]);
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::new(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert_eq!(
             installer.list_calls.borrow().as_slice(),
@@ -467,7 +436,7 @@ mod test {
         let plans = plan_set(&["host"], &[&package]);
         let installer = FakeInstaller::new(&[]);
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::new(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert!(installer.list_calls.borrow().is_empty());
         assert!(installer.install_calls.borrow().is_empty());
@@ -480,7 +449,7 @@ mod test {
         let plans = plan_set(&["wasm"], &[&package]);
         let installer = FakeInstaller::new(&[]).with_list_error();
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::new(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert_eq!(
             installer.list_calls.borrow().as_slice(),
@@ -491,12 +460,13 @@ mod test {
     }
 
     #[test]
-    fn ensure_missing_targets_installed_continues_when_host_detection_fails() -> eyre::Result<()> {
+    fn ensure_missing_targets_installed_continues_when_host_is_unknown() -> eyre::Result<()> {
         let package = package("a", "/workspace/a/Cargo.toml")?;
-        let plans = plan_set(&["wasm"], &[&package]);
+        let mut plans = plan_set(&["wasm"], &[&package]);
+        plans.host = None;
         let installer = FakeInstaller::new(&[]);
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::failing(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert!(installer.list_calls.borrow().is_empty());
         assert!(installer.install_calls.borrow().is_empty());
@@ -509,7 +479,7 @@ mod test {
         let plans = empty_plan_set(&["wasm"], &[&package]);
         let installer = FakeInstaller::new(&[]);
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::new(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert!(installer.list_calls.borrow().is_empty());
         assert!(installer.install_calls.borrow().is_empty());
@@ -522,7 +492,7 @@ mod test {
         let plans = plan_set(&["wasm", "windows"], &[&package]);
         let installer = FakeInstaller::new(&[]).with_next_install_failure();
 
-        ensure_missing_targets_installed(&plans, &FakeEnv::new(), &installer)?;
+        ensure_missing_targets_installed(&plans, &installer)?;
 
         assert_eq!(
             installer.install_calls.borrow().as_slice(),

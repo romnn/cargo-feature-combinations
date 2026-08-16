@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## [0.5.0]
+
+### Added
+
+- `cross` as a cargo-fc predicate in target override cfg keys: a
+  `target.'cfg(cross)'` section applies exactly when the evaluated target
+  differs from the rustc host — the same rule the automatic driver default uses
+  to pick `cargo-zigbuild` over plain `cargo`, shared with it in code so the
+  two cannot drift. This makes host-relative policy expressible in checked-in
+  manifests: excluding features whose build tooling cannot cross-compile
+  (nvcc's CUDA kernels), scoping stub environment variables to cross rows only
+  (`cfg(all(target_os = "macos", cross))`), or pinning a per-row driver. The
+  previous closest spellings were each wrong on some machine: `targets = []`
+  drops all non-host coverage, and arch/OS predicates hard-code the machine the
+  matrix was written on — a native aarch64 host with a CUDA toolchain would
+  wrongly lose its `cuda` rows to `cfg(not(target_arch = "x86_64"))`. `cross`
+  composes with every cfg combinator and applies to `cargo fc matrix` output
+  too. Note that a matrix using it is machine-relative by design: rows excluded
+  under `cfg(cross)` exist only on a native host of that target, so full
+  coverage needs one runner per native platform.
+
+### Changed
+
+- **Breaking:** an unknown bare flag in a target override cfg key is now a hard
+  error instead of silently evaluating to false. Bare identifiers reach
+  cargo-fc only when cfg-expr has no typed predicate for them (`unix`,
+  `windows`, `test`, `debug_assertions`, and `proc_macro` are typed and keep
+  working), so a remaining flag is either cargo-fc's own `cross` or a typo /
+  custom `--cfg` that `rustc --print cfg` can never report — configuration that
+  could not possibly take effect. A misspelling such as
+  `cfg(corss)` now fails the run instead of <!-- spellcheck:ignore-line -->
+  disabling the override with no diagnostic.
+
+- The rustc host target is now detected once at startup and handed to every
+  consumer as data: `cfg(cross)` evaluation, the automatic driver default,
+  host `--target` omission, and missing-target installation all read the same
+  resolved value instead of each shelling out to `rustc` on their own. For
+  library users this is breaking: `RustcCfgEvaluator` is constructed with the
+  resolved host (`RustcCfgEvaluator::new(Option<TargetTriple>)`) and no longer
+  implements `Default`, and `ensure_missing_targets_installed` reads the host
+  from the execution plans. When detection fails, each consumer degrades
+  explicitly: driver and `--target` decisions treat every target as cross,
+  target installation skips itself, and evaluating `cfg(cross)` errors at the
+  expression that needs the host.
+
+### Fixed
+
+- The automatic cross-driver probe now requires `cargo-zigbuild --version` to
+  exit successfully instead of merely spawning. A broken installation — for
+  example a tool-manager shim with no version configured — previously passed
+  the probe, and every cross row then failed with zero errors and zero
+  warnings. It now takes the same warn-and-fall-back-to-plain-cargo path as a
+  missing driver, with the probe's stderr included in the warning so the fix
+  (often printed verbatim by the shim) is visible.
+
 ## [0.4.4]
 
 ### Added

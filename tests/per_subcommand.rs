@@ -67,6 +67,7 @@ fn matrix_rows_for_command(
         cli_env_set: &[],
         cli_env_remove: &[],
         default_diagnostics_allowed: false,
+        host: None,
         matrix: true,
     };
     let mut plan_set =

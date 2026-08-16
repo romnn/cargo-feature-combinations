@@ -203,6 +203,26 @@ pub(crate) fn ws_metadata_section(key: &str) -> String {
     format!("workspace.metadata.{key}")
 }
 
+/// Handle the commands that print and exit without touching the workspace:
+/// `help`, `version`, and a bare invocation with nothing to run.
+fn print_help_or_version(bin_name: &str, options: &Options, cargo_args: &[String]) -> bool {
+    match &options.command {
+        Some(Command::Help) => {
+            cli::print_help();
+            true
+        }
+        Some(Command::Version) => {
+            println!("cargo-{bin_name} v{}", env!("CARGO_PKG_VERSION"));
+            true
+        }
+        None if cargo_args.is_empty() => {
+            cli::print_help();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Run the cargo subcommand for all relevant feature combinations.
 ///
 /// This is the main entry point used by the binaries in this crate.
@@ -215,19 +235,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     color_eyre::install()?;
 
     let (options, cargo_args) = parse_arguments(bin_name)?;
-
-    if let Some(Command::Help) = options.command {
-        cli::print_help();
-        return Ok(());
-    }
-
-    if let Some(Command::Version) = options.command {
-        println!("cargo-{bin_name} v{}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    if options.command.is_none() && cargo_args.is_empty() {
-        cli::print_help();
+    if print_help_or_version(bin_name, &options, &cargo_args) {
         return Ok(());
     }
 
@@ -269,7 +277,8 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     );
 
     let env = RustcTargetEnvironment;
-    let mut evaluator = RustcCfgEvaluator::default();
+    let host = target::detect_host(&env);
+    let mut evaluator = RustcCfgEvaluator::new(host.clone());
     let base_exclude = validated_base_exclude_packages(&metadata, &ws_config, ws_key)?;
 
     let expansion = match prepared.cli_target.as_deref() {
@@ -302,6 +311,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
             &ws_config,
             tokens,
             pretty,
+            host,
             &mut evaluator,
         )
     } else {
@@ -315,7 +325,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 workspace_config: &ws_config,
                 workspace_key: ws_key,
             },
-            &env,
+            host,
             &mut evaluator,
         )
     };
@@ -427,6 +437,7 @@ fn print_matrix_command(
     workspace: &config::WorkspaceConfig,
     tokens: CommandTokens<'_>,
     pretty: bool,
+    host: Option<target::TargetTriple>,
     evaluator: &mut impl cfg_eval::CfgEvaluator,
 ) -> eyre::Result<ExitCode> {
     let context = plan::execution::PlanBuildContext {
@@ -440,6 +451,7 @@ fn print_matrix_command(
         cli_env_set: &[],
         cli_env_remove: &[],
         default_diagnostics_allowed: false,
+        host,
         matrix: true,
     };
     let mut plan_set =
@@ -452,7 +464,7 @@ fn print_matrix_command(
 
 fn run_cargo_command(
     dispatch: CargoCommandDispatch<'_>,
-    env: &impl target::TargetEnvironment,
+    host: Option<target::TargetTriple>,
     evaluator: &mut impl cfg_eval::CfgEvaluator,
 ) -> eyre::Result<ExitCode> {
     let options = dispatch.options;
@@ -466,6 +478,7 @@ fn run_cargo_command(
         cli_env_set: &options.env_set,
         cli_env_remove: &options.env_remove,
         default_diagnostics_allowed,
+        host,
         matrix: false,
     };
     let mut plan_set = plan::execution::build_execution_plans(
@@ -475,9 +488,8 @@ fn run_cargo_command(
         evaluator,
     )?;
     plan::maximal::maybe_retain_maximal_feature_sets(&mut plan_set);
-    plan_set.host = target::detect_host(env);
     driver::finalize_plan_drivers(&mut plan_set)?;
-    maybe_install_missing_targets(&plan_set, env, &dispatch.cargo_args)?;
+    maybe_install_missing_targets(&plan_set, &dispatch.cargo_args)?;
     let mode = runner::resolve_execution_mode(
         &dispatch.cargo_args,
         &plan_set,
@@ -582,7 +594,6 @@ fn select_candidate_packages<'a>(
 
 fn maybe_install_missing_targets(
     plan_set: &plan::execution::ExecutionPlanSet<'_>,
-    env: &impl target::TargetEnvironment,
     cargo_args: &[&str],
 ) -> eyre::Result<()> {
     if plan_set.plans.iter().any(|plan| {
@@ -592,7 +603,7 @@ fn maybe_install_missing_targets(
     }) {
         let installer =
             target_install::RustupTargetInstaller::new(cli::rustup_toolchain(cargo_args));
-        target_install::ensure_missing_targets_installed(plan_set, env, &installer)?;
+        target_install::ensure_missing_targets_installed(plan_set, &installer)?;
     }
     Ok(())
 }

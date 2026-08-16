@@ -31,6 +31,7 @@ fn matrix_context(workspace_config: &WorkspaceConfig) -> PlanBuildContext<'_> {
         cli_env_set: &[],
         cli_env_remove: &[],
         default_diagnostics_allowed: false,
+        host: None,
         matrix: true,
     }
 }
@@ -494,7 +495,7 @@ fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
         .collect();
     let base_exclude = meta.base_workspace_exclude_packages()?;
     let env = HostEnv("host-triple");
-    let mut eval = cargo_feature_combinations::cfg_eval::RustcCfgEvaluator::default();
+    let mut eval = cargo_feature_combinations::cfg_eval::RustcCfgEvaluator::new(None);
 
     let target_plans = build_target_plans(
         &selected,

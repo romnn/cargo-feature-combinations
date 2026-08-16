@@ -66,6 +66,7 @@ fn drivers_by_target(
         cli_env_set: &[],
         cli_env_remove: &[],
         default_diagnostics_allowed: false,
+        host: None,
         matrix: false,
     };
     let plan_set =

@@ -17,19 +17,11 @@ const CROSS_TARGET_DRIVER: &str = "cargo-zigbuild";
 /// is normalized (`"cargo"` -> plain `$CARGO`), while an unset driver falls
 /// back to cargo-fc's built-in default for that plan's target.
 pub(crate) fn finalize_plan_drivers(plan_set: &mut ExecutionPlanSet) -> eyre::Result<()> {
-    let needs_default = plan_set
-        .plans
-        .iter()
-        .flat_map(|plan| &plan.package_plans)
-        .any(|pp| pp.driver.is_none());
-    let mut default = needs_default.then(|| DefaultDriver::new(plan_set.host.clone()));
-
+    let default = DefaultDriver::resolve(plan_set);
     for plan in &mut plan_set.plans {
-        let fallback = default
-            .as_mut()
-            .and_then(|default| default.for_target(&plan.target));
+        let fallback = default.for_target(&plan.target);
         for pp in &mut plan.package_plans {
-            pp.driver = finalize_driver(pp.driver.as_deref(), fallback.as_deref())?;
+            pp.driver = finalize_driver(pp.driver.as_deref(), fallback)?;
         }
     }
     Ok(())
@@ -47,72 +39,101 @@ struct DefaultDriver {
     /// `None` when host detection failed. Every target then falls back to plain
     /// cargo, mirroring missing-target installation behavior.
     host: Option<TargetTriple>,
-    /// Whether [`CROSS_TARGET_DRIVER`] has been looked up yet, and what the
-    /// lookup found.
-    cross: CrossDriverProbe,
-}
-
-/// Result of looking up [`CROSS_TARGET_DRIVER`] on `PATH`, memoized so a run
-/// with many cross targets probes (and warns) once.
-enum CrossDriverProbe {
-    Unprobed,
-    Available,
-    Missing,
+    /// The probed cross driver. `None` when no plan needs it or when the probe
+    /// failed, which [`Self::resolve`] warned about.
+    cross_driver: Option<String>,
 }
 
 impl DefaultDriver {
-    fn new(host: Option<TargetTriple>) -> Self {
-        Self {
-            host,
-            cross: CrossDriverProbe::Unprobed,
+    /// Resolve the default for this plan set, immutable from here on.
+    ///
+    /// [`CROSS_TARGET_DRIVER`] is probed (and a failed probe warned about)
+    /// exactly when some cross-target plan leaves a driver unset — a host-only
+    /// run or one with explicit drivers everywhere spawns and prints nothing.
+    fn resolve(plan_set: &ExecutionPlanSet<'_>) -> Self {
+        let mut default = Self {
+            host: plan_set.host.clone(),
+            cross_driver: None,
+        };
+        let needs_cross_default = plan_set.plans.iter().any(|plan| {
+            default.needs_cross_driver(&plan.target)
+                && plan.package_plans.iter().any(|pp| pp.driver.is_none())
+        });
+        if needs_cross_default {
+            default.cross_driver = match probe_driver(CROSS_TARGET_DRIVER) {
+                Ok(()) => Some(CROSS_TARGET_DRIVER.to_string()),
+                Err(failure) => {
+                    let detail = failure
+                        .detail
+                        .map(|detail| format!("\n{detail}"))
+                        .unwrap_or_default();
+                    print_warning!(
+                        "build driver `{CROSS_TARGET_DRIVER}` was selected automatically for a cross-target run but {}; using plain cargo{detail}",
+                        failure.reason
+                    );
+                    None
+                }
+            };
         }
+        default
     }
 
     /// Whether `target` is a cross target that plain cargo cannot be trusted to
     /// build. An undetectable host answers `false` for every target.
     fn needs_cross_driver(&self, target: &TargetTriple) -> bool {
-        self.host.as_ref().is_some_and(|host| host != target)
+        self.host
+            .as_ref()
+            .is_some_and(|host| crate::target::is_cross(host, target))
     }
 
     /// The driver to fall back to for `target`, or `None` for plain cargo.
-    ///
-    /// The cross driver is probed at most once per run, and only if a cross
-    /// target actually reaches this.
-    fn for_target(&mut self, target: &TargetTriple) -> Option<String> {
-        if !self.needs_cross_driver(target) {
-            return None;
-        }
-        if matches!(self.cross, CrossDriverProbe::Unprobed) {
-            self.cross = if driver_is_available(CROSS_TARGET_DRIVER) {
-                CrossDriverProbe::Available
-            } else {
-                print_warning!(
-                    "build driver `{CROSS_TARGET_DRIVER}` was selected automatically for a cross-target run but was not found; using plain cargo"
-                );
-                CrossDriverProbe::Missing
-            };
-        }
-        match self.cross {
-            CrossDriverProbe::Available => Some(CROSS_TARGET_DRIVER.to_string()),
-            CrossDriverProbe::Unprobed | CrossDriverProbe::Missing => None,
+    fn for_target(&self, target: &TargetTriple) -> Option<&str> {
+        if self.needs_cross_driver(target) {
+            self.cross_driver.as_deref()
+        } else {
+            None
         }
     }
 }
 
-fn driver_is_available(driver: &str) -> bool {
+/// Why an automatic driver cannot be used, split so the caller's warning can
+/// finish its sentence before any multi-line probe output.
+struct ProbeFailure {
+    /// Clause completing "…was selected automatically but {reason}".
+    reason: String,
+    /// The probe's stderr, when it produced any.
+    detail: Option<String>,
+}
+
+/// Check that `driver --version` runs and succeeds.
+///
+/// A non-zero exit is treated as unavailable just like a missing binary: a
+/// broken installation (for example a tool-manager shim with no version
+/// configured) would otherwise pass the probe and then fail every cross row
+/// with no diagnostics.
+fn probe_driver(driver: &str) -> Result<(), ProbeFailure> {
     match Command::new(driver)
         .arg("--version")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .output()
     {
-        Ok(_) => true,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-        Err(err) => {
-            print_warning!("could not probe build driver `{driver}`: {err}; using plain cargo");
-            false
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            Err(ProbeFailure {
+                reason: format!("`{driver} --version` failed with {}", output.status),
+                detail: (!stderr.is_empty()).then(|| stderr.to_string()),
+            })
         }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(ProbeFailure {
+            reason: "was not found".to_string(),
+            detail: None,
+        }),
+        Err(err) => Err(ProbeFailure {
+            reason: format!("could not be probed: {err}"),
+            detail: None,
+        }),
     }
 }
 
@@ -142,7 +163,7 @@ fn normalize_driver(driver: &str) -> eyre::Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DefaultDriver, finalize_driver};
+    use super::{DefaultDriver, finalize_driver, probe_driver};
     use crate::target::{self, TargetTriple};
     use color_eyre::eyre;
 
@@ -165,8 +186,10 @@ mod tests {
 
     #[test]
     fn default_driver_is_plain_cargo_for_the_host_target() {
-        let default =
-            DefaultDriver::new(target::detect_host(&DriverTestEnv { host: Some("host") }));
+        let default = DefaultDriver {
+            host: target::detect_host(&DriverTestEnv { host: Some("host") }),
+            cross_driver: None,
+        };
 
         assert!(!default.needs_cross_driver(&TargetTriple("host".to_string())));
     }
@@ -176,8 +199,16 @@ mod tests {
     /// `cargo` build.
     #[test]
     fn default_driver_is_per_target_not_per_run() {
-        let default =
-            DefaultDriver::new(target::detect_host(&DriverTestEnv { host: Some("host") }));
+        let default = DefaultDriver {
+            host: target::detect_host(&DriverTestEnv { host: Some("host") }),
+            cross_driver: Some("cargo-zigbuild".to_string()),
+        };
+
+        assert_eq!(default.for_target(&TargetTriple("host".to_string())), None);
+        assert_eq!(
+            default.for_target(&TargetTriple("wasm".to_string())),
+            Some("cargo-zigbuild")
+        );
 
         assert!(!default.needs_cross_driver(&TargetTriple("host".to_string())));
         assert!(default.needs_cross_driver(&TargetTriple("wasm".to_string())));
@@ -218,8 +249,50 @@ mod tests {
 
     #[test]
     fn default_driver_falls_back_to_plain_cargo_when_host_detection_fails() {
-        let default = DefaultDriver::new(target::detect_host(&DriverTestEnv { host: None }));
+        let default = DefaultDriver {
+            host: target::detect_host(&DriverTestEnv { host: None }),
+            cross_driver: Some("cargo-zigbuild".to_string()),
+        };
 
         assert!(!default.needs_cross_driver(&TargetTriple("wasm".to_string())));
+        assert_eq!(default.for_target(&TargetTriple("wasm".to_string())), None);
+    }
+
+    #[test]
+    fn probe_driver_accepts_working_driver() {
+        // rustc is on PATH for every test run of this crate and its
+        // `--version` exits successfully.
+        assert!(probe_driver("rustc").is_ok());
+    }
+
+    #[test]
+    fn probe_driver_reports_missing_driver() {
+        let failure = probe_driver("cargo-fc-test-missing-driver").unwrap_err();
+        assert_eq!(failure.reason, "was not found");
+        assert!(failure.detail.is_none());
+    }
+
+    /// A driver that spawns but cannot report a version (e.g. a tool-manager
+    /// shim with no version configured) must fail the probe with its stderr
+    /// preserved, not count as available.
+    #[cfg(unix)]
+    #[test]
+    fn probe_driver_rejects_failing_version_probe() -> eyre::Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = assert_fs::TempDir::new()?;
+        let script = dir.path().join("broken-driver");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'shim: no version set' >&2\nexit 3\n",
+        )?;
+        let mut permissions = std::fs::metadata(&script)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions)?;
+
+        let failure = probe_driver(&script.to_string_lossy()).unwrap_err();
+        assert!(failure.reason.contains("failed with"), "{}", failure.reason);
+        assert_eq!(failure.detail.as_deref(), Some("shim: no version set"));
+        Ok(())
     }
 }

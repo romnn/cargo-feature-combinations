@@ -26,6 +26,10 @@ pub struct PlanBuildContext<'a> {
     pub cli_env_remove: &'a [String],
     /// Whether broad diagnostics config is safe for the resolved command.
     pub default_diagnostics_allowed: bool,
+    /// The run's host triple, resolved once at startup; `None` when detection
+    /// failed. Stored on the built [`ExecutionPlanSet`] so execution can tell
+    /// native plans from cross plans.
+    pub host: Option<TargetTriple>,
     /// Whether these plans are for `cargo fc matrix`.
     pub matrix: bool,
 }
@@ -78,8 +82,8 @@ pub struct ExecutionPlanSet<'a> {
     /// Whether the `target = ...` field should be shown (not the implicit
     /// single-host default).
     pub show_target: bool,
-    /// The host triple, once resolved for a run. `None` while planning, for
-    /// `cargo fc matrix` (which spawns nothing), and when host detection fails.
+    /// The run's host triple, resolved once at startup and carried in from
+    /// [`PlanBuildContext`]. `None` when host detection failed.
     ///
     /// Execution reads it to decide which plans are native: the driver default
     /// and the injected `--target` flags both differ for the host.
@@ -207,8 +211,7 @@ pub fn build_execution_plans<'a>(
         plans,
         show_pruned,
         show_target,
-        // Planning never shells out to `rustc -vV`; execution fills this in.
-        host: None,
+        host: context.host.clone(),
     })
 }
 
@@ -370,6 +373,7 @@ mod test {
             cli_env_set: &[],
             cli_env_remove: &[],
             default_diagnostics_allowed: false,
+            host: None,
             matrix: false,
         }
     }
