@@ -282,7 +282,14 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let base_exclude = validated_base_exclude_packages(&metadata, &ws_config, ws_key)?;
 
     let expansion = match prepared.cli_target.as_deref() {
-        Some(cli) => plan::targets::TargetExpansion::Explicit(cli),
+        Some(cli) => plan::targets::TargetExpansion::Explicit {
+            triple: cli,
+            // Only the command-line `--no-targets` lifts the package-level
+            // `targets` filter. Config-scoped `no_targets` stops sweep
+            // expansion for a command and must not silently authorize
+            // foreign-target builds a package opted out of.
+            force: options.flags.no_targets == Some(true),
+        },
         None if selected
             .iter()
             .any(|package| !package.ignore_configured_targets) =>

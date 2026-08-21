@@ -12,8 +12,10 @@
 //! for one already-selected target.
 
 use crate::cfg_eval::CfgEvaluator;
+use crate::config::resolve::TargetListResolution;
 use crate::config::{Chain, Config, WorkspaceConfig, WorkspaceTargetOverride};
 use crate::target::{EffectiveTarget, TargetEnvironment, TargetSource, TargetTriple};
+use crate::{print_note, print_warning};
 use color_eyre::eyre;
 use std::collections::HashSet;
 
@@ -27,7 +29,12 @@ pub struct SelectedPackage<'a> {
     pub package: &'a cargo_metadata::Package,
     /// The cached base cargo-fc config for this package.
     pub config: &'a Config,
-    /// Whether configured target lists should be ignored for this package.
+    /// Whether configured target lists should be ignored for this package
+    /// when expanding the target axis ([`TargetExpansion::Configured`]).
+    ///
+    /// An explicit CLI `--target` does not consult this: the package-level
+    /// `targets` capability filter applies regardless, and only the `force`
+    /// carried by [`TargetExpansion::Explicit`] lifts it.
     pub ignore_configured_targets: bool,
     /// Whether the target-selection decision came from an explicit cargo-fc
     /// flag or subcommand override rather than the built-in command default.
@@ -141,14 +148,35 @@ struct PackageTargetAssignment {
     show_target: bool,
 }
 
+/// The config-chain inputs shared by every per-package `targets` resolution:
+/// the workspace config and the cargo subcommand tokens that drive
+/// command-aware patches.
+#[derive(Clone, Copy)]
+struct TargetsChainContext<'a> {
+    workspace: &'a WorkspaceConfig,
+    raw_command: Option<&'a str>,
+    resolved_command: Option<&'a str>,
+}
+
+impl TargetsChainContext<'_> {
+    /// Resolve one package's command-aware `targets` list.
+    fn targets_list(&self, config: &Config) -> eyre::Result<TargetListResolution> {
+        Chain::base(
+            self.workspace,
+            Some(config),
+            self.raw_command,
+            self.resolved_command,
+        )
+        .targets_list(&[])
+    }
+}
+
 /// Resolve one selected package's effective target list through the
 /// command-aware `targets` chain. CLI `--target` is a global override handled by
 /// the caller.
 fn package_target_list(
     selected: &SelectedPackage<'_>,
-    workspace: &WorkspaceConfig,
-    raw_command: Option<&str>,
-    resolved_command: Option<&str>,
+    chain: TargetsChainContext<'_>,
     env: &impl TargetEnvironment,
     fallback_cache: &mut Option<EffectiveTarget>,
 ) -> eyre::Result<Vec<PackageTargetAssignment>> {
@@ -156,13 +184,7 @@ fn package_target_list(
         return Ok(vec![fallback_assignment(env, fallback_cache, false)?]);
     }
 
-    let resolution = Chain::base(
-        workspace,
-        Some(selected.config),
-        raw_command,
-        resolved_command,
-    )
-    .targets_list(&[])?;
+    let resolution = chain.targets_list(selected.config)?;
 
     if resolution.targets.is_empty() {
         // No configured targets, or a `targets` patch reduced the list to empty
@@ -191,50 +213,138 @@ fn package_target_list(
         .collect())
 }
 
+/// Render a package's configured `targets` list the way it appears in the
+/// manifest, for skip warnings and force notes.
+fn configured_targets_display(targets: &[TargetTriple]) -> String {
+    let quoted: Vec<String> = targets
+        .iter()
+        .map(|triple| format!("\"{triple}\""))
+        .collect();
+    format!("targets = [{}]", quoted.join(", "))
+}
+
+/// The package-level `targets` constraint that excludes `triple`, if any.
+///
+/// `None` when the package's own config does not shape its target list, or
+/// when the constraint admits the triple. For a `targets = []` opt-out the
+/// constraint is the empty list, and the triple is admitted only when it
+/// equals the package's single default target (`CARGO_BUILD_TARGET`, then
+/// host).
+///
+/// # Errors
+///
+/// Returns an error if the configured list contains an empty triple — the
+/// same validation every configured-list expansion applies.
+fn excluding_package_constraint(
+    resolution: &TargetListResolution,
+    triple: &str,
+    env: &impl TargetEnvironment,
+    fallback_cache: &mut Option<EffectiveTarget>,
+) -> eyre::Result<Option<Vec<TargetTriple>>> {
+    if !resolution.package_touched {
+        return Ok(None);
+    }
+    let configured = normalize_targets(&resolution.targets)?;
+    let admits = if configured.is_empty() {
+        resolve_fallback(env, fallback_cache)?.triple.as_str() == triple
+    } else {
+        configured.iter().any(|t| t.as_str() == triple)
+    };
+    Ok((!admits).then_some(configured))
+}
+
+/// Resolve the package set for an explicit CLI `--target <triple>`.
+///
+/// The CLI target replaces workspace-level target lists for this run: it is
+/// the one triple visited. Package-level `targets` config is a capability
+/// statement rather than a sweep default, so it keeps filtering membership: a
+/// package whose own config shaped its target list is skipped, with a warning
+/// and a `--no-targets` hint, when the requested triple is not in the resolved
+/// list — for a `targets = []` opt-out, when it is not the package's single
+/// default target (`CARGO_BUILD_TARGET`, then host).
+///
+/// `force` — the CLI `--no-targets` flag — lifts that filter: `--no-targets`
+/// means "ignore configured target lists", so combined with an explicit
+/// `--target` every selected package runs for the requested triple, with a
+/// note for each overridden constraint. Only the command-line flag forces.
+/// Config-scoped `no_targets` and a command without the targets capability
+/// govern how configured lists *expand* the target axis, not whether a
+/// package's capability statement holds, so neither lifts the filter.
 fn cli_package_targets<'a>(
     selected: &[SelectedPackage<'a>],
     cli: &str,
+    force: bool,
+    chain: TargetsChainContext<'_>,
+    env: &impl TargetEnvironment,
+    fallback_cache: &mut Option<EffectiveTarget>,
 ) -> eyre::Result<Vec<PackageTargets<'a>>> {
     let triple = cli.trim();
     if triple.is_empty() {
         eyre::bail!("empty `--target` value");
     }
-    let cli_target = EffectiveTarget {
-        triple: TargetTriple(triple.to_string()),
-        source: TargetSource::Cli,
-    };
+    // Cargo already received the flag from the user, so the source is `Cli`
+    // (no injection).
     let cli_assignment = PackageTargetAssignment {
-        target: cli_target,
+        target: EffectiveTarget {
+            triple: TargetTriple(triple.to_string()),
+            source: TargetSource::Cli,
+        },
         show_target: true,
     };
-    Ok(selected
-        .iter()
-        .map(|s| PackageTargets {
+    let mut out = Vec::with_capacity(selected.len());
+    let mut skipped_any = false;
+    for s in selected {
+        let resolution = chain.targets_list(s.config)?;
+        if let Some(constraint) =
+            excluding_package_constraint(&resolution, triple, env, fallback_cache)?
+        {
+            if force {
+                print_note!(
+                    "running package `{}` for `--target {triple}` although the package configures `{}`: `--no-targets` ignores configured target lists",
+                    s.package.name,
+                    configured_targets_display(&constraint),
+                );
+            } else {
+                skipped_any = true;
+                if constraint.is_empty() {
+                    print_warning!(
+                        "not running package `{}` for `--target {triple}` because the package configures `targets = []` (default single target `{}` only)",
+                        s.package.name,
+                        resolve_fallback(env, fallback_cache)?.triple,
+                    );
+                } else {
+                    print_warning!(
+                        "not running package `{}` for `--target {triple}` because the package configures `{}`",
+                        s.package.name,
+                        configured_targets_display(&constraint),
+                    );
+                }
+                continue;
+            }
+        }
+        out.push(PackageTargets {
             package: s.package,
             config: s.config,
             targets: vec![cli_assignment.clone()],
-        })
-        .collect())
+        });
+    }
+    if skipped_any {
+        eprintln!(
+            "hint: pass --no-targets to ignore configured target lists and run every selected package for `--target {triple}`"
+        );
+    }
+    Ok(out)
 }
 
 fn configured_package_targets<'a>(
     selected: &[SelectedPackage<'a>],
-    workspace: &WorkspaceConfig,
-    raw_command: Option<&str>,
-    resolved_command: Option<&str>,
+    chain: TargetsChainContext<'_>,
     env: &impl TargetEnvironment,
     fallback_cache: &mut Option<EffectiveTarget>,
 ) -> eyre::Result<Vec<PackageTargets<'a>>> {
     let mut out = Vec::with_capacity(selected.len());
     for s in selected {
-        let targets = package_target_list(
-            s,
-            workspace,
-            raw_command,
-            resolved_command,
-            env,
-            fallback_cache,
-        )?;
+        let targets = package_target_list(s, chain, env, fallback_cache)?;
         out.push(PackageTargets {
             package: s.package,
             config: s.config,
@@ -302,8 +412,18 @@ pub enum TargetExpansion<'a> {
     /// command may inject `--target`).
     #[default]
     Configured,
-    /// An explicit `--target <triple>` overrides all configured lists.
-    Explicit(&'a str),
+    /// An explicit `--target <triple>` overrides workspace-level target
+    /// lists. Package-level `targets` config still filters membership unless
+    /// `force` is set: a package whose own list does not admit the triple is
+    /// skipped with a warning and a `--no-targets` hint.
+    Explicit {
+        /// The explicit target triple, as typed after `--target`.
+        triple: &'a str,
+        /// Lift the package-level `targets` filter (the CLI `--no-targets`
+        /// flag): every selected package runs for the triple, with a note for
+        /// each overridden constraint.
+        force: bool,
+    },
     /// Expansion is denied: fall back to the single effective target
     /// (`CARGO_BUILD_TARGET`, then host) for every package.
     Denied,
@@ -329,6 +449,14 @@ pub struct TargetPlanRequest<'a> {
 /// single effective target (`--target`, then `CARGO_BUILD_TARGET`, then host).
 /// Workspace target overrides (`exclude_packages` patches) still apply to every
 /// concrete target, including single-target invocations.
+///
+/// When `request.expansion` is [`TargetExpansion::Explicit`], the CLI triple
+/// replaces workspace-level target lists, but a package whose own config
+/// constrains `targets` keeps that constraint: it is skipped, with a warning,
+/// when the triple is not in its resolved list (for a `targets = []` opt-out,
+/// when the triple is not the package's single default target). Setting
+/// `force` — the CLI `--no-targets` flag — lifts the filter and notes each
+/// overridden constraint instead.
 ///
 /// # Errors
 ///
@@ -370,18 +498,21 @@ pub fn build_target_plans<'a>(
         Vec::new()
     };
 
+    let chain = TargetsChainContext {
+        workspace: workspace_config,
+        raw_command: request.raw_command,
+        resolved_command: request.resolved_command,
+    };
     let package_targets = match request.expansion {
-        // Explicit `--target` wins globally. Cargo already received the flag
-        // from the user, so the source is `Cli` (no injection).
-        TargetExpansion::Explicit(cli) => cli_package_targets(selected, cli)?,
-        TargetExpansion::Configured => configured_package_targets(
-            selected,
-            workspace_config,
-            request.raw_command,
-            request.resolved_command,
-            env,
-            &mut fallback_cache,
-        )?,
+        // Explicit `--target` replaces workspace lists, but package-level
+        // `targets` config still filters which packages run unless the CLI
+        // `--no-targets` flag forces them.
+        TargetExpansion::Explicit { triple, force } => {
+            cli_package_targets(selected, triple, force, chain, env, &mut fallback_cache)?
+        }
+        TargetExpansion::Configured => {
+            configured_package_targets(selected, chain, env, &mut fallback_cache)?
+        }
         // Capability denied: ignore configured lists, use the fallback single
         // target for every package.
         TargetExpansion::Denied => fallback_package_targets(selected, env, &mut fallback_cache)?,
@@ -991,9 +1122,9 @@ mod test {
     }
 
     #[test]
-    fn explicit_cli_target_overrides_everything() -> eyre::Result<()> {
+    fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
         let pkg = package("a")?;
-        let cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
+        let cfg = Config::default();
         let selected = vec![selected(&pkg, &cfg)];
         let ws = workspace_targets(&["linux", "windows"]);
         let env = TestEnv::host("host");
@@ -1004,7 +1135,10 @@ mod test {
             &ws,
             &HashSet::new(),
             TargetPlanRequest {
-                expansion: TargetExpansion::Explicit("aarch64-apple-darwin"),
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
                 ..Default::default()
             },
             &env,
@@ -1017,6 +1151,365 @@ mod test {
             vec!["aarch64-apple-darwin".to_string()]
         );
         assert_eq!(plans.plans[0].packages[0].target.source, TargetSource::Cli);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_skips_package_constrained_to_other_targets() -> eyre::Result<()> {
+        // `web` can only build for wasm; `core` inherits the workspace list.
+        // The CLI target overrides the workspace list but not the package's
+        // own capability statement.
+        let web = package("web")?;
+        let core = package("core")?;
+        let web_cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
+        let core_cfg = config_with_targets(None);
+        let selected = vec![selected(&web, &web_cfg), selected(&core, &core_cfg)];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["aarch64-apple-darwin".to_string()]
+        );
+        let names: Vec<_> = plans.plans[0]
+            .packages
+            .iter()
+            .map(|p| p.package.name.to_string())
+            .collect();
+        assert_eq!(names, vec!["core".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_keeps_package_listing_that_target() -> eyre::Result<()> {
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&["wasm32-unknown-unknown", "aarch64-apple-darwin"]));
+        let selected = vec![selected(&pkg, &cfg)];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["aarch64-apple-darwin".to_string()]
+        );
+        assert_eq!(plans.plans[0].packages[0].target.source, TargetSource::Cli);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_skips_host_only_package_for_foreign_target() -> eyre::Result<()> {
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&[]));
+        let selected = vec![selected(&pkg, &cfg)];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert!(plans.plans.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_keeps_host_only_package_for_default_target() -> eyre::Result<()> {
+        // `--target <host>` runs the host slice of the configured plan, which
+        // includes the `targets = []` opt-out packages.
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&[]));
+        let selected_packages = vec![selected(&pkg, &cfg)];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected_packages,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "host-triple",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["host-triple".to_string()]
+        );
+        assert_eq!(plans.plans[0].packages[0].target.source, TargetSource::Cli);
+
+        // With `CARGO_BUILD_TARGET` set, the opt-out package's single default
+        // target is that triple, so the matching explicit `--target` keeps it.
+        let env = TestEnv {
+            build_target: Some("build-target".to_string()),
+            host: "host-triple".to_string(),
+        };
+        let mut eval = StubEval::default();
+        let plans = build_target_plans(
+            &selected_packages,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "build-target",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["build-target".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_filter_ignores_config_scoped_no_targets() -> eyre::Result<()> {
+        // `ignore_configured_targets` models a config-scoped `no_targets` (or
+        // a command without the targets capability). Neither lifts the package
+        // capability filter — only the CLI `--no-targets` flag does, via
+        // `force`.
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&[]));
+        let selected = vec![SelectedPackage {
+            package: &pkg,
+            config: &cfg,
+            ignore_configured_targets: true,
+            target_decision_explicit: true,
+        }];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert!(plans.plans.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn forced_explicit_cli_target_overrides_package_constraints() -> eyre::Result<()> {
+        // CLI `--no-targets --target <triple>`: `--no-targets` means "ignore
+        // configured target lists", so the pair runs every selected package
+        // for the triple — `targets = []` opt-outs and package lists included.
+        let opted_out = package("opted-out")?;
+        let wasm_only = package("wasm-only")?;
+        let opted_out_cfg = config_with_targets(Some(&[]));
+        let wasm_only_cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
+        let selected = vec![
+            selected(&opted_out, &opted_out_cfg),
+            selected(&wasm_only, &wasm_only_cfg),
+        ];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: true,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["aarch64-apple-darwin".to_string()]
+        );
+        let plan = &plans.plans[0];
+        assert_eq!(plan.packages.len(), 2);
+        assert!(
+            plan.packages
+                .iter()
+                .all(|p| p.target.source == TargetSource::Cli)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_rejects_empty_configured_triple() -> eyre::Result<()> {
+        // A malformed package list fails under an explicit `--target` with
+        // the same error every configured-list expansion reports, instead of
+        // silently never matching.
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&["  "]));
+        let selected_packages = vec![selected(&pkg, &cfg)];
+        let ws = WorkspaceConfig::default();
+        let env = TestEnv::host("host");
+        let mut eval = StubEval::default();
+
+        let result = build_target_plans(
+            &selected_packages,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        );
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_matches_padded_configured_triple() -> eyre::Result<()> {
+        // Configured triples are trimmed before the membership check, exactly
+        // as configured-list expansion trims them.
+        let pkg = package("a")?;
+        let cfg = config_with_targets(Some(&[" aarch64-apple-darwin "]));
+        let selected_packages = vec![selected(&pkg, &cfg)];
+        let ws = WorkspaceConfig::default();
+        let env = TestEnv::host("host");
+        let mut eval = StubEval::default();
+
+        let plans = build_target_plans(
+            &selected_packages,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                ..Default::default()
+            },
+            &env,
+            &mut eval,
+        )?;
+        assert_eq!(
+            triples(&plans.plans.iter().collect::<Vec<_>>()),
+            vec!["aarch64-apple-darwin".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cli_target_respects_subcommand_scoped_opt_out() -> eyre::Result<()> {
+        // `subcommands.test.targets = []` is a per-command opt-out: it filters
+        // an explicit `--target` for `cargo fc test` but not for other
+        // commands.
+        let pkg = package("a")?;
+        let cfg = config_with_subcommand_targets("test", TargetListPatch::Override(Vec::new()));
+        let selected = vec![selected(&pkg, &cfg)];
+        let ws = workspace_targets(&["linux", "windows"]);
+        let env = TestEnv::host("host-triple");
+
+        let mut eval = StubEval::default();
+        let test_plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                raw_command: Some("test"),
+                resolved_command: Some("test"),
+            },
+            &env,
+            &mut eval,
+        )?;
+        assert!(test_plans.plans.is_empty());
+
+        let mut eval = StubEval::default();
+        let build_plans = build_target_plans(
+            &selected,
+            &ws,
+            &HashSet::new(),
+            TargetPlanRequest {
+                expansion: TargetExpansion::Explicit {
+                    triple: "aarch64-apple-darwin",
+                    force: false,
+                },
+                raw_command: Some("build"),
+                resolved_command: Some("build"),
+            },
+            &env,
+            &mut eval,
+        )?;
+        assert_eq!(
+            triples(&build_plans.plans.iter().collect::<Vec<_>>()),
+            vec!["aarch64-apple-darwin".to_string()]
+        );
         Ok(())
     }
 

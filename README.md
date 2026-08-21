@@ -394,6 +394,17 @@ targets = ["wasm32-unknown-unknown"]
 - **`targets = ["…"]`** — this package's own target list (overrides, not
   merges with, the workspace list).
 
+A package-level `targets` key is a capability statement, not just a sweep
+default: it also filters an explicit `--target <triple>`. A package whose own
+list does not admit the requested triple is skipped with a warning — for a
+`targets = []` opt-out, any triple other than the package's single effective
+target. Running one configured target at a time therefore keeps the same
+package coverage as the full sweep. To deliberately override the filter,
+combine the explicit `--target` with `--no-targets`: the flag means "ignore
+configured target lists", so the pair runs every selected package for that
+triple, with a note for each overridden constraint. Only the command-line flag
+overrides — a config-scoped `no_targets = true` never lifts the filter.
+
 `targets` only selects which targets are visited. The
 [`target.'cfg(...)'`](#target-specific-configuration) overrides below still
 shape the feature matrix for each concrete target.
@@ -402,7 +413,9 @@ shape the feature matrix for each concrete target.
 
 When the selected command supports targets, each package's targets are resolved as:
 
-1. an explicit Cargo `--target <triple>` (wins globally for that run),
+1. an explicit Cargo `--target <triple>` (replaces the workspace list for
+   that run; a package-level `targets` still filters membership as described
+   above),
 2. the package's `targets`,
 3. the workspace `targets`,
 4. `CARGO_BUILD_TARGET`,
@@ -413,9 +426,11 @@ When the selected command supports targets, each package's targets are resolved 
 > `CARGO_BUILD_TARGET` — repository config is the declarative matrix and should
 > not be silently collapsed by a developer's ambient environment. This differs
 > from Cargo's own `[build].target` precedence. To run a single target for one
-> invocation, pass an explicit `--target <triple>`, which overrides all
-> configured lists, or pass `--no-targets` to ignore the configured lists and
-> fall back to Cargo's default single target.
+> invocation, pass an explicit `--target <triple>`, which replaces the
+> workspace list while still honoring package-level `targets` constraints, or
+> pass `--no-targets` to ignore the configured lists and fall back to Cargo's
+> default single target. Combining both ignores package-level constraints too,
+> forcing every selected package onto the explicit target.
 
 #### Which commands receive configured targets
 

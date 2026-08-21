@@ -63,8 +63,15 @@ OPTIONS:
                             back to serial for `run` and pruned summaries.
     --no-targets            Ignore configured target lists for this invocation
                             and use Cargo's default single target (--target,
-                            then CARGO_BUILD_TARGET, then host). An alternative
-                            to passing an explicit --target <triple>.
+                            then CARGO_BUILD_TARGET, then host). Alone, this
+                            collapses the run to that single target. Combined
+                            with an explicit --target <triple> it also lifts
+                            package-level `targets` constraints, running every
+                            selected package for that triple with a note per
+                            overridden package; without it, such packages are
+                            skipped with a warning. Only this command-line
+                            flag lifts the filter; config-scoped no_targets
+                            does not.
     --install-missing-targets
                             Install missing Rust target components with rustup
                             before running Cargo. Explicit opt-in because this

@@ -53,7 +53,11 @@ By default `cargo fc` won't touch the toolchain. Preinstall the target with `rus
 
 ## `CARGO_BUILD_TARGET` is being ignored.
 
-Configured target lists intentionally take precedence over `CARGO_BUILD_TARGET`, so repository config isn't silently collapsed by your environment. Use `--target <triple>` to force a single target for one run, or `--no-targets` to fall back to Cargo's default. See [Configured targets]({{< relref "targets/configured-targets.md#precedence" >}}).
+Configured target lists intentionally take precedence over `CARGO_BUILD_TARGET`, so repository config isn't silently collapsed by your environment. Use `--target <triple>` to run a single target for one run, or `--no-targets` to fall back to Cargo's default. See [Configured targets]({{< relref "targets/configured-targets.md#precedence" >}}).
+
+## `--target <triple>` skipped one of my packages.
+
+A package-level `targets` key is a capability statement: an explicit `--target` outside that list skips the package with a warning (for `targets = []`, any triple other than the package's single default target). Pass `--no-targets` together with `--target` to deliberately override, or extend the package's list. See [Configured targets]({{< relref "targets/configured-targets.md#per-package-target-lists" >}}).
 
 ## Can I rely on the Rust API?
 

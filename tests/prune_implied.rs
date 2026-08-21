@@ -508,7 +508,10 @@ fn execute_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
         &ws,
         &HashSet::new(),
         cargo_feature_combinations::plan::targets::TargetPlanRequest {
-            expansion: cargo_feature_combinations::plan::targets::TargetExpansion::Explicit("x"),
+            expansion: cargo_feature_combinations::plan::targets::TargetExpansion::Explicit {
+                triple: "x",
+                force: false,
+            },
             raw_command: None,
             resolved_command: None,
         },

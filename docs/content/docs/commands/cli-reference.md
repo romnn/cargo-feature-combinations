@@ -42,7 +42,7 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 | `--packages-only` | In `matrix` mode, emit one row per package-target instead of per combination. |
 | `--only-packages-with-lib-target` | Only consider packages that have a library target. |
 | `--aggregate-targets` | Batch a combination's configured targets into a single Cargo invocation (one `--target` each). Faster on many cores; falls back to serial for `run` and pruned summaries. |
-| `--no-targets` | Ignore configured target lists for this run; use Cargo's default single target. |
+| `--no-targets` | Ignore configured target lists for this run; use Cargo's default single target (`--target`, then `CARGO_BUILD_TARGET`, then host). With an explicit `--target <triple>` this also lifts package-level `targets` constraints, forcing every selected package onto that triple. |
 | `--install-missing-targets` | Install missing Rust target components with `rustup` before running. Explicit opt-in — may mutate the toolchain and use the network. |
 | `--omit-host-target-flag` | Build a configured target that is the host without an injected `--target`, sharing `target/debug` with an ordinary `cargo build`. On by default; `=false` builds it under `target/<triple>/` like every other configured target. See [Configured targets]({{< relref "../targets/configured-targets.md#the-host-target-runs-as-a-plain-build" >}}). |
 | `--driver <bin>` | Program invoked in place of `cargo` for each build (e.g. `cargo-zigbuild`, `cross`). See [Build drivers]({{< relref "../targets/drivers.md" >}}). |

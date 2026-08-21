@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## [0.6.0]
+
+### Changed
+
+- **Breaking:** an explicit `--target <triple>` no longer forces packages onto
+  a target their own `targets` config excludes. It still replaces the
+  workspace-level target list, but a package-level `targets` key is a
+  capability statement and keeps filtering: a package whose own list does not
+  admit the requested triple is skipped, with a warning naming the constraint
+  and a hint pointing at `--no-targets` — for a `targets = []` opt-out, any
+  triple other than the package's single default target (`CARGO_BUILD_TARGET`,
+  then host). Before, running one configured target at a time with
+  `--target <triple>` silently resurrected every package-level opt-out,
+  producing failures the configured matrix deliberately excludes; now the
+  per-target slice has the same package coverage as the full sweep. Packages
+  without their own `targets` key are unaffected: the explicit target still
+  applies to them verbatim.
+
+- `--no-targets` combined with an explicit `--target <triple>` is the
+  deliberate override for that filter. The flag's documented meaning — ignore
+  configured target lists and use Cargo's default single target (`--target`,
+  then `CARGO_BUILD_TARGET`, then host) — now extends to package-level
+  constraints when an explicit target is given, restoring the previous forcing
+  behavior under that spelling and emitting a note for each package whose
+  constraint is overridden. Only the command-line flag forces; a config-scoped
+  `no_targets = true` never lifts the filter, because per-command config that
+  stops sweep expansion should not silently authorize foreign-target builds a
+  package opted out of.
+
 ## [0.5.0]
 
 ### Added

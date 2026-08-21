@@ -44,6 +44,19 @@ fn matrix_rows(
     env: &impl TargetEnvironment,
     evaluator: &mut impl CfgEvaluator,
 ) -> eyre::Result<Vec<serde_json::Value>> {
+    matrix_rows_opts(meta, cli_target, false, capability_allowed, env, evaluator)
+}
+
+/// Like [`matrix_rows`], with `force_cli_target` modeling the CLI
+/// `--no-targets` flag alongside an explicit `--target`.
+fn matrix_rows_opts(
+    meta: &cargo_metadata::Metadata,
+    cli_target: Option<&str>,
+    force_cli_target: bool,
+    capability_allowed: bool,
+    env: &impl TargetEnvironment,
+    evaluator: &mut impl CfgEvaluator,
+) -> eyre::Result<Vec<serde_json::Value>> {
     let ws_config = meta.workspace_config()?;
     let packages = meta.candidate_packages_for_fc()?;
     let configs: Vec<Config> = packages
@@ -63,7 +76,10 @@ fn matrix_rows(
     let base_exclude = meta.base_workspace_exclude_packages()?;
 
     let expansion = match cli_target {
-        Some(cli) => TargetExpansion::Explicit(cli),
+        Some(cli) => TargetExpansion::Explicit {
+            triple: cli,
+            force: force_cli_target,
+        },
         None if capability_allowed => TargetExpansion::Configured,
         None => TargetExpansion::Denied,
     };
@@ -166,7 +182,33 @@ fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
 }
 
 #[test]
-fn explicit_cli_target_ignores_configured_lists() -> eyre::Result<()> {
+fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
+    let temp = single_crate(
+        r#"
+        [package]
+        name = "solo"
+        version = "0.1.0"
+        edition = "2021"
+        [features]
+        a = []
+        [workspace]
+        [workspace.metadata.cargo-fc]
+        targets = ["t-linux", "t-wasm"]
+        "#,
+    )?;
+    let meta = metadata(&temp)?;
+    let env = HostEnv("host-triple");
+    let mut eval = PairEval::default();
+    let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
+
+    assert_eq!(targets_in(&rows), HashSet::from(["t-cli".to_string()]));
+    Ok(())
+}
+
+#[test]
+fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Result<()> {
+    // A package-level `targets` list is a capability statement: an explicit
+    // `--target` outside it skips the package instead of forcing the build.
     let temp = single_crate(
         r#"
         [package]
@@ -182,8 +224,67 @@ fn explicit_cli_target_ignores_configured_lists() -> eyre::Result<()> {
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
-    let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
 
+    let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
+    assert!(rows.is_empty());
+
+    let rows = matrix_rows(&meta, Some("t-wasm"), true, &env, &mut eval)?;
+    assert_eq!(targets_in(&rows), HashSet::from(["t-wasm".to_string()]));
+    Ok(())
+}
+
+#[test]
+fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
+    // `targets = []` restricts the package to its single default target: a
+    // foreign explicit `--target` skips it, the host target keeps it.
+    let temp = single_crate(
+        r#"
+        [package]
+        name = "solo"
+        version = "0.1.0"
+        edition = "2021"
+        [features]
+        a = []
+        [package.metadata.cargo-fc]
+        targets = []
+        "#,
+    )?;
+    let meta = metadata(&temp)?;
+    let env = HostEnv("host-triple");
+    let mut eval = PairEval::default();
+
+    let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
+    assert!(rows.is_empty());
+
+    let rows = matrix_rows(&meta, Some("host-triple"), true, &env, &mut eval)?;
+    assert_eq!(
+        targets_in(&rows),
+        HashSet::from(["host-triple".to_string()])
+    );
+    Ok(())
+}
+
+#[test]
+fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<()> {
+    // `--no-targets --target <triple>` deliberately ignores all configured
+    // target lists, package-level constraints included.
+    let temp = single_crate(
+        r#"
+        [package]
+        name = "solo"
+        version = "0.1.0"
+        edition = "2021"
+        [features]
+        a = []
+        [package.metadata.cargo-fc]
+        targets = []
+        "#,
+    )?;
+    let meta = metadata(&temp)?;
+    let env = HostEnv("host-triple");
+    let mut eval = PairEval::default();
+
+    let rows = matrix_rows_opts(&meta, Some("t-cli"), true, true, &env, &mut eval)?;
     assert_eq!(targets_in(&rows), HashSet::from(["t-cli".to_string()]));
     Ok(())
 }

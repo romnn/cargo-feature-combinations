@@ -50,6 +50,7 @@ omit_host_target_flag = false
 - `prune_implied = false` turns off [automatic pruning]({{< relref "feature-matrix.md#automatic-pruning" >}}).
 - `maximal_features = true` runs [only maximal feature sets]({{< relref "../commands/running-commands.md#running-only-maximal-feature-sets" >}}), resolved per package-target like every other flag.
 - `omit_host_target_flag` is the one key that defaults to `true`; set it to `false` to [inject `--target` for the host]({{< relref "../targets/configured-targets.md#the-host-target-runs-as-a-plain-build" >}}) too.
+- `no_targets` from config never lifts the [package-level `targets` filter]({{< relref "../targets/configured-targets.md#per-package-target-lists" >}}) for an explicit `--target`; only the command-line `--no-targets` forces that.
 
 ## Precedence
 

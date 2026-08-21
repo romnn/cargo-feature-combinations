@@ -38,20 +38,22 @@ The three states:
 | `targets = []` | opt out of the workspace list; use the single effective target |
 | `targets = ["…"]` | this package's own list (overrides, does not merge) |
 
+A package-level `targets` key is a capability statement, not just a sweep default: it also filters an explicit `--target <triple>`. A package whose own list does not admit the requested triple is skipped with a warning — for `targets = []`, any triple other than the package's single effective target — so running one configured target at a time keeps the same package coverage as the full sweep. To deliberately override, combine `--target` with `--no-targets`.
+
 `targets` only selects which targets are visited. The [`target.'cfg(...)'`]({{< relref "../configuration/per-target.md" >}}) overrides still shape the feature matrix for each concrete target.
 
 ## Precedence
 
 For a command that supports targets, each package's target is resolved as:
 
-1. an explicit Cargo `--target <triple>` (wins globally for the run),
+1. an explicit Cargo `--target <triple>` (replaces the workspace list for the run; a package-level `targets` still filters membership as described above),
 2. the package's `targets`,
 3. the workspace `targets`,
 4. `CARGO_BUILD_TARGET`,
 5. the host target.
 
 > [!WARNING]
-> **Configured lists intentionally beat `CARGO_BUILD_TARGET`.** Repository config is the declarative matrix and shouldn't be silently collapsed by a developer's ambient environment — this differs from Cargo's own `[build].target` precedence. To run a single target for one invocation, pass `--target <triple>` (overrides all configured lists) or `--no-targets` (ignore configured lists, fall back to Cargo's default single target).
+> **Configured lists intentionally beat `CARGO_BUILD_TARGET`.** Repository config is the declarative matrix and shouldn't be silently collapsed by a developer's ambient environment — this differs from Cargo's own `[build].target` precedence. To run a single target for one invocation, pass `--target <triple>` (replaces the workspace list, honoring package-level `targets` constraints) or `--no-targets` (ignore configured lists, fall back to Cargo's default single target). Combining both ignores package-level constraints too, forcing every selected package onto the explicit target.
 
 ## The host target runs as a plain build
 
