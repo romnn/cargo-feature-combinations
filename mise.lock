@@ -106,23 +106,23 @@ version = "extended-0.163.3"
 backend = "asdf:NeoHsu/asdf-hugo"
 
 [[tools.ast-grep]]
-version = "0.45.0"
+version = "0.45.1"
 backend = "aqua:ast-grep/ast-grep"
 
 [tools.ast-grep."platforms.linux-x64"]
-checksum = "sha256:78931ae35ebac33d9a72b3aecea3e3d62d6e5b0b718ac8bbedfbe69d68421e41"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.0/app-x86_64-unknown-linux-gnu.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/487374029"
+checksum = "sha256:76fb6555be6734fb5057dba8d2fb756430f374bb9e1af694cf1ce00e13238d63"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/505305291"
 
 [tools.ast-grep."platforms.macos-arm64"]
-checksum = "sha256:ec2e3680f4f84c68b48420bcca01d21389787c7318b52083dde6f46ac12ad946"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.0/app-aarch64-apple-darwin.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/487376083"
+checksum = "sha256:6c761afbdc072a7a9006d0dc5c49b3247fef195b8bebe675b4aa385ff872d9c3"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/505305714"
 
 [tools.ast-grep."platforms.windows-x64"]
-checksum = "sha256:a1b5b7c06994992755d4cd0b9cf10c2f4a6e7b4a82d2810edee5985a59f67ac5"
-url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.0/app-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/487376855"
+checksum = "sha256:b816b375df6a30f8e5d91d706dccae6127346e68970788cf8c2decee54bcaa31"
+url = "https://github.com/ast-grep/ast-grep/releases/download/0.45.1/app-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/ast-grep/ast-grep/releases/assets/505308188"
 
 [[tools."github:buildkite/terminal-to-html"]]
 version = "3.17.1"
@@ -167,48 +167,48 @@ url = "https://github.com/est31/cargo-udeps/releases/download/v0.1.61/cargo-udep
 url_api = "https://api.github.com/repos/est31/cargo-udeps/releases/assets/407804338"
 
 [[tools."github:romnn/bumpversion"]]
-version = "0.0.11"
+version = "0.0.12"
 backend = "github:romnn/bumpversion"
 
 [tools."github:romnn/bumpversion".options]
 matching = "bumpversion"
 
 [tools."github:romnn/bumpversion"."platforms.linux-x64"]
-checksum = "sha256:be722778a2fc4bb9fcf14e72873e72fa5ca678034998eb497d3518d5a4b09fe7"
-url = "https://github.com/romnn/bumpversion/releases/download/v0.0.11/bumpversion_0.0.11_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/498977536"
+checksum = "sha256:7201ff20bbbf448edf215c635d207e3439cb2e21e3a264421fd65c470a793e7e"
+url = "https://github.com/romnn/bumpversion/releases/download/v0.0.12/bumpversion_0.0.12_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/520989854"
 
 [tools."github:romnn/bumpversion"."platforms.macos-arm64"]
-checksum = "sha256:557d5f2cd562093993e46a2ea9d6833d7a2dca7ea6fe71834b27e61819f27089"
-url = "https://github.com/romnn/bumpversion/releases/download/v0.0.11/bumpversion_0.0.11_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/498977534"
+checksum = "sha256:056c6747b769a2d0c7e09bb82126127ba6f70ed74b10bd0423485771d8fead7f"
+url = "https://github.com/romnn/bumpversion/releases/download/v0.0.12/bumpversion_0.0.12_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/520989837"
 
 [tools."github:romnn/bumpversion"."platforms.windows-x64"]
-checksum = "sha256:d76959a0de3c6141647cea8d55384c507cad3027645594d3da68bd30e9b99ec3"
-url = "https://github.com/romnn/bumpversion/releases/download/v0.0.11/bumpversion_0.0.11_windows_amd64.zip"
-url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/498977535"
+checksum = "sha256:d079322ba0e01c096f3985a374889ada22c83262bd71efb67241a81e597bc576"
+url = "https://github.com/romnn/bumpversion/releases/download/v0.0.12/bumpversion_0.0.12_windows_amd64.zip"
+url_api = "https://api.github.com/repos/romnn/bumpversion/releases/assets/520989840"
 
 [[tools."github:romnn/cargo-feature-combinations"]]
-version = "0.4.2"
+version = "0.5.0"
 backend = "github:romnn/cargo-feature-combinations"
 
 [tools."github:romnn/cargo-feature-combinations".options]
 matching = "cargo-fc"
 
 [tools."github:romnn/cargo-feature-combinations"."platforms.linux-x64"]
-checksum = "sha256:6171d8159bd67a3385847cf36a70663c20c27224fc63fffca5280c8b0446c7e3"
-url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.4.2/cargo-fc_0.4.2_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/492091514"
+checksum = "sha256:536f63c59e44ac23f4935a614815595d6bd1ff85faaa49d454959f81d7a9c76a"
+url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.5.0/cargo-fc_0.5.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/516293990"
 
 [tools."github:romnn/cargo-feature-combinations"."platforms.macos-arm64"]
-checksum = "sha256:477daf33d5ce3eb256b8b1b433218c1c84064c2b31fd17ecd61e7ad9f06b80a4"
-url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.4.2/cargo-fc_0.4.2_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/492091522"
+checksum = "sha256:b47b83a513f54ac807f928f72db8b9da6fbc3c9a4f3f8ea1cef9de815efabdb5"
+url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.5.0/cargo-fc_0.5.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/516294003"
 
 [tools."github:romnn/cargo-feature-combinations"."platforms.windows-x64"]
-checksum = "sha256:34f62d3781305d5104f45ede34bd017e4fe7e267198564e82cbd46f72d063522"
-url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.4.2/cargo-fc_0.4.2_windows_amd64.zip"
-url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/492091521"
+checksum = "sha256:5dc1fc37111456d8cabd2e9c56b9487b2009c7df6b1a402dfebcf11fa0cb6cf8"
+url = "https://github.com/romnn/cargo-feature-combinations/releases/download/v0.5.0/cargo-fc_0.5.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/romnn/cargo-feature-combinations/releases/assets/516294007"
 
 [[tools."github:romnn/cargo-watchdoc"]]
 version = "0.3.10"
@@ -268,39 +268,39 @@ url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/ca
 url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974351"
 
 [[tools.go]]
-version = "1.26.5"
+version = "1.27.0"
 backend = "core:go"
 
 [tools.go."platforms.linux-x64"]
-checksum = "sha256:5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
-url = "https://dl.google.com/go/go1.26.5.linux-amd64.tar.gz"
+checksum = "sha256:675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685"
+url = "https://dl.google.com/go/go1.27.0.linux-amd64.tar.gz"
 
 [tools.go."platforms.macos-arm64"]
-checksum = "sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a"
-url = "https://dl.google.com/go/go1.26.5.darwin-arm64.tar.gz"
+checksum = "sha256:90493b3bbd5e10f91d12153198bf1994fd756399b4fec93b49b0c6e2acdeeb3e"
+url = "https://dl.google.com/go/go1.27.0.darwin-arm64.tar.gz"
 
 [tools.go."platforms.windows-x64"]
-checksum = "sha256:97e6b2a833b6d89f9ff17d25419ac0a7e3b482a044e9ab18cdef834bd834fd38"
-url = "https://dl.google.com/go/go1.26.5.windows-amd64.zip"
+checksum = "sha256:f0c0a0d33ba94f4d2c5dbc887334ce678b21813504ddb3aafcb06e60a5a667c4"
+url = "https://dl.google.com/go/go1.27.0.windows-amd64.zip"
 
 [[tools.task]]
-version = "3.52.0"
+version = "3.53.1"
 backend = "aqua:go-task/task"
 
 [tools.task."platforms.linux-x64"]
-checksum = "sha256:02c679ffae53dca791804847d78b31731615894e292948397c971c87ac9e95bd"
-url = "https://github.com/go-task/task/releases/download/v3.52.0/task_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/go-task/task/releases/assets/464613330"
+checksum = "sha256:a54a408f6861ff921f6e87774180db31bacd8c1e7c944ca696db9fea49a82fc7"
+url = "https://github.com/go-task/task/releases/download/v3.53.1/task_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/go-task/task/releases/assets/519645449"
 
 [tools.task."platforms.macos-arm64"]
-checksum = "sha256:debfa9a3bc06fcb5d5550b44725ecd22bb305499ce057bd6d7a774db5cdaa7b8"
-url = "https://github.com/go-task/task/releases/download/v3.52.0/task_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/go-task/task/releases/assets/464613319"
+checksum = "sha256:85d2d96c2380b33d7855b07b3f7a20dc7ca0eda999a26efa0fb5f6f32b366cd7"
+url = "https://github.com/go-task/task/releases/download/v3.53.1/task_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/go-task/task/releases/assets/519645491"
 
 [tools.task."platforms.windows-x64"]
-checksum = "sha256:e3bd4439b445f4f135758a2666ec8b33ccde789f7f615309c58f116b0e566e79"
-url = "https://github.com/go-task/task/releases/download/v3.52.0/task_windows_amd64.zip"
-url_api = "https://api.github.com/repos/go-task/task/releases/assets/464613286"
+checksum = "sha256:27c0cd248c12cba03d8958d954a3df981c900be885ec9ce5f6a3cdc4e9a19316"
+url = "https://github.com/go-task/task/releases/download/v3.53.1/task_windows_amd64.zip"
+url_api = "https://api.github.com/repos/go-task/task/releases/assets/519645548"
 
 [[tools.typos]]
 version = "1.49.0"
