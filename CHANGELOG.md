@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** `cargo fc matrix` and `cargo fc version` now parse everything
+  after their token themselves instead of forwarding it to Cargo. Neither
+  spawns a process, so a forwarded argument was silently dropped: `cargo fc
+  matrix --help` printed the matrix rather than the help, `cargo fc matrix
+  --pretyy` printed an unformatted matrix as if nothing were wrong, and cargo
+  build flags such as `--release` or `--all-targets` looked accepted while
+  changing nothing. Arguments these subcommands cannot honor are now errors
+  naming the argument. Cargo-fc flags that only shape a run (`--driver`,
+  `--env`, `--summary-only`, `--fail-fast`, …) stay accepted for `matrix`, so
+  the same command line can be pointed at either the matrix or a real run, and
+  the existing note still reports the ones that had no effect.
+
+- `--pretty` before the `matrix` token is rejected with a message pointing at
+  the right position. It used to be forwarded as a leading Cargo flag, which
+  demoted `matrix` to a Cargo subcommand and ran `cargo matrix --pretty` once
+  per feature combination.
+
+### Added
+
+- `cargo fc matrix --help` and `cargo fc version --help`, each with its own
+  help text listing what that subcommand accepts.
+
+- `cargo fc matrix [COMMAND]` is now documented, and `--target <triple>` is
+  accepted in any position relative to it. Naming a Cargo command
+  (`cargo fc matrix build`) resolves the matrix through that command's
+  per-command configuration, so the printed rows are exactly the combinations
+  `cargo fc build` would run; `--target` selects both the `target` field in
+  every row and the `cfg(...)` overrides the feature sets resolve under. Both
+  already worked, but a `--target` written before the command token used to
+  hide it, silently dropping the per-command layer.
+
+### Fixed
+
+- `--frozen`, `--locked`, and `--offline` now also constrain the
+  `cargo metadata` discovery step. Metadata discovery resolves dependencies,
+  so under `--locked` it could update `Cargo.lock` before the first real cargo
+  invocation ran — and that invocation then passed against the freshly
+  rewritten lockfile, defeating the flag's purpose in CI. The flags stay
+  forwarded to every spawned cargo process, and `cargo fc matrix` accepts them
+  for its metadata step.
+
+- A leading `--help` or `--version` now ends argument parsing, so a later
+  subcommand token cannot demote it: `cargo fc --help matrix` prints the help
+  instead of the matrix.
+
 ## [0.6.0]
 
 ### Changed

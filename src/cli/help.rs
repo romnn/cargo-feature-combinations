@@ -1,4 +1,6 @@
-//! The cargo-fc `--help` text.
+//! The cargo-fc `--help` texts, one per subcommand that has its own.
+
+use super::OwnSubcommand;
 
 const HELP_TEXT: &str = r#"Run cargo commands for all feature combinations
 
@@ -7,8 +9,10 @@ USAGE:
     cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 
 SUBCOMMAND:
-    matrix                  Print JSON feature combination matrix to stdout
-        --pretty            Print pretty JSON
+    matrix [COMMAND]        Print JSON feature combination matrix to stdout.
+                            COMMAND is an optional cargo subcommand whose
+                            per-command configuration the matrix reflects.
+                            Run `cargo fc matrix --help` for its options
     version                 Print version information
 
 OPTIONS:
@@ -255,7 +259,75 @@ For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
 See 'cargo help <command>' for more information on a specific command.
 "#;
 
-/// Print the help text to stdout.
-pub(crate) fn print_help() {
-    println!("{HELP_TEXT}");
+const MATRIX_HELP_TEXT: &str = r#"Print the JSON feature combination matrix to stdout
+
+USAGE:
+    cargo fc matrix [COMMAND] [OPTIONS]
+
+COMMAND:
+    An optional cargo subcommand (`build`, `test`, `clippy`, a cargo alias,
+    and so on) whose per-command configuration the matrix should reflect.
+    `cargo fc matrix build` prints exactly the combinations `cargo fc build`
+    would run; a plain `cargo fc matrix` applies no per-command layer.
+
+OPTIONS:
+    -h, --help              Print this help
+    --pretty                Print indented JSON instead of a single line
+    --target <triple>       Resolve the matrix for this target: every row
+                            carries the triple, and `cfg(...)` target
+                            overrides are evaluated against it
+    -p, --package <name>    Include only this workspace package (repeatable)
+    --exclude <name>        Exclude a workspace package (repeatable)
+    --manifest-path <path>  Path to Cargo.toml to inspect
+    --packages-only         Emit one row per package-target instead of one row
+                            per feature combination
+    --maximal-features      Keep only maximal feature sets: those that are not
+                            a subset of another generated combination
+    --prune-implied         Automatic pruning of redundant feature combinations
+                            implied by other features. On by default; pass
+                            =false to emit every generated combination
+    --no-targets            Ignore configured target lists and emit rows for
+                            cargo's default single target
+    --only-packages-with-lib-target
+                            Only consider packages with a library target
+    --frozen, --locked, --offline
+                            Constrain the `cargo metadata` invocation the
+                            matrix is built from
+
+OUTPUT:
+    A JSON array with one object per row:
+
+        {"features":"metrics,tracing","metadata":{},"name":"engine",
+         "target":"x86_64-unknown-linux-gnu"}
+
+    `features` is the comma-joined feature list for the row; pass it straight
+    to a downstream `cargo --features`. `metadata` is the package's
+    [package.metadata.cargo-fc.matrix] table, verbatim.
+
+`cargo fc matrix` builds nothing, so cargo build flags (`--release`,
+`--all-targets`, `--features`, ...) are rejected here instead of silently
+ignored. Run-only cargo-fc flags (`--driver`, `--env`, `--summary-only`,
+`--fail-fast`, ...) stay accepted, so the same flags can precede either
+`matrix` or a real run; a note lists the ones that had no effect.
+
+For more information, see 'https://github.com/romnn/cargo-feature-combinations'.
+"#;
+
+const VERSION_HELP_TEXT: &str = r"Print cargo-fc version information
+
+USAGE:
+    cargo fc version
+
+`cargo fc version` takes no arguments. `cargo fc --version` and `cargo fc -V`
+print the same string.
+";
+
+/// Print the help text for `topic` to stdout, or the top-level help for `None`.
+pub(crate) fn print_help(topic: Option<OwnSubcommand>) {
+    let text = match topic {
+        None => HELP_TEXT,
+        Some(OwnSubcommand::Matrix) => MATRIX_HELP_TEXT,
+        Some(OwnSubcommand::Version) => VERSION_HELP_TEXT,
+    };
+    println!("{text}");
 }

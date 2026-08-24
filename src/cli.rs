@@ -8,6 +8,35 @@ use crate::config::env::{validate_name, validate_value};
 use crate::config::{EnvValue, FlagConfig, FlagSource};
 use crate::print_warning;
 
+/// A subcommand cargo-fc answers itself instead of forwarding to Cargo.
+///
+/// Unlike a Cargo subcommand, these own every argument that follows their
+/// token: no child process is spawned, so there is nobody left to interpret —
+/// or complain about — an argument cargo-fc does not recognize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnSubcommand {
+    /// `cargo fc matrix`
+    Matrix,
+    /// `cargo fc version`
+    Version,
+}
+
+impl OwnSubcommand {
+    /// The literal token that selects this subcommand.
+    fn token(self) -> &'static str {
+        match self {
+            Self::Matrix => "matrix",
+            Self::Version => "version",
+        }
+    }
+}
+
+impl std::fmt::Display for OwnSubcommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
 /// High-level command requested by the user.
 #[derive(Debug)]
 pub enum Command {
@@ -22,7 +51,11 @@ pub enum Command {
     /// Print the tool version and exit.
     Version,
     /// Print help text and exit.
-    Help,
+    Help {
+        /// Subcommand whose help was asked for, or `None` for the top-level
+        /// help.
+        topic: Option<OwnSubcommand>,
+    },
 }
 
 /// Command-line options recognized by this crate.
@@ -52,6 +85,13 @@ pub struct Options {
     pub env_set: Vec<(String, EnvValue)>,
     /// Explicit child-process environment removals from `--unset-env KEY`.
     pub env_remove: Vec<String>,
+    /// Cargo's lockfile flags (`--frozen`, `--locked`, `--offline`).
+    ///
+    /// Besides being forwarded to every spawned cargo process, these must
+    /// also constrain the `cargo metadata` discovery step: resolving
+    /// dependency metadata may otherwise update `Cargo.lock`, defeating
+    /// `--locked` before the first real cargo invocation runs.
+    pub locking_flags: Vec<String>,
     /// Explicit cargo-fc flag overrides provided by CLI flags or environment.
     pub flags: FlagConfig,
 }
@@ -120,6 +160,37 @@ pub fn parse_arguments(bin_name: &str) -> eyre::Result<(Options, Vec<String>)> {
     parse_normalized_args(&args)
 }
 
+/// What the parser has decided about the subcommand position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubcommandState {
+    /// Still before the subcommand token: leading Cargo flags are forwarded,
+    /// and a bare `matrix`/`version` still selects a cargo-fc subcommand.
+    Pending,
+    /// An unrecognized leading flag ruled out a cargo-fc subcommand, so the
+    /// rest of `argv` is Cargo's even if it never names a subcommand.
+    Blocked,
+    /// A Cargo subcommand token was seen; the rest of `argv` is Cargo's.
+    Cargo,
+    /// A cargo-fc subcommand token was seen; cargo-fc parses the rest itself.
+    Own(OwnSubcommand),
+}
+
+/// The `matrix` arguments that still have to reach the planning pipeline as
+/// Cargo arguments.
+///
+/// `matrix` spawns nothing, but which rows it prints depends on the command it
+/// is asked about (per-command configuration) and the target it is resolved
+/// for (`cfg(...)` target overrides). Both are replayed after parsing rather
+/// than in the order they were typed, because Cargo's subcommand token has to
+/// come before any flag that would hide it.
+#[derive(Debug, Default)]
+struct MatrixTail {
+    /// Cargo subcommand whose per-command configuration the matrix reflects.
+    command: Option<String>,
+    /// Explicit `--target <triple>` the matrix rows are resolved for.
+    target: Option<String>,
+}
+
 fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)> {
     let verbose_from_env = verbose_from_env();
     let mut options = Options {
@@ -132,16 +203,48 @@ fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)
 
     let mut forwarded = Vec::with_capacity(args.len());
     let mut index = 0usize;
-    let mut subcommand_seen = false;
-    let mut subcommand_blocked = false;
+    let mut state = SubcommandState::Pending;
+    let mut matrix_tail = MatrixTail::default();
     let mut raw_manifest_path: Option<PathBuf> = None;
 
     while let Some(arg) = args.get(index) {
         if arg == "--" {
+            if let SubcommandState::Own(subcommand) = state {
+                eyre::bail!(
+                    "`cargo fc {subcommand}` runs no program, so `--` has nothing to forward to"
+                );
+            }
             if let Some(rest) = args.get(index..) {
                 forwarded.extend(rest.iter().cloned());
             }
             break;
+        }
+
+        if state != SubcommandState::Cargo
+            && let Some(command) = terminal_flag_command(arg, state)?
+        {
+            options.command = Some(command);
+            break;
+        }
+
+        if let SubcommandState::Own(subcommand) = state {
+            index += consume_own_subcommand_arg(
+                args,
+                index,
+                arg,
+                subcommand,
+                &mut options,
+                &mut raw_manifest_path,
+                &mut matrix_tail,
+            )?;
+            continue;
+        }
+
+        if is_locking_flag(arg) {
+            record_locking_flag(&mut options, arg);
+            forwarded.push(arg.clone());
+            index += 1;
+            continue;
         }
 
         if let Some(consumed) =
@@ -151,23 +254,41 @@ fn parse_normalized_args(args: &[String]) -> eyre::Result<(Options, Vec<String>)
             continue;
         }
 
-        if consume_flag_or_command(arg, &mut options, &mut subcommand_seen, subcommand_blocked)? {
+        if consume_flag_or_command(arg, &mut options, &mut state)? {
             index += 1;
             continue;
         }
 
-        if !subcommand_seen && !subcommand_blocked {
+        if state == SubcommandState::Pending {
             if let Some(consumed) =
-                forward_leading_cargo_arg(args, index, arg, &mut forwarded, &mut subcommand_blocked)
+                forward_leading_cargo_arg(args, index, arg, &mut forwarded, &mut state)
             {
                 index += consumed;
                 continue;
             }
-            subcommand_seen = true;
+            state = SubcommandState::Cargo;
         }
 
         forwarded.push(arg.clone());
         index += 1;
+    }
+
+    // Help and version print and exit: neither the manifest nor a flag
+    // contradiction matters, and failing on one would hide the help that was
+    // asked for.
+    if matches!(
+        options.command,
+        Some(Command::Help { .. } | Command::Version)
+    ) {
+        return Ok((options, forwarded));
+    }
+
+    if let Some(command) = matrix_tail.command {
+        forwarded.push(command);
+    }
+    if let Some(target) = matrix_tail.target {
+        forwarded.push("--target".to_string());
+        forwarded.push(target);
     }
 
     if let Some(manifest_path) = raw_manifest_path {
@@ -294,11 +415,53 @@ fn next_value(args: &[String], index: usize, flag: &str) -> eyre::Result<String>
     Ok(value.clone())
 }
 
+/// Recognize a flag that ends parsing with an immediate answer.
+///
+/// `--help` and `--version` address cargo-fc everywhere except inside a Cargo
+/// command's tail, where they belong to the spawned command. Once seen,
+/// nothing after them may demote the answer to a run: `cargo fc --help matrix`
+/// prints the help, not the matrix. Inside a cargo-fc subcommand's tail the
+/// help is that subcommand's own.
+///
+/// # Errors
+///
+/// Returns an error if the flag carries an inline value.
+fn terminal_flag_command(arg: &str, state: SubcommandState) -> eyre::Result<Option<Command>> {
+    let (flag, value) = split_inline_value(arg);
+    let command = match flag {
+        "--help" | "-h" => Command::Help {
+            topic: match state {
+                SubcommandState::Own(subcommand) => Some(subcommand),
+                _ => None,
+            },
+        },
+        "--version" | "-V" => Command::Version,
+        _ => return Ok(None),
+    };
+    if value.is_some() {
+        eyre::bail!("{flag} does not accept a value");
+    }
+    Ok(Some(command))
+}
+
+/// Cargo's lockfile flags, honored by `cargo metadata` as well as by every
+/// spawned cargo process.
+fn is_locking_flag(arg: &str) -> bool {
+    matches!(arg, "--frozen" | "--locked" | "--offline")
+}
+
+fn record_locking_flag(options: &mut Options, arg: &str) {
+    // Repeating a flag is legal for cargo, but one copy is enough for the
+    // metadata invocation.
+    if !options.locking_flags.iter().any(|flag| flag == arg) {
+        options.locking_flags.push(arg.to_string());
+    }
+}
+
 fn consume_flag_or_command(
     arg: &str,
     options: &mut Options,
-    subcommand_seen: &mut bool,
-    subcommand_blocked: bool,
+    state: &mut SubcommandState,
 ) -> eyre::Result<bool> {
     let (flag, value) = split_inline_value(arg);
 
@@ -308,20 +471,19 @@ fn consume_flag_or_command(
 
     match flag {
         "--workspace" => {}
-        "--pretty" if matches!(options.command, Some(Command::FeatureMatrix { .. })) => {
-            if let Some(Command::FeatureMatrix { ref mut pretty }) = options.command {
-                *pretty = true;
-            }
-        }
-        "--help" | "-h" if !*subcommand_seen => options.command = Some(Command::Help),
-        "--version" | "-V" if !*subcommand_seen => options.command = Some(Command::Version),
-        "matrix" if !*subcommand_seen && !subcommand_blocked => {
+        // `--pretty` only shapes matrix output. Forwarding it from the leading
+        // Cargo flag position would make `cargo fc --pretty matrix` treat
+        // `matrix` as a Cargo subcommand and run it once per combination.
+        "--pretty" if *state == SubcommandState::Pending => eyre::bail!(
+            "`--pretty` belongs to `cargo fc matrix`; pass it after the `matrix` subcommand"
+        ),
+        "matrix" if *state == SubcommandState::Pending => {
             options.command = Some(Command::FeatureMatrix { pretty: false });
-            *subcommand_seen = true;
+            *state = SubcommandState::Own(OwnSubcommand::Matrix);
         }
-        "version" if !*subcommand_seen && !subcommand_blocked => {
+        "version" if *state == SubcommandState::Pending => {
             options.command = Some(Command::Version);
-            *subcommand_seen = true;
+            *state = SubcommandState::Own(OwnSubcommand::Version);
         }
         // Anything else belongs to cargo, inline value included.
         _ => return Ok(false),
@@ -333,6 +495,141 @@ fn consume_flag_or_command(
         eyre::bail!("{flag} does not accept a value");
     }
     Ok(true)
+}
+
+/// Parse one argument from a cargo-fc subcommand's own tail, returning how
+/// many arguments it consumed.
+///
+/// A Cargo subcommand can be handed a leftover argument and will explain it
+/// itself. `matrix` and `version` spawn nothing, so an argument cargo-fc does
+/// not recognize has nowhere to go, and forwarding it amounted to dropping it:
+/// typos produced a correct-looking matrix, and `cargo fc matrix --help`
+/// printed the matrix rather than the help.
+///
+/// # Errors
+///
+/// Returns an error for any argument the subcommand does not accept.
+fn consume_own_subcommand_arg(
+    args: &[String],
+    index: usize,
+    arg: &str,
+    subcommand: OwnSubcommand,
+    options: &mut Options,
+    raw_manifest_path: &mut Option<PathBuf>,
+    matrix_tail: &mut MatrixTail,
+) -> eyre::Result<usize> {
+    // Checked before the positional below, which would otherwise read
+    // `+nightly` as the Cargo command the matrix is asked about.
+    if let Some(toolchain) = arg.strip_prefix('+') {
+        eyre::bail!(
+            "a `+{toolchain}` toolchain override must come before the `{subcommand}` subcommand"
+        );
+    }
+
+    if subcommand == OwnSubcommand::Matrix
+        && let Some(consumed) =
+            consume_matrix_arg(args, index, arg, options, raw_manifest_path, matrix_tail)?
+    {
+        return Ok(consumed);
+    }
+
+    let hint = match subcommand {
+        OwnSubcommand::Matrix => {
+            "it prints the feature matrix instead of running cargo; \
+             see `cargo fc matrix --help` for the arguments it accepts"
+        }
+        OwnSubcommand::Version => "it takes no arguments",
+    };
+    eyre::bail!("unexpected argument `{arg}` for `cargo fc {subcommand}`; {hint}");
+}
+
+/// Parse one argument that only `cargo fc matrix` accepts.
+///
+/// Returns `None` for anything the matrix does not recognize, leaving the
+/// caller to report it.
+fn consume_matrix_arg(
+    args: &[String],
+    index: usize,
+    arg: &str,
+    options: &mut Options,
+    raw_manifest_path: &mut Option<PathBuf>,
+    matrix_tail: &mut MatrixTail,
+) -> eyre::Result<Option<usize>> {
+    if is_locking_flag(arg) {
+        // Nothing is spawned, but the flags still constrain the
+        // `cargo metadata` step the matrix is built from.
+        record_locking_flag(options, arg);
+        return Ok(Some(1));
+    }
+
+    if let Some(consumed) = consume_value_option(args, index, options, raw_manifest_path)? {
+        return Ok(Some(consumed));
+    }
+
+    let (flag, value) = split_inline_value(arg);
+    // Run-only flags land here too. They change nothing about the printed
+    // matrix, but they are accepted so that a command line keeps working when
+    // `matrix` is dropped in front of a real run, and vice versa;
+    // `note_matrix_noop_flags` names the ones that had no effect.
+    if set_bool_flag(&mut options.flags, flag, value)? {
+        return Ok(Some(1));
+    }
+
+    // Cargo-fc iterates the workspace itself, so `--workspace` is a no-op it
+    // accepts for symmetry with `--exclude`.
+    if matches!(flag, "--pretty" | "--workspace") {
+        if value.is_some() {
+            eyre::bail!("{flag} does not accept a value");
+        }
+        if flag == "--pretty"
+            && let Some(Command::FeatureMatrix { ref mut pretty }) = options.command
+        {
+            *pretty = true;
+        }
+        return Ok(Some(1));
+    }
+
+    // An explicit target decides both the triple every row carries and the
+    // `cfg(...)` overrides the rows are resolved under.
+    if let Some(triple) = inline_value(arg, "--target") {
+        set_matrix_target(matrix_tail, triple)?;
+        return Ok(Some(1));
+    }
+    if arg == "--target" {
+        let triple = next_value(args, index, arg)?;
+        set_matrix_target(matrix_tail, &triple)?;
+        return Ok(Some(2));
+    }
+
+    // The one positional: the Cargo command whose per-command configuration
+    // the matrix should reflect, so `cargo fc matrix build` previews exactly
+    // what `cargo fc build` would run.
+    if !arg.is_empty() && !arg.starts_with('-') {
+        if let Some(previous) = &matrix_tail.command {
+            eyre::bail!(
+                "`cargo fc matrix` previews one cargo command at a time; got `{previous}` and \
+                 `{arg}` (only the command name selects per-command configuration, so pass the \
+                 name alone)"
+            );
+        }
+        matrix_tail.command = Some(arg.to_string());
+        return Ok(Some(1));
+    }
+
+    Ok(None)
+}
+
+fn set_matrix_target(matrix_tail: &mut MatrixTail, triple: &str) -> eyre::Result<()> {
+    if triple.is_empty() {
+        eyre::bail!("--target requires a value");
+    }
+    if let Some(existing) = &matrix_tail.target {
+        eyre::bail!(
+            "cargo-fc supports only one explicit --target at a time; got `{existing}` and `{triple}`"
+        );
+    }
+    matrix_tail.target = Some(triple.to_string());
+    Ok(())
 }
 
 /// Split `--flag=value` into the flag token and its inline value.
@@ -408,7 +705,7 @@ fn forward_leading_cargo_arg(
     index: usize,
     arg: &str,
     forwarded: &mut Vec<String>,
-    subcommand_blocked: &mut bool,
+    state: &mut SubcommandState,
 ) -> Option<usize> {
     if arg.starts_with('+') || is_cargo_no_value_flag(arg) || cargo_flag_has_inline_value(arg) {
         forwarded.push(arg.to_string());
@@ -423,7 +720,7 @@ fn forward_leading_cargo_arg(
         return Some(1);
     }
     if arg.starts_with('-') {
-        *subcommand_blocked = true;
+        *state = SubcommandState::Blocked;
         forwarded.push(arg.to_string());
         return Some(1);
     }
@@ -443,7 +740,7 @@ fn insert_trimmed(values: &mut HashSet<String>, value: &str) {
 
 #[cfg(test)]
 mod test {
-    use super::{Command, parse_bool, parse_normalized_args};
+    use super::{Command, OwnSubcommand, parse_bool, parse_normalized_args};
     use crate::config::DEPRECATED_NO_PRUNE_IMPLIED;
     use crate::config::FlagConfig;
     use color_eyre::eyre;
@@ -452,6 +749,11 @@ mod test {
     fn parse_args(values: &[&str]) -> eyre::Result<(super::Options, Vec<String>)> {
         let args = values.iter().copied().map(String::from).collect::<Vec<_>>();
         parse_normalized_args(&args)
+    }
+
+    /// The message of an error the parser is expected to produce.
+    fn parse_error(values: &[&str], expectation: &str) -> String {
+        parse_args(values).expect_err(expectation).to_string()
     }
 
     #[test]
@@ -587,6 +889,205 @@ mod test {
         ));
         assert!(forwarded.is_empty());
         Ok(())
+    }
+
+    /// `cargo fc matrix` spawns no cargo process, so a `--help` after it has
+    /// nobody else to reach: it must print the matrix help, not the matrix.
+    #[test]
+    fn parse_help_after_matrix_asks_for_the_matrix_help() -> eyre::Result<()> {
+        let (options, _forwarded) = parse_args(&["matrix", "-p", "cli", "--pretty", "--help"])?;
+
+        assert!(matches!(
+            options.command,
+            Some(Command::Help {
+                topic: Some(OwnSubcommand::Matrix)
+            })
+        ));
+
+        let (short, _forwarded) = parse_args(&["matrix", "-h"])?;
+        assert!(matches!(
+            short.command,
+            Some(Command::Help {
+                topic: Some(OwnSubcommand::Matrix)
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn parse_help_after_version_asks_for_the_version_help() -> eyre::Result<()> {
+        let (options, _forwarded) = parse_args(&["version", "--help"])?;
+
+        assert!(matches!(
+            options.command,
+            Some(Command::Help {
+                topic: Some(OwnSubcommand::Version)
+            })
+        ));
+        Ok(())
+    }
+
+    /// Cargo build flags used to be forwarded into a void, so a typo produced
+    /// a plausible-looking matrix instead of a complaint.
+    #[test]
+    fn parse_matrix_rejects_arguments_it_cannot_honor() {
+        for arg in ["--all-targets", "--release", "--pretyy", "--features=a", ""] {
+            let err = parse_error(&["matrix", arg], "unsupported matrix argument");
+            assert!(err.contains(arg), "{err}");
+            assert!(err.contains("cargo fc matrix"), "{err}");
+        }
+    }
+
+    #[test]
+    fn parse_version_subcommand_rejects_arguments() {
+        let err = parse_error(&["version", "--pretty"], "`version` takes no arguments");
+        assert!(err.contains("takes no arguments"), "{err}");
+    }
+
+    /// The matrix reflects one command's per-command configuration, so a
+    /// second bare word is a mistake rather than a silent winner.
+    #[test]
+    fn parse_matrix_takes_at_most_one_cargo_command() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["matrix", "build"])?;
+        assert!(matches!(
+            options.command,
+            Some(Command::FeatureMatrix { pretty: false })
+        ));
+        sim_assert_eq!(forwarded, vec!["build".to_string()]);
+
+        let err = parse_error(&["matrix", "build", "test"], "two commands are ambiguous");
+        assert!(err.contains("one cargo command at a time"), "{err}");
+        Ok(())
+    }
+
+    /// The command token has to reach cargo's own subcommand position, so
+    /// `--target` may not be replayed in front of it however it was typed.
+    #[test]
+    fn parse_matrix_replays_the_command_before_the_target() -> eyre::Result<()> {
+        let expected = vec![
+            "build".to_string(),
+            "--target".to_string(),
+            "wasm32-unknown-unknown".to_string(),
+        ];
+
+        let (_options, forwarded) =
+            parse_args(&["matrix", "--target", "wasm32-unknown-unknown", "build"])?;
+        sim_assert_eq!(forwarded, expected);
+
+        let (_options, forwarded) =
+            parse_args(&["matrix", "build", "--target=wasm32-unknown-unknown"])?;
+        sim_assert_eq!(forwarded, expected);
+        Ok(())
+    }
+
+    /// Flags that only shape a run stay accepted so the same command line can
+    /// be pointed at `matrix` or at a real run; `note_matrix_noop_flags`
+    /// reports the ones that did nothing.
+    #[test]
+    fn parse_matrix_accepts_run_only_flags() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&[
+            "matrix",
+            "--driver",
+            "cross",
+            "--summary-only",
+            "--packages-only",
+        ])?;
+
+        assert_eq!(options.driver.as_deref(), Some("cross"));
+        assert_eq!(options.flags.summary_only, Some(true));
+        assert_eq!(options.flags.packages_only, Some(true));
+        assert!(forwarded.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn parse_matrix_rejects_a_double_dash_it_cannot_forward() {
+        let err = parse_error(
+            &["matrix", "--", "extra"],
+            "`matrix` has nothing to forward to",
+        );
+        assert!(err.contains("runs no program"), "{err}");
+    }
+
+    /// A `+toolchain` is only a toolchain override in cargo's leading position;
+    /// after `matrix` it would silently become the cargo command instead.
+    #[test]
+    fn parse_matrix_rejects_a_trailing_toolchain_override() -> eyre::Result<()> {
+        let err = parse_error(
+            &["matrix", "+nightly"],
+            "a trailing +toolchain is not a command",
+        );
+        assert!(err.contains("must come before"), "{err}");
+
+        let (options, forwarded) = parse_args(&["+nightly", "matrix"])?;
+        assert!(matches!(
+            options.command,
+            Some(Command::FeatureMatrix { .. })
+        ));
+        sim_assert_eq!(forwarded, vec!["+nightly".to_string()]);
+        Ok(())
+    }
+
+    /// A leading `--help`/`--version` ends parsing: a later subcommand token
+    /// used to overwrite it, so `cargo fc --help matrix` printed the matrix.
+    #[test]
+    fn parse_leading_help_wins_over_a_later_subcommand() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["--help", "matrix"])?;
+        assert!(matches!(
+            options.command,
+            Some(Command::Help { topic: None })
+        ));
+        assert!(forwarded.is_empty());
+
+        let (options, _forwarded) = parse_args(&["--version", "check"])?;
+        assert!(matches!(options.command, Some(Command::Version)));
+        Ok(())
+    }
+
+    /// `cargo metadata` resolves dependencies itself, so the lockfile flags
+    /// must reach it too or `--locked` could still update Cargo.lock during
+    /// discovery. They also stay in the forwarded args for the spawned cargo.
+    #[test]
+    fn parse_locking_flags_reach_metadata_and_cargo() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["check", "--locked", "--offline"])?;
+        sim_assert_eq!(options.locking_flags, vec!["--locked", "--offline"]);
+        sim_assert_eq!(
+            forwarded,
+            vec![
+                "check".to_string(),
+                "--locked".to_string(),
+                "--offline".to_string()
+            ]
+        );
+
+        let (options, forwarded) = parse_args(&["--frozen", "check"])?;
+        sim_assert_eq!(options.locking_flags, vec!["--frozen"]);
+        sim_assert_eq!(forwarded, vec!["--frozen".to_string(), "check".to_string()]);
+        Ok(())
+    }
+
+    /// `matrix` spawns nothing, so the lockfile flags constrain only the
+    /// metadata step and are not replayed into the forwarded args.
+    #[test]
+    fn parse_matrix_accepts_locking_flags_for_metadata() -> eyre::Result<()> {
+        let (options, forwarded) = parse_args(&["matrix", "--locked", "build"])?;
+        sim_assert_eq!(options.locking_flags, vec!["--locked"]);
+        sim_assert_eq!(forwarded, vec!["build".to_string()]);
+
+        let err = parse_error(&["version", "--locked"], "`version` reads no metadata");
+        assert!(err.contains("takes no arguments"), "{err}");
+        Ok(())
+    }
+
+    /// Before, this forwarded `--pretty` as a leading cargo flag, which turned
+    /// `matrix` into a cargo subcommand run once per feature combination.
+    #[test]
+    fn parse_pretty_before_matrix_is_rejected() {
+        let err = parse_error(
+            &["--pretty", "matrix"],
+            "`--pretty` is not a leading cargo flag",
+        );
+        assert!(err.contains("belongs to `cargo fc matrix`"), "{err}");
     }
 
     #[test]

@@ -12,6 +12,20 @@ cargo fc matrix
 cargo fc matrix --pretty
 ```
 
+`cargo fc matrix` prints and exits — it never builds anything. It therefore parses its own arguments instead of forwarding them to Cargo: `cargo fc matrix --help` prints the options it accepts, and an argument the matrix cannot honor (`--release`, `--all-targets`, a misspelled `--pretyy`) is an error rather than a silently ignored token. Cargo-fc flags that only shape a *run* — `--driver`, `--env`, `--summary-only`, `--fail-fast` — stay accepted, so the same command line works against `matrix` or a real run; a note lists the ones that had no effect. Cargo's lockfile flags (`--frozen`, `--locked`, `--offline`) are also accepted: they constrain the `cargo metadata` step the matrix is built from.
+
+## Previewing one command
+
+The matrix depends on which command is being run, because [per-command configuration]({{< relref "../configuration/per-command.md" >}}) can add or remove features for a single subcommand. Name that command to see the matrix it would produce:
+
+```bash
+cargo fc matrix build     # exactly the combinations `cargo fc build` runs
+cargo fc matrix test
+cargo fc matrix lint      # cargo aliases are expanded first
+```
+
+A plain `cargo fc matrix` applies no per-command layer. Only one command may be named per invocation.
+
 ## Output shape
 
 The matrix is a JSON array with one object per combination. Each object carries the package `name`, the comma-joined `features` string, the effective `target`, and any configured `metadata`:
@@ -61,6 +75,12 @@ If you declare [configured targets]({{< relref "../targets/configured-targets.md
 
 ```json
 { "name": "engine", "features": "metrics", "target": "x86_64-unknown-linux-gnu" }
+```
+
+Pass `--target <triple>` to resolve the matrix for one specific target instead of the configured list. The triple selects the row's `target` field *and* the [`cfg(...)` target overrides]({{< relref "../configuration/per-target.md" >}}) the feature sets are resolved under, so it is the way to preview what a single CI leg will cover:
+
+```bash
+cargo fc matrix --target aarch64-apple-darwin build
 ```
 
 ## `--packages-only`

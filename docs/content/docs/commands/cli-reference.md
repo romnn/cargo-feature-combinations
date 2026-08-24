@@ -18,8 +18,10 @@ cargo fc [+toolchain] [OPTIONS] [CARGO_OPTIONS] [CARGO_SUBCOMMAND]
 
 | Subcommand | Description |
 |---|---|
-| `matrix` | Print the JSON feature-combination matrix to stdout. Add `--pretty` for indented JSON. |
+| `matrix [COMMAND]` | Print the JSON feature-combination matrix to stdout. Add `--pretty` for indented JSON. `COMMAND` is an optional cargo subcommand whose per-command configuration the matrix should reflect. See [The matrix subcommand]({{< relref "matrix.md" >}}) and `cargo fc matrix --help`. |
 | `version` | Print version information. |
+
+Both are cargo-fc's own subcommands: they print and exit, so they parse everything after their token themselves instead of forwarding it to Cargo. `cargo fc matrix --help` prints the matrix help (not the matrix), and an argument neither subcommand can honor is an error rather than a silently dropped token.
 
 ## Options
 
@@ -63,7 +65,8 @@ Most boolean flags can also be set as [defaults in `Cargo.toml`]({{< relref "../
 ## Notes
 
 - Cargo-fc boolean flags take an optional inline value: `--summary-only` means `--summary-only=true`, and `--summary-only=false` turns a `Cargo.toml` default back off for one invocation. `no`, `off`, and `0` are accepted alongside `false` (and `yes`/`on`/`1` alongside `true`). There are no `--no-<flag>` spellings — those tokens belong to cargo (`--no-fail-fast` for `test`, `--no-dedupe` for `tree`) and cargo-fc forwards them untouched.
-- Switches with no configurable default — `--workspace`, `--pretty`, `--help`, `--version` — take no value.
+- Switches with no configurable default — `--workspace`, `--pretty`, `--help`, `--version` — take no value. `--pretty` belongs to `cargo fc matrix` and must follow that subcommand.
 - `--dedupe` implies `--diagnostics-only`. Setting `--dedupe` together with `diagnostics_only = false` in config is rejected as contradictory.
-- Everything after `--` is forwarded to the invoked program and never interpreted by `cargo fc`.
+- Everything after `--` is forwarded to the invoked program and never interpreted by `cargo fc`. `cargo fc matrix` and `cargo fc version` invoke nothing, so they reject `--` instead of dropping what follows it.
+- Cargo's lockfile flags (`--frozen`, `--locked`, `--offline`) are forwarded to every cargo invocation **and** applied to the initial `cargo metadata` discovery, so `--locked` cannot be defeated by the metadata step updating `Cargo.lock`. `cargo fc matrix` accepts them for the metadata step alone.
 - `--env` requires `KEY=VALUE`, split at the first `=`; `KEY=` sets an empty value.

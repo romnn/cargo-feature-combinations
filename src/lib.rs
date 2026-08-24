@@ -207,8 +207,8 @@ pub(crate) fn ws_metadata_section(key: &str) -> String {
 /// `help`, `version`, and a bare invocation with nothing to run.
 fn print_help_or_version(bin_name: &str, options: &Options, cargo_args: &[String]) -> bool {
     match &options.command {
-        Some(Command::Help) => {
-            cli::print_help();
+        Some(Command::Help { topic }) => {
+            cli::print_help(*topic);
             true
         }
         Some(Command::Version) => {
@@ -216,7 +216,7 @@ fn print_help_or_version(bin_name: &str, options: &Options, cargo_args: &[String
             true
         }
         None if cargo_args.is_empty() => {
-            cli::print_help();
+            cli::print_help(None);
             true
         }
         _ => false,
@@ -243,6 +243,12 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     let mut cmd = cargo_metadata::MetadataCommand::new();
     if let Some(ref manifest_path) = options.manifest_path {
         cmd.manifest_path(manifest_path);
+    }
+    // Metadata discovery resolves dependencies and may update Cargo.lock, so
+    // `--frozen`/`--locked`/`--offline` must constrain it like any other
+    // cargo invocation.
+    if !options.locking_flags.is_empty() {
+        cmd.other_options(options.locking_flags.clone());
     }
     let metadata = cmd.exec()?;
 
