@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.7.0]
+
 ### Changed
 
 - **Breaking:** `cargo fc matrix` and `cargo fc version` now parse everything
