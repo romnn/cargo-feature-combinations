@@ -140,7 +140,7 @@ fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()>
     let mut eval = PairEval::default();
     let rows = matrix_rows(&meta, None, true, &env, &mut eval)?;
 
-    assert!(!rows.is_empty());
+    assert_ne!(rows, Vec::<serde_json::Value>::new());
     assert_eq!(
         targets_in(&rows),
         HashSet::from(["host-triple".to_string()])
@@ -226,7 +226,7 @@ fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Re
     let mut eval = PairEval::default();
 
     let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
-    assert!(rows.is_empty());
+    assert_eq!(rows, Vec::<serde_json::Value>::new());
 
     let rows = matrix_rows(&meta, Some("t-wasm"), true, &env, &mut eval)?;
     assert_eq!(targets_in(&rows), HashSet::from(["t-wasm".to_string()]));
@@ -254,7 +254,7 @@ fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
     let mut eval = PairEval::default();
 
     let rows = matrix_rows(&meta, Some("t-cli"), true, &env, &mut eval)?;
-    assert!(rows.is_empty());
+    assert_eq!(rows, Vec::<serde_json::Value>::new());
 
     let rows = matrix_rows(&meta, Some("host-triple"), true, &env, &mut eval)?;
     assert_eq!(

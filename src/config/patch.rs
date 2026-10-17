@@ -466,8 +466,8 @@ mod test {
         let v = json!([["a"], ["b", "c"]]);
         let p: FeatureSetVecPatch = serde_json::from_value(v)?;
         assert!(p.override_value().is_some());
-        assert!(p.add_values().is_empty());
-        assert!(p.remove_values().is_empty());
+        assert_eq!(p.add_values(), Vec::<HashSet<String>>::new());
+        assert_eq!(p.remove_values(), Vec::<HashSet<String>>::new());
         Ok(())
     }
 

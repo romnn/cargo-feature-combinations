@@ -384,7 +384,7 @@ mod test {
         sim_assert_eq!(counts.warnings, 0);
         sim_assert_eq!(counts.errors, 0);
         sim_assert_eq!(counts.suppressed, 0);
-        assert!(written.is_empty());
+        sim_assert_eq!(written, "");
     }
 
     #[test]

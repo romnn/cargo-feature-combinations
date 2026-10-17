@@ -823,8 +823,8 @@ mod test {
 
         assert!(options.command.is_none());
         assert!(options.driver.is_none());
-        assert!(options.env_set.is_empty());
-        assert!(options.env_remove.is_empty());
+        assert_eq!(options.env_set, Vec::new());
+        assert_eq!(options.env_remove, Vec::<String>::new());
         sim_assert_eq!(
             forwarded,
             vec![
@@ -887,7 +887,7 @@ mod test {
             options.command,
             Some(Command::FeatureMatrix { pretty: true })
         ));
-        assert!(forwarded.is_empty());
+        assert_eq!(forwarded, Vec::<String>::new());
         Ok(())
     }
 
@@ -996,7 +996,7 @@ mod test {
         assert_eq!(options.driver.as_deref(), Some("cross"));
         assert_eq!(options.flags.summary_only, Some(true));
         assert_eq!(options.flags.packages_only, Some(true));
-        assert!(forwarded.is_empty());
+        assert_eq!(forwarded, Vec::<String>::new());
         Ok(())
     }
 
@@ -1037,7 +1037,7 @@ mod test {
             options.command,
             Some(Command::Help { topic: None })
         ));
-        assert!(forwarded.is_empty());
+        assert_eq!(forwarded, Vec::<String>::new());
 
         let (options, _forwarded) = parse_args(&["--version", "check"])?;
         assert!(matches!(options.command, Some(Command::Version)));
