@@ -23,6 +23,7 @@ use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Instant;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream};
@@ -114,6 +115,17 @@ struct RunContext<'a> {
     invocation_args: &'a PreparedInvocationArgs<'a>,
     /// `+toolchain` consumed from the forwarded args, if cargo-fc resolved one.
     toolchain: Option<&'a ToolchainOverride>,
+    /// Root of the workspace under test, which tells a root package apart from
+    /// the members its manifest would select through `default-members`.
+    workspace_root: &'a Path,
+}
+
+/// Where the workspace under test lives, for selecting each invocation's
+/// package from the invocation directory.
+pub(crate) struct WorkspaceLocation<'a> {
+    pub(crate) root: &'a Path,
+    /// The `--manifest-path` given to cargo-fc, if any.
+    pub(crate) manifest_path: Option<&'a str>,
 }
 
 /// Execution mode over the same execution plans.
@@ -198,6 +210,7 @@ pub fn run_execution_plans(
     mut cargo_args: Vec<&str>,
     mode: TargetExecutionMode,
     generated_arg_placement: GeneratedArgPlacement,
+    workspace: &WorkspaceLocation<'_>,
 ) -> eyre::Result<ExitCode> {
     let start = Instant::now();
 
@@ -205,7 +218,10 @@ pub fn run_execution_plans(
     // is a hard error there: `$CARGO` names a toolchain-pinned binary, and only
     // rustup's proxy ever understands the token.
     let toolchain = toolchain::take_override(&mut cargo_args, &toolchain::RustupToolchainResolver)?;
-    let invocation_args = PreparedInvocationArgs::new(cargo_args, generated_arg_placement);
+    let mut invocation_args = PreparedInvocationArgs::new(cargo_args, generated_arg_placement);
+    if let Some(manifest_path) = workspace.manifest_path {
+        invocation_args = invocation_args.with_wrapper_manifest_path(manifest_path);
+    }
 
     let removed_feature_args = invocation_args.removed_feature_args();
     if !removed_feature_args.is_empty() {
@@ -236,6 +252,7 @@ pub fn run_execution_plans(
     let ctx = RunContext {
         invocation_args: &invocation_args,
         toolchain: toolchain.as_ref(),
+        workspace_root: workspace.root,
     };
 
     let mut stdout = StandardStream::stdout(ColorChoice::Auto);

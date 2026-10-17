@@ -446,6 +446,13 @@ cargo-fc resolves cargo command aliases from your `.cargo/config.toml` before
 running, so an alias that expands to a built-in inherits the built-in's
 capability automatically. With `lint = "clippy --all-targets --no-deps"`,
 `cargo fc lint` behaves exactly like `cargo fc clippy` — no opt-in required.
+Aliases resolve as Cargo resolves them: a `CARGO_ALIAS_<NAME>` environment
+variable wins over config files, which are discovered from the directory
+`cargo fc` runs in. Every invocation also runs from that directory and selects
+its package with `--manifest-path` (or `-p`), so cwd-relative paths in an alias
+body work as they do for plain `cargo`. Alias resolution reads cargo-fc's own
+environment, so `env` settings in cargo-fc config, which apply per package and
+target, do not change which command an alias expands to.
 
 A custom subcommand that does **not** resolve to a built-in still needs an
 explicit declaration:

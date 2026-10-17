@@ -103,7 +103,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "shlex",
  "similar-asserts",
  "strip-ansi-escapes",
  "termcolor",

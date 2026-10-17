@@ -170,6 +170,7 @@ struct CargoCommandDispatch<'a> {
     generated_arg_placement: GeneratedArgPlacement,
     workspace_config: &'a config::WorkspaceConfig,
     workspace_key: &'a str,
+    workspace_root: &'a std::path::Path,
 }
 
 /// Look up configuration from any recognized metadata key alias.
@@ -265,7 +266,9 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
         .map(|package| package.config())
         .collect::<eyre::Result<Vec<_>>>()?;
 
-    let prepared = prepare_cargo_command(cargo_args, metadata.workspace_root.as_std_path())?;
+    // Cargo discovers alias config from its working directory, which cargo-fc
+    // children inherit, not from the workspace root.
+    let prepared = prepare_cargo_command(cargo_args, &std::env::current_dir()?)?;
     let tokens = prepared.tokens();
     let selected =
         selected_packages_for_target_planning(&packages, &configs, &options, &ws_config, tokens)?;
@@ -337,6 +340,7 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
                 generated_arg_placement: prepared.generated_arg_placement,
                 workspace_config: &ws_config,
                 workspace_key: ws_key,
+                workspace_root: metadata.workspace_root.as_std_path(),
             },
             host,
             &mut evaluator,
@@ -358,13 +362,13 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
 fn prepare_cargo_command(
     args: Vec<String>,
-    workspace_root: &std::path::Path,
+    cwd: &std::path::Path,
 ) -> eyre::Result<PreparedCargoCommand> {
     let raw_token = cli::cargo_subcommand_token(&args);
     let raw_cli_target = target::parse_cli_target(&args)?;
     // Resolve cargo command aliases so target policy and build-driver dispatch
     // see the underlying built-in subcommand when one is configured.
-    let alias_expansion = cargo_alias::expand_aliases_with_info(args, workspace_root);
+    let alias_expansion = cargo_alias::expand_aliases_with_info(args, cwd);
     let expanded_args = alias_expansion.args;
     let resolved_token = cli::cargo_subcommand_token(&expanded_args);
     // Expanded `run` aliases keep generated args after `--` only when the alias
@@ -520,6 +524,13 @@ fn run_cargo_command(
         dispatch.cargo_args,
         mode,
         dispatch.generated_arg_placement,
+        &runner::WorkspaceLocation {
+            root: dispatch.workspace_root,
+            manifest_path: options
+                .manifest_path
+                .as_deref()
+                .and_then(std::path::Path::to_str),
+        },
     )
 }
 

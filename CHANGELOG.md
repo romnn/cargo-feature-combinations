@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** every invocation now runs from the directory `cargo fc` was
+  started in, as `cargo <cmd> -p <pkg>` would, instead of inside each package's
+  directory. Cwd-relative paths, `.cargo/config.toml` discovery, and
+  `rust-toolchain.toml` lookup now match plain Cargo. Each invocation selects
+  its package with `--manifest-path <package>`, adding `-p <package ID>` for a
+  workspace root package (whose manifest would otherwise select
+  `default-members`) and using `-p` alone when an alias body already passes
+  `--manifest-path`. The fully qualified ID keeps `-p` from also matching a
+  dependency of the same name.
+- **Breaking:** a wrapper alias whose body supplies `--` (`lint = "run --package
+  wrapper -- lint"`) receives that package selection ahead of the generated
+  feature flags, and must forward it to the Cargo command it wraps. Its outer
+  `cargo run` also receives the `--manifest-path` given to `cargo fc`, unless the
+  alias body names one.
+- **Breaking:** string aliases split on whitespace without shell quoting, as
+  Cargo splits them. Use the array form for an argument containing spaces.
+
+### Fixed
+
+- Aliases with cwd-relative paths, such as `tool = "run --manifest-path
+  ../tool/Cargo.toml --"`, failed for every row because the path was resolved
+  against each package's directory (#23).
+- `CARGO_ALIAS_<NAME>` environment variables override config-file aliases, as
+  they do in Cargo, and alias config is discovered from the invocation directory
+  instead of the workspace root (#23). As in Cargo, the environment replaces a
+  string alias but extends an array alias, and array aliases defined at several
+  config levels are joined.
+- When a directory holds both `.cargo/config` and `.cargo/config.toml`, aliases
+  come only from the extensionless file, which is the one Cargo reads.
+
 ## [0.7.0]
 
 ### Changed
