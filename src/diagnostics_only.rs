@@ -191,7 +191,7 @@ pub(crate) fn process_output(
 #[cfg(test)]
 mod test {
     use super::{DiagnosticCounts, process_lines};
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::HashSet;
 
@@ -285,11 +285,14 @@ mod test {
 
     #[test]
     fn mixed_json_and_non_json_lines() {
-        let input = format!(
-            "{}\nrunning 1 test\n{}\ntest bar ... ok\n",
-            diag_json("warning", "warning: foo\n"),
-            artifact_json(),
-        );
+        let diagnostic = diag_json("warning", "warning: foo\n");
+        let artifact = artifact_json();
+        let input = formatdoc! {"
+            {diagnostic}
+            running 1 test
+            {artifact}
+            test bar ... ok
+        "};
         let mut seen = HashSet::new();
         let (counts, written) = run_lines(&input, false, &mut seen);
         sim_assert_eq!(counts.warnings, 1);
@@ -302,7 +305,10 @@ mod test {
     #[test]
     fn duplicate_rendered_text_is_preserved_without_dedupe() {
         let line = diag_json("warning", "warning: duplicate\n");
-        let input = format!("{line}\n{line}\n");
+        let input = formatdoc! {"
+            {line}
+            {line}
+        "};
         let mut seen = HashSet::new();
         let (counts, written) = run_lines(&input, false, &mut seen);
         sim_assert_eq!(counts.warnings, 2);
@@ -316,7 +322,11 @@ mod test {
         // invocation. Count and print only one copy; the rest are cargo target
         // fan-out, not additional user diagnostics.
         let line = diag_json("warning", "warning: duplicate\n");
-        let input = format!("{line}\n{line}\n{line}\n");
+        let input = formatdoc! {"
+            {line}
+            {line}
+            {line}
+        "};
         let mut seen = HashSet::new();
         let (counts, written) = run_lines(&input, true, &mut seen);
         sim_assert_eq!(counts.warnings, 1);
@@ -330,7 +340,10 @@ mod test {
         // in each invocation reports no suppressed diagnostics on the first
         // feature combination and one on later combinations.
         let line = diag_json("error", "error: too many lines\n");
-        let one_invocation = format!("{line}\n{line}\n");
+        let one_invocation = formatdoc! {"
+            {line}
+            {line}
+        "};
         let mut seen = HashSet::new();
 
         let (c1, o1) = run_lines(&one_invocation, true, &mut seen);
@@ -346,11 +359,12 @@ mod test {
 
     #[test]
     fn dedupe_preserves_distinct_diagnostics() {
-        let input = format!(
-            "{}\n{}\n",
-            diag_json("warning", "warning: first\n"),
-            diag_json("warning", "warning: second\n"),
-        );
+        let first = diag_json("warning", "warning: first\n");
+        let second = diag_json("warning", "warning: second\n");
+        let input = formatdoc! {"
+            {first}
+            {second}
+        "};
         let mut seen = HashSet::new();
         let (counts, written) = run_lines(&input, true, &mut seen);
         sim_assert_eq!(counts.warnings, 2);

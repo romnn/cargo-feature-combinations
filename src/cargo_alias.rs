@@ -301,6 +301,7 @@ mod tests {
     use assert_fs::TempDir;
     use assert_fs::prelude::*;
     use color_eyre::eyre;
+    use indoc::indoc;
 
     fn write(dir: &TempDir, body: &str) -> eyre::Result<()> {
         dir.child(".cargo").create_dir_all()?;
@@ -315,7 +316,13 @@ mod tests {
     #[test]
     fn expands_string_alias_in_place() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"clippy --all-targets --no-deps\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = "clippy --all-targets --no-deps"
+            "#},
+        )?;
         let args = vec!["lint".to_string(), "--workspace".to_string()];
 
         let out = expand_aliases(args, tmp.path());
@@ -329,7 +336,11 @@ mod tests {
         let tmp = TempDir::new()?;
         write(
             &tmp,
-            "[alias]\nlint = \"ci --all-targets\"\nci = \"clippy --no-deps\"\n",
+            indoc! {r#"
+                [alias]
+                lint = "ci --all-targets"
+                ci = "clippy --no-deps"
+            "#},
         )?;
         let args = vec!["lint".to_string(), "--workspace".to_string()];
 
@@ -344,7 +355,10 @@ mod tests {
         let tmp = TempDir::new()?;
         write(
             &tmp,
-            "[alias]\nlint = \"clippy --features 'foo bar' --target-dir C:\\\\fc\"\n",
+            indoc! {r#"
+                [alias]
+                lint = "clippy --features 'foo bar' --target-dir C:\\fc"
+            "#},
         )?;
 
         let out = expand_aliases(vec!["lint".to_string()], tmp.path());
@@ -370,7 +384,10 @@ mod tests {
         let tmp = TempDir::new()?;
         write(
             &tmp,
-            "[alias]\nlint = [\"clippy\", \"--features\", \"foo bar\"]\n",
+            indoc! {r#"
+                [alias]
+                lint = ["clippy", "--features", "foo bar"]
+            "#},
         )?;
 
         let out = expand_aliases(vec!["lint".to_string()], tmp.path());
@@ -382,9 +399,18 @@ mod tests {
     #[test]
     fn legacy_config_wins_over_config_toml_in_one_directory() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"build\"\nonly-toml = \"check\"\n")?;
-        tmp.child(".cargo/config")
-            .write_str("[alias]\nlint = \"clippy\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = "build"
+                only-toml = "check"
+            "#},
+        )?;
+        tmp.child(".cargo/config").write_str(indoc! {r#"
+            [alias]
+            lint = "clippy"
+        "#})?;
 
         // Cargo reads only the extensionless file when both exist, so aliases
         // defined only in `config.toml` are not visible either.
@@ -404,7 +430,11 @@ mod tests {
         let tmp = TempDir::new()?;
         write(
             &tmp,
-            "[alias]\nwrapper = \"run --package wrapper -- lint\"\nserve = \"run --package app\"\n",
+            indoc! {r#"
+                [alias]
+                wrapper = "run --package wrapper -- lint"
+                serve = "run --package app"
+            "#},
         )?;
 
         let wrapper = expand_aliases_with_info(vec!["wrapper".to_string()], tmp.path());
@@ -427,7 +457,13 @@ mod tests {
     #[test]
     fn leaves_builtin_subcommand_untouched() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nclippy = \"build\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                clippy = "build"
+            "#},
+        )?;
         let args = vec!["clippy".to_string()];
 
         assert_eq!(expand_aliases(args.clone(), tmp.path()), args);
@@ -437,7 +473,13 @@ mod tests {
     #[test]
     fn leaves_non_target_builtin_subcommand_untouched() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nclean = \"clippy\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                clean = "clippy"
+            "#},
+        )?;
         let args = vec!["clean".to_string()];
 
         assert_eq!(expand_aliases(args.clone(), tmp.path()), args);
@@ -447,7 +489,13 @@ mod tests {
     #[test]
     fn preserves_toolchain_prefix() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"clippy\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = "clippy"
+            "#},
+        )?;
         let args = vec!["+nightly".to_string(), "lint".to_string()];
 
         assert_eq!(expand_aliases(args, tmp.path()), ["+nightly", "clippy"]);
@@ -457,7 +505,13 @@ mod tests {
     #[test]
     fn empty_alias_keeps_subcommand_token() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = ""
+            "#},
+        )?;
 
         let out = expand_aliases(
             vec!["lint".to_string(), "--workspace".to_string()],
@@ -473,7 +527,10 @@ mod tests {
         let tmp = TempDir::new()?;
         write(
             &tmp,
-            "[alias]\nmy-tool = \"run --manifest-path ../tool/Cargo.toml --\"\n",
+            indoc! {r#"
+                [alias]
+                my-tool = "run --manifest-path ../tool/Cargo.toml --"
+            "#},
         )?;
         let env_var = |key: &str| {
             (key == "CARGO_ALIAS_MY_TOOL")
@@ -506,7 +563,13 @@ mod tests {
     #[test]
     fn env_alias_extends_array_alias() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = [\"check\"]\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = ["check"]
+            "#},
+        )?;
         let env_var =
             |key: &str| (key == "CARGO_ALIAS_LINT").then(|| "--all-targets --locked".to_string());
 
@@ -520,12 +583,19 @@ mod tests {
     #[test]
     fn array_aliases_join_across_config_levels() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = [\"clippy\"]\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = ["clippy"]
+            "#},
+        )?;
         let nested = tmp.child("ws");
         nested.child(".cargo").create_dir_all()?;
-        nested
-            .child(".cargo/config.toml")
-            .write_str("[alias]\nlint = [\"--no-deps\"]\n")?;
+        nested.child(".cargo/config.toml").write_str(indoc! {r#"
+            [alias]
+            lint = ["--no-deps"]
+        "#})?;
 
         // Cargo joins arrays from every config level, nearer elements last.
         assert_eq!(
@@ -538,12 +608,19 @@ mod tests {
     #[test]
     fn nearest_config_to_cwd_wins() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"clippy\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                lint = "clippy"
+            "#},
+        )?;
         let nested = tmp.child("ws");
         nested.child(".cargo").create_dir_all()?;
-        nested
-            .child(".cargo/config.toml")
-            .write_str("[alias]\nlint = \"check\"\n")?;
+        nested.child(".cargo/config.toml").write_str(indoc! {r#"
+            [alias]
+            lint = "check"
+        "#})?;
 
         // Running from the nested directory sees its config over the parent's,
         // while the parent directory only sees its own.
@@ -561,7 +638,14 @@ mod tests {
     #[test]
     fn caps_cyclic_alias_expansion() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nalpha = \"beta\"\nbeta = \"alpha\"\n")?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                alpha = "beta"
+                beta = "alpha"
+            "#},
+        )?;
 
         let out = expand_aliases(
             vec!["alpha".to_string(), "--locked".to_string()],

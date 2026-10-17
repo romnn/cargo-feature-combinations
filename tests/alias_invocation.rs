@@ -7,6 +7,7 @@
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
 use color_eyre::eyre;
+use indoc::{formatdoc, indoc};
 use similar_asserts::assert_eq as sim_assert_eq;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,28 +28,33 @@ struct Fixture {
 impl Fixture {
     fn new() -> eyre::Result<Self> {
         let temp = TempDir::new()?;
-        temp.child("ws/Cargo.toml").write_str(
-            "[workspace]\nmembers = [\"crates/a\", \"crates/deep/nested/b\"]\nresolver = \"2\"\n",
-        )?;
+        temp.child("ws/Cargo.toml").write_str(indoc! {r#"
+            [workspace]
+            members = ["crates/a", "crates/deep/nested/b"]
+            resolver = "2"
+        "#})?;
         for (name, dir) in [("a", "crates/a"), ("b", "crates/deep/nested/b")] {
             temp.child(format!("ws/{dir}/Cargo.toml"))
-                .write_str(&format!(
-                    "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
-                ))?;
+                .write_str(&formatdoc! {r#"
+                    [package]
+                    name = "{name}"
+                    version = "0.1.0"
+                    edition = "2021"
+                "#})?;
             temp.child(format!("ws/{dir}/src/lib.rs")).write_str("")?;
         }
         temp.child("outside").create_dir_all()?;
         temp.child("cargo-home").create_dir_all()?;
 
         let driver = temp.child("record-driver");
-        driver.write_str(
-            "#!/bin/sh\n\
-             {\n\
-             printf 'cwd=%s\\n' \"$(pwd -P)\"\n\
-             for arg in \"$@\"; do printf 'arg=%s\\n' \"$arg\"; done\n\
-             printf 'end\\n'\n\
-             } >> \"$FC_RECORD\"\n",
-        )?;
+        driver.write_str(indoc! {r#"
+            #!/bin/sh
+            {
+                printf 'cwd=%s\n' "$(pwd -P)"
+                for arg in "$@"; do printf 'arg=%s\n' "$arg"; done
+                printf 'end\n'
+            } >> "$FC_RECORD"
+        "#})?;
         std::fs::set_permissions(
             driver.path(),
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -122,8 +128,10 @@ fn parse_records(contents: &str) -> eyre::Result<Vec<Recorded>> {
 #[test]
 fn relative_alias_path_resolves_from_invocation_directory() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
-    fixture
-        .write_alias_config("[alias]\ntool = \"run --manifest-path ../tool/Cargo.toml --\"\n")?;
+    fixture.write_alias_config(indoc! {r#"
+        [alias]
+        tool = "run --manifest-path ../tool/Cargo.toml --"
+    "#})?;
     let ws = fixture.path("ws")?;
 
     let records = fixture.run(&ws, &[], &["tool"])?;
@@ -160,8 +168,10 @@ fn relative_alias_path_resolves_from_invocation_directory() -> eyre::Result<()> 
 #[test]
 fn env_alias_overrides_config_alias() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
-    fixture
-        .write_alias_config("[alias]\ntool = \"run --manifest-path ../tool/Cargo.toml --\"\n")?;
+    fixture.write_alias_config(indoc! {r#"
+        [alias]
+        tool = "run --manifest-path ../tool/Cargo.toml --"
+    "#})?;
     let ws = fixture.path("ws")?;
 
     let records = fixture.run(
@@ -198,7 +208,10 @@ fn env_alias_overrides_config_alias() -> eyre::Result<()> {
 #[test]
 fn alias_manifest_selects_package_by_id() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
-    fixture.write_alias_config("[alias]\nlocalcheck = \"check --manifest-path Cargo.toml\"\n")?;
+    fixture.write_alias_config(indoc! {r#"
+        [alias]
+        localcheck = "check --manifest-path Cargo.toml"
+    "#})?;
     let ws = fixture.path("ws")?;
     let metadata = cargo_metadata::MetadataCommand::new()
         .current_dir(&ws)

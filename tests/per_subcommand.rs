@@ -18,6 +18,7 @@ use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
 use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre;
+use indoc::{formatdoc, indoc};
 
 mod common;
 use common::{HostEnv, PairEval, metadata, single_crate};
@@ -90,8 +91,7 @@ fn any_row_has_feature(rows: &[serde_json::Value], feature: &str) -> bool {
 #[test]
 fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<()> {
     // `gpu` is excluded for `test` but kept for `build` and every other command.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -101,8 +101,7 @@ fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<
         cpu = []
         [package.metadata.cargo-fc.subcommands.test]
         exclude_features = { add = ["gpu"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -135,8 +134,7 @@ fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<
 fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Result<()> {
     // `maximal_features` is enabled only for `check`, so its matrix collapses
     // to the single all-features row while `build` keeps the full powerset.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -146,8 +144,7 @@ fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Res
         b = []
         [package.metadata.cargo-fc.subcommands.check]
         maximal_features = true
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -176,8 +173,7 @@ fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Res
 #[test]
 fn subcommand_only_features_restricts_matrix_for_that_command() -> eyre::Result<()> {
     // `cargo fc test` runs a single, focused feature: only `core`.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -187,8 +183,7 @@ fn subcommand_only_features_restricts_matrix_for_that_command() -> eyre::Result<
         extra = []
         [package.metadata.cargo-fc.subcommands.test]
         only_features = ["core"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -208,8 +203,7 @@ fn subcommand_only_features_restricts_matrix_for_that_command() -> eyre::Result<
 fn target_and_subcommand_feature_overrides_compose() -> eyre::Result<()> {
     // `a` is excluded for the linux target; `b` is excluded for `test`. Running
     // `cargo fc test` on linux drops both.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -224,8 +218,7 @@ fn target_and_subcommand_feature_overrides_compose() -> eyre::Result<()> {
         exclude_features = { add = ["a"] }
         [package.metadata.cargo-fc.subcommands.test]
         exclude_features = { add = ["b"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -250,8 +243,7 @@ fn target_and_subcommand_feature_overrides_compose() -> eyre::Result<()> {
 fn target_subcommand_override_narrows_to_target_and_command() -> eyre::Result<()> {
     // A `target.'cfg(...)'.subcommands.test` section applies only when both the
     // target matches and the command is `test`.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -263,8 +255,7 @@ fn target_subcommand_override_narrows_to_target_and_command() -> eyre::Result<()
         targets = ["t-linux"]
         [package.metadata.cargo-fc.target.'cfg(target_os = "linux")'.subcommands.test]
         exclude_features = { add = ["a"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -283,8 +274,7 @@ fn target_subcommand_override_narrows_to_target_and_command() -> eyre::Result<()
 fn subcommand_alias_resolves_to_builtin_override() -> eyre::Result<()> {
     // `t` is cargo's built-in alias for `test`; the `subcommands.test` override
     // must apply when the raw token is the alias.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -293,8 +283,7 @@ fn subcommand_alias_resolves_to_builtin_override() -> eyre::Result<()> {
         gpu = []
         [package.metadata.cargo-fc.subcommands.test]
         exclude_features = { add = ["gpu"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 
@@ -320,26 +309,22 @@ fn workspace_subcommand_excludes_package_for_that_command() -> eyre::Result<()> 
     // `exclude a package when testing`: the workspace subcommand override drops
     // `skip` for `cargo fc test`, but it participates for `cargo fc build`.
     let temp = TempDir::new()?;
-    temp.child("Cargo.toml").write_str(
-        r#"
+    temp.child("Cargo.toml").write_str(indoc! {r#"
         [workspace]
         members = ["keep", "skip"]
         resolver = "2"
 
         [workspace.metadata.cargo-fc.subcommands.test]
         exclude_packages = { add = ["skip"] }
-        "#,
-    )?;
+    "#})?;
     for name in ["keep", "skip"] {
         temp.child(format!("{name}/Cargo.toml"))
-            .write_str(&format!(
-                r#"
-            [package]
-            name = "{name}"
-            version = "0.1.0"
-            edition = "2021"
-            "#
-            ))?;
+            .write_str(&formatdoc! {r#"
+                [package]
+                name = "{name}"
+                version = "0.1.0"
+                edition = "2021"
+            "#})?;
         temp.child(format!("{name}/src/lib.rs"))
             .write_str("pub fn x() {}\n")?;
     }

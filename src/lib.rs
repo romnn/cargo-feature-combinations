@@ -639,6 +639,7 @@ mod test {
     use assert_fs::TempDir;
     use assert_fs::prelude::*;
     use color_eyre::eyre;
+    use indoc::indoc;
     use serde_json::json;
 
     fn workspace_with_aliases(body: &str) -> eyre::Result<TempDir> {
@@ -712,13 +713,11 @@ mod test {
 
     #[test]
     fn prepare_cargo_command_marks_nested_run_wrapper_aliases() -> eyre::Result<()> {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             clippy-wrapper = "run --package clippy-wrapper --"
             lint = "clippy-wrapper lint"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
 
@@ -759,12 +758,10 @@ mod test {
 
     #[test]
     fn prepare_cargo_command_keeps_run_alias_user_args_on_cargo_side() -> eyre::Result<()> {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             serve = "run --package app"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(
             vec!["serve".to_string(), "--".to_string(), "lint".to_string()],
@@ -785,12 +782,10 @@ mod test {
 
     #[test]
     fn prepare_cargo_command_preserves_run_alias_argument_position() -> eyre::Result<()> {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             serve = "run --package app -- serve"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path())?;
 
@@ -811,13 +806,11 @@ mod test {
 
     #[test]
     fn prepare_cargo_command_preserves_cli_target_for_run_wrapper_aliases() -> eyre::Result<()> {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             clippy-wrapper = "run --package clippy-wrapper --"
             lint = "clippy-wrapper lint"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(
             vec![
@@ -856,12 +849,10 @@ mod test {
     #[test]
     fn prepare_cargo_command_ignores_wrapper_cargo_target_for_target_planning() -> eyre::Result<()>
     {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             lint = "run --package clippy-wrapper --target x86_64-unknown-linux-gnu -- lint"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
 
@@ -889,12 +880,10 @@ mod test {
 
     #[test]
     fn prepare_cargo_command_reads_cli_target_from_expanded_alias() -> eyre::Result<()> {
-        let workspace = workspace_with_aliases(
-            r#"
+        let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
             wasm-check = "check --target wasm32-unknown-unknown"
-            "#,
-        )?;
+        "#})?;
 
         let prepared = prepare_cargo_command(vec!["wasm-check".to_string()], workspace.path())?;
 

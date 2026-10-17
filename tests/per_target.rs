@@ -17,6 +17,7 @@ use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
 use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre::{self, OptionExt};
+use indoc::{formatdoc, indoc};
 use std::collections::HashSet;
 
 mod common;
@@ -124,8 +125,7 @@ fn targets_in(rows: &[serde_json::Value]) -> HashSet<String> {
 
 #[test]
 fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -133,8 +133,7 @@ fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()>
         [features]
         a = []
         b = []
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -155,8 +154,7 @@ fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()>
 
 #[test]
 fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -165,8 +163,7 @@ fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
         a = []
         [package.metadata.cargo-fc]
         targets = ["t-linux", "t-wasm"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -183,8 +180,7 @@ fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
 
 #[test]
 fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -194,8 +190,7 @@ fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
         [workspace]
         [workspace.metadata.cargo-fc]
         targets = ["t-linux", "t-wasm"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -209,8 +204,7 @@ fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
 fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Result<()> {
     // A package-level `targets` list is a capability statement: an explicit
     // `--target` outside it skips the package instead of forcing the build.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -219,8 +213,7 @@ fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Re
         a = []
         [package.metadata.cargo-fc]
         targets = ["t-linux", "t-wasm"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -237,8 +230,7 @@ fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Re
 fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
     // `targets = []` restricts the package to its single default target: a
     // foreign explicit `--target` skips it, the host target keeps it.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -247,8 +239,7 @@ fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
         a = []
         [package.metadata.cargo-fc]
         targets = []
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -268,8 +259,7 @@ fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
 fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<()> {
     // `--no-targets --target <triple>` deliberately ignores all configured
     // target lists, package-level constraints included.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -278,8 +268,7 @@ fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<
         a = []
         [package.metadata.cargo-fc]
         targets = []
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -291,8 +280,7 @@ fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<
 
 #[test]
 fn package_opt_out_uses_host_target() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -301,8 +289,7 @@ fn package_opt_out_uses_host_target() -> eyre::Result<()> {
         a = []
         [package.metadata.cargo-fc]
         targets = []
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -317,8 +304,7 @@ fn package_opt_out_uses_host_target() -> eyre::Result<()> {
 
 #[test]
 fn capability_denied_ignores_configured_targets() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -327,8 +313,7 @@ fn capability_denied_ignores_configured_targets() -> eyre::Result<()> {
         a = []
         [package.metadata.cargo-fc]
         targets = ["t-linux", "t-wasm"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -346,8 +331,7 @@ fn capability_denied_ignores_configured_targets() -> eyre::Result<()> {
 fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
     // `a` is excluded only for `t-linux` via a matching cfg override, so the
     // linux rows must not contain `a` while the wasm rows do.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -359,8 +343,7 @@ fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
         targets = ["t-linux", "t-wasm"]
         [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
         exclude_features = { add = ["a"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::matching("t-linux", "cfg(target_os = \"linux\")");
@@ -385,8 +368,7 @@ fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
 
 #[test]
 fn matrix_user_fields_are_nested_under_metadata() -> eyre::Result<()> {
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -397,8 +379,7 @@ fn matrix_user_fields_are_nested_under_metadata() -> eyre::Result<()> {
         target = "user-supplied"
         features = "user-features"
         kind = "ci"
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -436,16 +417,14 @@ fn matrix_user_fields_are_nested_under_metadata() -> eyre::Result<()> {
 fn workspace(root_toml: &str) -> eyre::Result<TempDir> {
     let temp = TempDir::new()?;
     temp.child("Cargo.toml").write_str(root_toml)?;
-    temp.child("member/Cargo.toml").write_str(
-        r#"
+    temp.child("member/Cargo.toml").write_str(indoc! {r#"
         [package]
         name = "member"
         version = "0.1.0"
         edition = "2021"
         [features]
         f = []
-        "#,
-    )?;
+    "#})?;
     temp.child("member/src/lib.rs")
         .write_str("pub fn x() {}\n")?;
     Ok(temp)
@@ -453,16 +432,14 @@ fn workspace(root_toml: &str) -> eyre::Result<TempDir> {
 
 #[test]
 fn workspace_targets_multiply_matrix_rows() -> eyre::Result<()> {
-    let temp = workspace(
-        r#"
+    let temp = workspace(indoc! {r#"
         [workspace]
         members = ["member"]
         resolver = "2"
 
         [workspace.metadata.cargo-fc]
         targets = ["ws-a", "ws-b"]
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::default();
@@ -482,26 +459,22 @@ fn workspace_targets_multiply_matrix_rows() -> eyre::Result<()> {
 #[test]
 fn package_targets_override_workspace_targets() -> eyre::Result<()> {
     let temp = TempDir::new()?;
-    temp.child("Cargo.toml").write_str(
-        r#"
+    temp.child("Cargo.toml").write_str(indoc! {r#"
         [workspace]
         members = ["member"]
         resolver = "2"
 
         [workspace.metadata.cargo-fc]
         targets = ["ws-a", "ws-b"]
-        "#,
-    )?;
-    temp.child("member/Cargo.toml").write_str(
-        r#"
+    "#})?;
+    temp.child("member/Cargo.toml").write_str(indoc! {r#"
         [package]
         name = "member"
         version = "0.1.0"
         edition = "2021"
         [package.metadata.cargo-fc]
         targets = ["pkg-only"]
-        "#,
-    )?;
+    "#})?;
     temp.child("member/src/lib.rs")
         .write_str("pub fn x() {}\n")?;
 
@@ -517,8 +490,7 @@ fn package_targets_override_workspace_targets() -> eyre::Result<()> {
 #[test]
 fn workspace_target_override_excludes_package_for_matching_target() -> eyre::Result<()> {
     let temp = TempDir::new()?;
-    temp.child("Cargo.toml").write_str(
-        r#"
+    temp.child("Cargo.toml").write_str(indoc! {r#"
         [workspace]
         members = ["keep", "drop"]
         resolver = "2"
@@ -528,18 +500,15 @@ fn workspace_target_override_excludes_package_for_matching_target() -> eyre::Res
 
         [workspace.metadata.cargo-fc.target.'cfg(target_arch = "wasm32")']
         exclude_packages = { add = ["drop"] }
-        "#,
-    )?;
+    "#})?;
     for name in ["keep", "drop"] {
         temp.child(format!("{name}/Cargo.toml"))
-            .write_str(&format!(
-                r#"
-            [package]
-            name = "{name}"
-            version = "0.1.0"
-            edition = "2021"
-            "#
-            ))?;
+            .write_str(&formatdoc! {r#"
+                [package]
+                name = "{name}"
+                version = "0.1.0"
+                edition = "2021"
+            "#})?;
         temp.child(format!("{name}/src/lib.rs"))
             .write_str("pub fn x() {}\n")?;
     }
@@ -563,8 +532,7 @@ fn workspace_target_override_excludes_package_for_matching_target() -> eyre::Res
 fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
     // An invalid triple combined with a target override forces real cfg
     // evaluation (rustc), which fails with a clear, triple-named error.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -575,8 +543,7 @@ fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
         targets = ["definitely-not-a-real-triple"]
         [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
         exclude_features = { add = ["a"] }
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let ws_config = meta.workspace_config()?;
     let packages = meta.candidate_packages_for_fc()?;

@@ -12,9 +12,14 @@ fn dummy_crate_with_settings(settings: &str) -> eyre::Result<TempDir> {
     // Create dummy dependency crates referenced via `path` so that `cargo metadata` succeeds.
     for dep in ["fixDepA", "optDepB", "optDepC"] {
         let dep_dir = temp.child(dep);
-        dep_dir.child("Cargo.toml").write_str(&format!(
-            "[package]\nname = \"{dep}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
-        ))?;
+        dep_dir
+            .child("Cargo.toml")
+            .write_str(&indoc::formatdoc! {r#"
+                [package]
+                name = "{dep}"
+                version = "0.1.0"
+                edition = "2024"
+            "#})?;
         dep_dir
             .child("src/lib.rs")
             .write_str("pub fn dummy() {}\n")?;

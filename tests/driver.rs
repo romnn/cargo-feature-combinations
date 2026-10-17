@@ -15,6 +15,7 @@ use cargo_feature_combinations::target::TargetEnvironment;
 use cargo_feature_combinations::workspace::Workspace as _;
 use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre;
+use indoc::indoc;
 use std::collections::HashMap;
 
 mod common;
@@ -85,8 +86,7 @@ fn drivers_by_target(
 fn target_scoped_driver_resolves_only_for_its_target() -> eyre::Result<()> {
     // The wasm target cross-compiles with `cross`; the linux target inherits the
     // package driver `cargo-zigbuild`.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -96,8 +96,7 @@ fn target_scoped_driver_resolves_only_for_its_target() -> eyre::Result<()> {
         driver = "cargo-zigbuild"
         [package.metadata.cargo-fc.target.'cfg(target_arch = "wasm32")']
         driver = "cross"
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
     let mut eval = PairEval::matching("t-wasm", "cfg(target_arch = \"wasm32\")");
@@ -120,8 +119,7 @@ fn target_scoped_driver_resolves_only_for_its_target() -> eyre::Result<()> {
 fn subcommand_driver_overrides_package_driver_for_that_command() -> eyre::Result<()> {
     // The package builds with `cargo-zigbuild`, but `cargo fc test` forces plain
     // `cargo` for the whole package.
-    let temp = single_crate(
-        r#"
+    let temp = single_crate(indoc! {r#"
         [package]
         name = "solo"
         version = "0.1.0"
@@ -130,8 +128,7 @@ fn subcommand_driver_overrides_package_driver_for_that_command() -> eyre::Result
         driver = "cargo-zigbuild"
         [package.metadata.cargo-fc.subcommands.test]
         driver = "cargo"
-        "#,
-    )?;
+    "#})?;
     let meta = metadata(&temp)?;
     let env = HostEnv("host-triple");
 

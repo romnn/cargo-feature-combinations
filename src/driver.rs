@@ -284,7 +284,11 @@ mod tests {
         let script = dir.path().join("broken-driver");
         std::fs::write(
             &script,
-            "#!/bin/sh\necho 'shim: no version set' >&2\nexit 3\n",
+            indoc::indoc! {"
+                #!/bin/sh
+                echo 'shim: no version set' >&2
+                exit 3
+            "},
         )?;
         let mut permissions = std::fs::metadata(&script)?.permissions();
         permissions.set_mode(0o755);

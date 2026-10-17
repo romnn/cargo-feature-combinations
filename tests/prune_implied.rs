@@ -39,9 +39,12 @@ fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<Tem
     let temp = TempDir::new()?;
 
     let dep_dir = temp.child("optDep");
-    dep_dir
-        .child("Cargo.toml")
-        .write_str("[package]\nname = \"optDep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n")?;
+    dep_dir.child("Cargo.toml").write_str(indoc::indoc! {r#"
+        [package]
+        name = "optDep"
+        version = "0.1.0"
+        edition = "2024"
+    "#})?;
     dep_dir
         .child("src/lib.rs")
         .write_str("pub fn dummy() {}\n")?;
