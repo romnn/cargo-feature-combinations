@@ -34,7 +34,7 @@ struct CargoConfig {
     alias: BTreeMap<String, AliasValue>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum AliasValue {
     List(Vec<String>),
@@ -42,11 +42,12 @@ enum AliasValue {
 }
 
 impl AliasValue {
+    /// Splits a string alias on whitespace without shell quoting, as Cargo does,
+    /// so `cargo fc <alias>` runs exactly the argv `cargo <alias>` would.
     fn into_tokens(self) -> Vec<String> {
         match self {
             AliasValue::List(list) => list,
-            AliasValue::Str(s) => shlex::split(&s)
-                .unwrap_or_else(|| s.split_whitespace().map(str::to_owned).collect()),
+            AliasValue::Str(s) => s.split_whitespace().map(str::to_owned).collect(),
         }
     }
 }
@@ -103,13 +104,24 @@ fn is_builtin(token: &str) -> bool {
     )
 }
 
-/// Expand a leading cargo command alias in `args` using the `[alias]` tables in
-/// the cargo config hierarchy rooted at `workspace_root`.
+/// Expand a leading cargo command alias in `args` the way Cargo would when run
+/// from `cwd`.
+///
+/// A `CARGO_ALIAS_<NAME>` environment variable wins over the `[alias]` tables
+/// of the cargo config hierarchy that Cargo discovers from `cwd`.
 ///
 /// Reports whether the argv changed so callers can preserve Cargo's alias
 /// argument placement for generated cargo-fc arguments. Expansion is iterative
 /// (an alias may reference another alias) and capped to avoid infinite loops.
-pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path) -> AliasExpansion {
+pub(crate) fn expand_aliases_with_info(args: Vec<String>, cwd: &Path) -> AliasExpansion {
+    expand_aliases_with_env(args, cwd, |key| std::env::var(key).ok())
+}
+
+fn expand_aliases_with_env(
+    args: Vec<String>,
+    cwd: &Path,
+    env_var: impl Fn(&str) -> Option<String>,
+) -> AliasExpansion {
     let Some(idx) = crate::cli::subcommand_token_index(&args) else {
         return AliasExpansion {
             args,
@@ -127,14 +139,8 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
             };
         }
     }
-    let aliases = load_aliases(workspace_root);
-    if aliases.is_empty() {
-        return AliasExpansion {
-            args,
-            expanded: false,
-            alias_provided_double_dash: false,
-        };
-    }
+    let file_aliases = load_aliases(cwd);
+    let alias = |name: &str| resolve_alias(name, file_aliases.get(name), &env_var);
 
     // Args before the subcommand token (e.g. `+toolchain`) are preserved.
     let mut head: Vec<String> = args.get(..idx).unwrap_or_default().to_vec();
@@ -150,15 +156,14 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
         if is_builtin(&token) {
             break;
         }
-        let Some(expansion) = aliases.get(&token) else {
+        let Some(mut expanded) = alias(&token) else {
             break;
         };
         // An empty alias (`x = ""` / `x = []`) cannot stand in for the subcommand;
         // leave args untouched rather than dropping the subcommand token.
-        if expansion.is_empty() {
+        if expanded.is_empty() {
             break;
         }
-        let mut expanded = expansion.clone();
         alias_provided_double_dash |= expanded.iter().any(|arg| arg == "--");
         expanded.extend_from_slice(rest.get(1..).unwrap_or_default());
         rest = expanded;
@@ -171,7 +176,7 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
     if expansions == MAX_ALIAS_EXPANSIONS
         && let Some(token) = rest.first()
         && !is_builtin(token)
-        && aliases.contains_key(token)
+        && alias(token).is_some()
     {
         print_warning!(
             "stopped expanding cargo aliases after {MAX_ALIAS_EXPANSIONS} expansions; possible alias cycle involving `{token}`"
@@ -189,11 +194,36 @@ pub(crate) fn expand_aliases_with_info(args: Vec<String>, workspace_root: &Path)
     }
 }
 
-/// Merge the `[alias]` tables across the cargo config hierarchy. Configs nearer
-/// the workspace take precedence (matching cargo), so they are inserted last.
-fn load_aliases(workspace_root: &Path) -> BTreeMap<String, Vec<String>> {
-    let mut aliases: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for path in config_paths(workspace_root) {
+/// Combine an alias's config-file value with its `CARGO_ALIAS_<NAME>`
+/// override, which Cargo derives from the config key `alias.<name>`.
+///
+/// Like Cargo, the environment replaces a string alias but extends an array
+/// alias with its whitespace-separated tokens.
+fn resolve_alias(
+    name: &str,
+    file_value: Option<&AliasValue>,
+    env_var: impl Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
+    let key = format!("CARGO_ALIAS_{}", name.to_uppercase().replace('-', "_"));
+    let env_value = env_var(&key).map(AliasValue::Str);
+    match (file_value.cloned(), env_value) {
+        (Some(AliasValue::List(mut list)), Some(env_value)) => {
+            list.extend(env_value.into_tokens());
+            Some(list)
+        }
+        (_, Some(env_value)) => Some(env_value.into_tokens()),
+        (file_value, None) => file_value.map(AliasValue::into_tokens),
+    }
+}
+
+/// Merge the `[alias]` tables across the cargo config hierarchy, as Cargo
+/// merges its config.
+///
+/// A config nearer `cwd` replaces a string alias, but an array alias defined at
+/// several levels is joined with the nearer elements last.
+fn load_aliases(cwd: &Path) -> BTreeMap<String, AliasValue> {
+    let mut aliases: BTreeMap<String, AliasValue> = BTreeMap::new();
+    for path in config_paths(cwd) {
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
@@ -216,29 +246,44 @@ fn load_aliases(workspace_root: &Path) -> BTreeMap<String, Vec<String>> {
             }
         };
         for (name, value) in config.alias {
-            aliases.insert(name, value.into_tokens());
+            match (aliases.get_mut(&name), value) {
+                (Some(AliasValue::List(farther)), AliasValue::List(nearer)) => {
+                    farther.extend(nearer);
+                }
+                (_, value) => {
+                    aliases.insert(name, value);
+                }
+            }
         }
     }
     aliases
 }
 
-/// Cargo config files from lowest to highest precedence: `$CARGO_HOME` first,
-/// then every ancestor of `workspace_root` from the filesystem root down (so the
-/// nearest config wins). Within a directory `config.toml` wins over the legacy
-/// `config`, so the legacy name is listed first.
-fn config_paths(workspace_root: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(home) = cargo_home() {
-        paths.push(home.join("config"));
-        paths.push(home.join("config.toml"));
-    }
-    let mut dirs: Vec<&Path> = workspace_root.ancestors().collect();
+/// Cargo config files from lowest to highest precedence, mirroring Cargo's
+/// discovery from `cwd`.
+///
+/// Every ancestor of `cwd` contributes its `.cargo` directory from the
+/// filesystem root down, so the nearest config wins.
+/// `$CARGO_HOME` comes first unless it already is one of those directories, in
+/// which case it keeps its ancestor position.
+fn config_paths(cwd: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = cwd.ancestors().map(|dir| dir.join(".cargo")).collect();
     dirs.reverse();
-    for dir in dirs {
-        paths.push(dir.join(".cargo").join("config"));
-        paths.push(dir.join(".cargo").join("config.toml"));
+    if let Some(home) = cargo_home()
+        && !dirs.contains(&home)
+    {
+        dirs.insert(0, home);
     }
-    paths
+    dirs.iter().filter_map(|dir| config_file(dir)).collect()
+}
+
+/// The config file Cargo reads in `dir`: the legacy extensionless `config`
+/// wins over `config.toml` when both exist.
+fn config_file(dir: &Path) -> Option<PathBuf> {
+    ["config", "config.toml"]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.exists())
 }
 
 fn cargo_home() -> Option<PathBuf> {
@@ -263,8 +308,8 @@ mod tests {
         Ok(())
     }
 
-    fn expand_aliases(args: Vec<String>, workspace_root: &Path) -> Vec<String> {
-        expand_aliases_with_info(args, workspace_root).args
+    fn expand_aliases(args: Vec<String>, cwd: &Path) -> Vec<String> {
+        expand_aliases_with_env(args, cwd, |_| None).args
     }
 
     #[test]
@@ -295,13 +340,62 @@ mod tests {
     }
 
     #[test]
-    fn expands_quoted_string_alias() -> eyre::Result<()> {
+    fn splits_string_alias_on_whitespace_like_cargo() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
-        write(&tmp, "[alias]\nlint = \"clippy --features 'foo bar'\"\n")?;
+        write(
+            &tmp,
+            "[alias]\nlint = \"clippy --features 'foo bar' --target-dir C:\\\\fc\"\n",
+        )?;
+
+        let out = expand_aliases(vec!["lint".to_string()], tmp.path());
+
+        // Cargo applies no shell quoting or escaping to string aliases; an
+        // argument containing spaces needs the array form.
+        assert_eq!(
+            out,
+            [
+                "clippy",
+                "--features",
+                "'foo",
+                "bar'",
+                "--target-dir",
+                r"C:\fc"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_array_alias_elements_verbatim() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            "[alias]\nlint = [\"clippy\", \"--features\", \"foo bar\"]\n",
+        )?;
 
         let out = expand_aliases(vec!["lint".to_string()], tmp.path());
 
         assert_eq!(out, ["clippy", "--features", "foo bar"]);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_config_wins_over_config_toml_in_one_directory() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(&tmp, "[alias]\nlint = \"build\"\nonly-toml = \"check\"\n")?;
+        tmp.child(".cargo/config")
+            .write_str("[alias]\nlint = \"clippy\"\n")?;
+
+        // Cargo reads only the extensionless file when both exist, so aliases
+        // defined only in `config.toml` are not visible either.
+        assert_eq!(
+            expand_aliases(vec!["lint".to_string()], tmp.path()),
+            ["clippy"]
+        );
+        assert_eq!(
+            expand_aliases(vec!["only-toml".to_string()], tmp.path()),
+            ["only-toml"]
+        );
         Ok(())
     }
 
@@ -371,6 +465,96 @@ mod tests {
         );
 
         assert_eq!(out, ["lint", "--workspace"]);
+        Ok(())
+    }
+
+    #[test]
+    fn env_alias_overrides_config_alias() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            "[alias]\nmy-tool = \"run --manifest-path ../tool/Cargo.toml --\"\n",
+        )?;
+        let env_var = |key: &str| {
+            (key == "CARGO_ALIAS_MY_TOOL")
+                .then(|| "run --manifest-path /abs/tool/Cargo.toml --".to_string())
+        };
+
+        let out = expand_aliases_with_env(vec!["my-tool".to_string()], tmp.path(), env_var).args;
+
+        // Cargo maps `alias.my-tool` to `CARGO_ALIAS_MY_TOOL` and lets the
+        // environment win over config files.
+        assert_eq!(
+            out,
+            ["run", "--manifest-path", "/abs/tool/Cargo.toml", "--"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn env_alias_expands_without_config_files() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        let env_var =
+            |key: &str| (key == "CARGO_ALIAS_LINT").then(|| "clippy --no-deps".to_string());
+
+        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var).args;
+
+        assert_eq!(out, ["clippy", "--no-deps"]);
+        Ok(())
+    }
+
+    #[test]
+    fn env_alias_extends_array_alias() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(&tmp, "[alias]\nlint = [\"check\"]\n")?;
+        let env_var =
+            |key: &str| (key == "CARGO_ALIAS_LINT").then(|| "--all-targets --locked".to_string());
+
+        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var).args;
+
+        // Cargo merges an environment value into a list instead of replacing it.
+        assert_eq!(out, ["check", "--all-targets", "--locked"]);
+        Ok(())
+    }
+
+    #[test]
+    fn array_aliases_join_across_config_levels() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(&tmp, "[alias]\nlint = [\"clippy\"]\n")?;
+        let nested = tmp.child("ws");
+        nested.child(".cargo").create_dir_all()?;
+        nested
+            .child(".cargo/config.toml")
+            .write_str("[alias]\nlint = [\"--no-deps\"]\n")?;
+
+        // Cargo joins arrays from every config level, nearer elements last.
+        assert_eq!(
+            expand_aliases(vec!["lint".to_string()], nested.path()),
+            ["clippy", "--no-deps"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nearest_config_to_cwd_wins() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(&tmp, "[alias]\nlint = \"clippy\"\n")?;
+        let nested = tmp.child("ws");
+        nested.child(".cargo").create_dir_all()?;
+        nested
+            .child(".cargo/config.toml")
+            .write_str("[alias]\nlint = \"check\"\n")?;
+
+        // Running from the nested directory sees its config over the parent's,
+        // while the parent directory only sees its own.
+        assert_eq!(
+            expand_aliases(vec!["lint".to_string()], nested.path()),
+            ["check"]
+        );
+        assert_eq!(
+            expand_aliases(vec!["lint".to_string()], tmp.path()),
+            ["clippy"]
+        );
         Ok(())
     }
 

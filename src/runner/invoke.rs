@@ -10,6 +10,7 @@ use itertools::Itertools;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal as _, Write};
+use std::path::Path;
 use std::process;
 use termcolor::{StandardStream, WriteColor};
 
@@ -264,6 +265,51 @@ fn feature_selection_flag(package_name: &str, features: &[String]) -> String {
     )
 }
 
+/// Select the planned package for an invocation that runs from the invocation
+/// directory.
+///
+/// The absolute manifest selects the package even when the invocation
+/// directory lies outside the workspace, which `-p` alone cannot.
+/// `-p` is added where the manifest alone would not select exactly this package:
+///
+/// - The args already name a manifest (an alias body such as
+///   `check --manifest-path ws/Cargo.toml`), and Cargo rejects a second one.
+/// - The package is the workspace root, whose manifest selects
+///   `workspace.default-members` when they are set.
+fn package_selection_args<'p>(
+    package: &'p cargo_metadata::Package,
+    workspace_root: &Path,
+    has_manifest_path: bool,
+) -> Vec<&'p str> {
+    let select_by_id = ["-p", package_id_spec(package)];
+    if has_manifest_path {
+        return select_by_id.to_vec();
+    }
+    let mut args = vec!["--manifest-path", package.manifest_path.as_str()];
+    let is_workspace_root = package
+        .manifest_path
+        .parent()
+        .is_some_and(|dir| dir.as_std_path() == workspace_root);
+    if is_workspace_root {
+        args.extend(select_by_id);
+    }
+    args
+}
+
+/// The package's fully qualified ID spec, which unlike its bare name cannot
+/// also match a dependency of the same name.
+///
+/// Cargo before 1.77 reports IDs in a format `-p` does not accept, so those fall
+/// back to the bare name.
+fn package_id_spec(package: &cargo_metadata::Package) -> &str {
+    let id = package.id.repr.as_str();
+    if id.contains(' ') {
+        package.name.as_str()
+    } else {
+        id
+    }
+}
+
 /// Build the child process for one invocation: the program to spawn and the
 /// environment it runs with, but not yet its arguments or working directory.
 fn cargo_command(inv: &Invocation<'_>, toolchain: Option<&ToolchainOverride>) -> process::Command {
@@ -316,19 +362,18 @@ pub(super) fn run_single_combination(
         diagnostics_only = false;
         dedupe = false;
     }
-    // We set the command working dir to the package manifest parent dir.
-    // This works well for now, but one could also consider `--manifest-path` or `-p`
-    let Some(working_dir) = package.manifest_path.parent() else {
-        eyre::bail!(
-            "could not find parent dir of package {}",
-            package.manifest_path.to_string()
-        )
-    };
-
     let mut cmd = cargo_command(inv, ctx.toolchain);
 
     let features_flag = feature_selection_flag(package.name.as_str(), features);
-    let mut generated_args = Vec::new();
+    // The child inherits the invocation directory, as `cargo <cmd> -p <pkg>`
+    // would, so cwd-relative arguments and `.cargo/config.toml` discovery match
+    // plain Cargo.
+    let mut generated_args = package_selection_args(
+        package,
+        ctx.workspace_root,
+        ctx.invocation_args
+            .has_manifest_path_arg_for_generated_args(),
+    );
     if diagnostics_only {
         generated_args.push(crate::diagnostics_only::MESSAGE_FORMAT);
     }
@@ -349,7 +394,7 @@ pub(super) fn run_single_combination(
         stderr,
     );
 
-    cmd.args(&args).current_dir(working_dir);
+    cmd.args(&args);
     let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only)?;
 
     let mut result = if diagnostics_only {
@@ -455,12 +500,14 @@ fn errors_only_rustflags_env(
 mod test {
     use super::{
         apply_cargo_driver, apply_errors_only_rustflags, errors_only_rustflags_env,
-        feature_selection_flag, force_color_env,
+        feature_selection_flag, force_color_env, package_selection_args,
     };
     use crate::config::ResolvedEnv;
+    use crate::package::test::package_with_manifest_path;
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::ffi::OsString;
+    use std::path::Path;
     use std::process::Command;
 
     fn string_vec(values: &[&str]) -> Vec<String> {
@@ -476,6 +523,67 @@ mod test {
             "--features=my-crate/backend-a,my-crate/shared"
         );
         sim_assert_eq!(feature_selection_flag("my-crate", &[]), "--features=");
+    }
+
+    #[test]
+    fn member_is_selected_by_its_manifest() -> eyre::Result<()> {
+        let member = package_with_manifest_path("a", "/ws/crates/a/Cargo.toml")?;
+
+        sim_assert_eq!(
+            package_selection_args(&member, Path::new("/ws"), false),
+            ["--manifest-path", "/ws/crates/a/Cargo.toml"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn root_package_is_also_selected_by_name() -> eyre::Result<()> {
+        let root = package_with_manifest_path("root", "/ws/Cargo.toml")?;
+
+        // The root manifest alone would select `workspace.default-members`.
+        sim_assert_eq!(
+            package_selection_args(&root, Path::new("/ws"), false),
+            ["--manifest-path", "/ws/Cargo.toml", "-p", "root"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selection_by_name_uses_the_fully_qualified_package_id() -> eyre::Result<()> {
+        let mut root = package_with_manifest_path("serde", "/ws/Cargo.toml")?;
+        root.id.repr = "path+file:///ws#serde@0.1.0".to_string();
+        let mut legacy = package_with_manifest_path("serde", "/ws/Cargo.toml")?;
+        legacy.id.repr = "serde 0.1.0 (path+file:///ws)".to_string();
+
+        // A bare `serde` could also match a dependency, so the ID spec is used;
+        // only the pre-1.77 ID format, which `-p` rejects, falls back to the name.
+        sim_assert_eq!(
+            package_selection_args(&root, Path::new("/ws"), false),
+            [
+                "--manifest-path",
+                "/ws/Cargo.toml",
+                "-p",
+                "path+file:///ws#serde@0.1.0"
+            ]
+        );
+        sim_assert_eq!(
+            package_selection_args(&legacy, Path::new("/ws"), true),
+            ["-p", "serde"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn existing_manifest_leaves_selection_to_the_package_id() -> eyre::Result<()> {
+        let member = package_with_manifest_path("a", "/ws/crates/a/Cargo.toml")?;
+
+        // Cargo rejects a repeated `--manifest-path`, so the alias body's
+        // manifest locates the workspace and `-p` picks the planned package.
+        sim_assert_eq!(
+            package_selection_args(&member, Path::new("/ws"), true),
+            ["-p", "a"]
+        );
+        Ok(())
     }
 
     #[test]

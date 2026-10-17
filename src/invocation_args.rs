@@ -88,20 +88,43 @@ impl<'a> PreparedInvocationArgs<'a> {
         }
     }
 
+    /// Gives a wrapper alias's outer `cargo run` the manifest cargo-fc was
+    /// pointed at, unless the alias body names its own.
+    ///
+    /// The outer command otherwise discovers its workspace from the invocation
+    /// directory, which need not lie inside the workspace under test, while the
+    /// planned package's selection goes to the wrapped command after `--`.
+    pub(crate) fn with_wrapper_manifest_path(mut self, manifest_path: &'a str) -> Self {
+        if let Self::AliasWrapper { cargo_args, .. } = &mut self
+            && !has_manifest_path_arg(cargo_args)
+        {
+            cargo_args.extend(["--manifest-path", manifest_path]);
+        }
+        self
+    }
+
     pub(crate) fn has_message_format_arg_for_generated_args(&self) -> bool {
+        // Outer `cargo run --message-format` configures the wrapper package.
+        // Generated diagnostics args are inserted after the alias `--`, so only
+        // the wrapped command's own args conflict.
+        has_message_format_arg(self.args_beside_generated_args())
+    }
+
+    /// Whether the args that receive generated args already name a manifest,
+    /// as in an alias body `check --manifest-path ws/Cargo.toml`.
+    pub(crate) fn has_manifest_path_arg_for_generated_args(&self) -> bool {
+        has_manifest_path_arg(self.args_beside_generated_args())
+    }
+
+    /// The args generated args join: the Cargo-side args of a normal command, or
+    /// the wrapped command's args between the alias `--` and any second `--`.
+    fn args_beside_generated_args(&self) -> &[&'a str] {
         match self {
-            Self::CargoCommand { cargo_args, .. } => has_message_format_arg(cargo_args),
+            Self::CargoCommand { cargo_args, .. } => cargo_args,
             Self::AliasWrapper {
                 after_separator_args,
                 ..
-            } => {
-                // Outer `cargo run --message-format` configures the wrapper
-                // package. Generated diagnostics args are inserted after the
-                // alias `--`, so only the wrapped command's own args conflict.
-                let (wrapped_command_args, _) =
-                    split_alias_args_at_wrapped_separator(after_separator_args);
-                has_message_format_arg(wrapped_command_args)
-            }
+            } => split_alias_args_at_wrapped_separator(after_separator_args).0,
         }
     }
 
@@ -273,6 +296,11 @@ fn normalize_feature_selection_args(cargo_args: Vec<&str>) -> FeatureSelectionNo
     }
 }
 
+fn has_manifest_path_arg(args: &[&str]) -> bool {
+    args.iter()
+        .any(|arg| *arg == "--manifest-path" || arg.starts_with("--manifest-path="))
+}
+
 fn has_message_format_arg(args: &[&str]) -> bool {
     args.iter()
         .any(|arg| *arg == "--message-format" || arg.starts_with("--message-format="))
@@ -305,6 +333,94 @@ mod test {
                 "arg",
             ],
         );
+    }
+
+    #[test]
+    fn wrapper_outer_run_receives_cargo_fc_manifest() {
+        let invocation_args = PreparedInvocationArgs::new(
+            vec!["run", "--package", "wrapper", "--", "lint"],
+            GeneratedArgPlacement::AliasWrapper,
+        )
+        .with_wrapper_manifest_path("/ws/Cargo.toml");
+        let args = invocation_args.with_generated_args(vec!["--manifest-path", "/ws/a/Cargo.toml"]);
+
+        // The outer `cargo run` locates the wrapper's workspace through the
+        // manifest cargo-fc was given, while the wrapped command selects the
+        // planned package.
+        sim_assert_eq!(
+            args,
+            vec![
+                "run",
+                "--package",
+                "wrapper",
+                "--manifest-path",
+                "/ws/Cargo.toml",
+                "--",
+                "lint",
+                "--manifest-path",
+                "/ws/a/Cargo.toml",
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapper_manifest_keeps_alias_manifest_and_skips_cargo_commands() {
+        let wrapper = PreparedInvocationArgs::new(
+            vec!["run", "--manifest-path=../tool/Cargo.toml", "--"],
+            GeneratedArgPlacement::AliasWrapper,
+        )
+        .with_wrapper_manifest_path("/ws/Cargo.toml");
+        let command =
+            PreparedInvocationArgs::new(vec!["check"], GeneratedArgPlacement::CargoCommand)
+                .with_wrapper_manifest_path("/ws/Cargo.toml");
+
+        // An alias body's own manifest stays the only one for the outer run, and
+        // a plain Cargo command is selected by generated args alone.
+        sim_assert_eq!(
+            wrapper.with_generated_args(Vec::new()),
+            vec!["run", "--manifest-path=../tool/Cargo.toml", "--"]
+        );
+        sim_assert_eq!(command.with_generated_args(Vec::new()), vec!["check"]);
+    }
+
+    #[test]
+    fn detects_manifest_only_where_generated_args_go() {
+        let alias_manifest = PreparedInvocationArgs::new(
+            vec![
+                "check",
+                "--manifest-path",
+                "ws/Cargo.toml",
+                "--",
+                "--manifest-path",
+            ],
+            GeneratedArgPlacement::CargoCommand,
+        );
+        let program_arg = PreparedInvocationArgs::new(
+            vec!["run", "--", "--manifest-path=x"],
+            GeneratedArgPlacement::CargoCommand,
+        );
+        let outer_wrapper_manifest = PreparedInvocationArgs::new(
+            vec!["run", "--manifest-path", "../tool/Cargo.toml", "--", "lint"],
+            GeneratedArgPlacement::AliasWrapper,
+        );
+        let wrapped_manifest = PreparedInvocationArgs::new(
+            vec![
+                "run",
+                "--",
+                "lint",
+                "--manifest-path=ws/Cargo.toml",
+                "--",
+                "bin-arg",
+            ],
+            GeneratedArgPlacement::AliasWrapper,
+        );
+
+        // Only a manifest among the args beside the generated ones conflicts;
+        // program args and the outer wrapper's manifest belong to other commands.
+        assert!(alias_manifest.has_manifest_path_arg_for_generated_args());
+        assert!(!program_arg.has_manifest_path_arg_for_generated_args());
+        assert!(!outer_wrapper_manifest.has_manifest_path_arg_for_generated_args());
+        assert!(wrapped_manifest.has_manifest_path_arg_for_generated_args());
     }
 
     #[test]
