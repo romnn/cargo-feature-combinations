@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.0]
+
 ### Changed
 
 - **Breaking:** every invocation now runs from the directory `cargo fc` was
