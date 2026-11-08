@@ -1,14 +1,18 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
 name: test
 on:
-  push: {}
+  push:
+    branches: [main]
   workflow_call: {}
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 env:
   MISE_GITHUB_TOKEN: ${{ github.token }}
   MISE_AUTO_INSTALL: "0"
+  # Runners sometimes fail release downloads for several seconds, and mise's default three
+  # retries are spent within about three; twelve keep retrying for about two minutes.
+  MISE_HTTP_RETRIES: "12"
 
 jobs:
   test:

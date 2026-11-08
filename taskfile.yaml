@@ -45,6 +45,7 @@ tasks:
         docker run --rm
         -e GITHUB_TOKEN -e TAP_GITHUB_TOKEN
         -e "HOST_UID=$(id -u)" -e "HOST_GID=$(id -g)"
+        {{.DOCKER_ENV}}
         -v "${PWD}:/workspace" -w /workspace
         {{.ZIGBUILD_IMAGE}}
         bash -euo pipefail -c '
@@ -56,10 +57,17 @@ tasks:
         goreleaser {{.GORELEASER_ARGS}}'
 
   build:goreleaser:
-    desc: "build in release mode using goreleaser"
+    desc: "cross-build every release target using goreleaser, without release optimizations"
     cmds:
       - task: goreleaser
-        vars: { GORELEASER_ARGS: "build --snapshot --clean" }
+        vars:
+          GORELEASER_ARGS: "build --snapshot --clean"
+          # The snapshot only proves that every target compiles and links.
+          # LTO with one codegen unit dominates its build time, and `task release` keeps it.
+          DOCKER_ENV: >-
+            -e CARGO_PROFILE_RELEASE_OPT_LEVEL=0
+            -e CARGO_PROFILE_RELEASE_LTO=off
+            -e CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
 
   release:
     desc: "release using goreleaser"
