@@ -2,9 +2,10 @@
 //!
 //! Turns a package's declared features plus resolved matrix configuration
 //! (exclusions, exact allowlists, isolated sets, mutually exclusive groups,
-//! and combination limits) into the feature combinations to run.
+//! required groups, and combination limits) into the feature combinations to run.
 
 use crate::config::ResolvedFeatures;
+use crate::implication::FeatureImplications;
 use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -118,7 +119,7 @@ pub(super) fn feature_combinations<'a>(
     )?;
 
     // Filter out feature sets that contain skip sets
-    let mut filtered_powerset = base_powerset
+    let filtered_powerset = base_powerset
         .into_iter()
         .filter(|feature_set| {
             !violates_mutually_exclusive_features(feature_set, &config.mutually_exclusive_features)
@@ -142,6 +143,13 @@ pub(super) fn feature_combinations<'a>(
         })
         .collect::<BTreeSet<_>>();
 
+    let generated_powerset = filtered_powerset;
+    let mut filtered_powerset = retain_required_feature_groups(
+        &package.features,
+        &config.required_feature_groups,
+        &generated_powerset,
+    );
+
     // Add back exact combinations
     for proposed_exact_combination in &config.include_feature_sets {
         // Remove non-existent features and switch reference to that pointing to `self`
@@ -162,6 +170,20 @@ pub(super) fn feature_combinations<'a>(
     if config.no_empty_feature_set {
         // When enabled, drop the empty feature set (`[]`) from the final matrix.
         filtered_powerset.retain(|set| !set.is_empty());
+    }
+
+    // Rows that meet a required group are never empty, so an empty matrix here means the groups
+    // removed every generated row and nothing else replaced them.
+    if filtered_powerset.is_empty()
+        && !generated_powerset.is_empty()
+        && !config.required_feature_groups.is_empty()
+    {
+        return Err(required_feature_groups_removed_every_row(
+            &package.name,
+            &package.features,
+            &config.required_feature_groups,
+            &generated_powerset,
+        ));
     }
 
     // Re-collect everything into a vector of vectors
@@ -284,6 +306,74 @@ fn violates_mutually_exclusive_features(
             .count()
             >= 2
     })
+}
+
+/// Keeps the combinations whose implied features meet every required group.
+///
+/// A combination meets a group when it enables at least one member, either directly or
+/// through a feature that implies it, so `gpu = ["in-process"]` meets
+/// `[in-process, desktop]`.
+fn retain_required_feature_groups<'a>(
+    package_features: &'a BTreeMap<String, Vec<String>>,
+    groups: &[HashSet<String>],
+    combinations: &BTreeSet<BTreeSet<&'a String>>,
+) -> BTreeSet<BTreeSet<&'a String>> {
+    if groups.is_empty() {
+        return combinations.clone();
+    }
+    let implications = FeatureImplications::new(package_features);
+    combinations
+        .iter()
+        .filter(|combination| {
+            let closure = implications.closure(combination.iter().copied());
+            groups.iter().all(|group| enables_member(&closure, group))
+        })
+        .cloned()
+        .collect()
+}
+
+fn enables_member(closure: &BTreeSet<&str>, group: &HashSet<String>) -> bool {
+    group
+        .iter()
+        .any(|feature| closure.contains(feature.as_str()))
+}
+
+/// Explains why the required groups removed every generated combination.
+///
+/// An empty matrix would pass without running anything, which is almost always a group whose
+/// members other settings exclude, so it is an error rather than a silent loss of coverage.
+fn required_feature_groups_removed_every_row(
+    package_name: &str,
+    package_features: &BTreeMap<String, Vec<String>>,
+    groups: &[HashSet<String>],
+    generated: &BTreeSet<BTreeSet<&String>>,
+) -> eyre::Report {
+    let implications = FeatureImplications::new(package_features);
+    let closures = generated
+        .iter()
+        .map(|combination| implications.closure(combination.iter().copied()))
+        .collect::<Vec<_>>();
+    let unmet = groups
+        .iter()
+        .filter(|group| {
+            !closures
+                .iter()
+                .any(|closure| enables_member(closure, group))
+        })
+        .map(format_feature_group)
+        .sorted()
+        .collect::<Vec<_>>();
+    let reason = if unmet.is_empty() {
+        "no generated combination enables a member of every group at once".to_string()
+    } else {
+        format!(
+            "no generated combination enables a member of {}, directly or through feature implications",
+            unmet.join(" or "),
+        )
+    };
+    eyre::eyre!(
+        "invalid required_feature_groups for package `{package_name}`: {reason}, so every generated combination would be removed and the matrix would be empty; check exclude_features, only_features, isolated_feature_sets and mutually_exclusive_features"
+    )
 }
 
 fn checked_num_combinations(num_features: usize) -> Option<u128> {
@@ -1414,6 +1504,266 @@ mod test {
             err.to_string().contains("too many configurations"),
             "expected 'too many configurations' error, got: {err}"
         );
+        Ok(())
+    }
+
+    fn group(features: &[&str]) -> HashSet<String> {
+        features
+            .iter()
+            .map(|feature| (*feature).to_string())
+            .collect()
+    }
+
+    /// The inference service from the issue that motivated required groups: exactly one of two
+    /// runners, where `default` and `gpu` imply the in-process runner.
+    fn inference_service() -> eyre::Result<cargo_metadata::Package> {
+        let mut package = package_with_features(&[
+            "desktop-app-inference",
+            "in-process-inference",
+            "jemalloc",
+            "reflection",
+        ])?;
+        package.features.insert(
+            "default".to_string(),
+            vec!["in-process-inference".to_string()],
+        );
+        package
+            .features
+            .insert("gpu".to_string(), vec!["in-process-inference".to_string()]);
+        Ok(package)
+    }
+
+    #[test]
+    fn combinations_required_groups_with_mutual_exclusion_select_exactly_one() -> eyre::Result<()> {
+        init();
+        let package = inference_service()?;
+        let runners = group(&["in-process-inference", "desktop-app-inference"]);
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![runners.clone()],
+            mutually_exclusive_features: vec![runners.clone()],
+            exclude_feature_sets: vec![
+                group(&["default", "desktop-app-inference"]),
+                group(&["gpu", "desktop-app-inference"]),
+            ],
+            ..ResolvedFeatures::default()
+        };
+
+        let have = package.feature_combinations(&config)?;
+
+        // Every row enables exactly one runner once implications apply.
+        let implications = crate::implication::FeatureImplications::new(&package.features);
+        for row in &have {
+            let enabled = implications.closure(row.iter().copied());
+            let selected = runners
+                .iter()
+                .filter(|runner| enabled.contains(runner.as_str()))
+                .count();
+            assert_eq!(selected, 1, "{row:?} must select exactly one runner");
+        }
+
+        // Rows without a runner are gone, rows that reach one through `gpu` or `default` stay,
+        // and runner-independent features still vary freely around both runners.
+        let has = |row: &[&str]| have.iter().any(|features| features == row);
+        assert!(!has(&[]));
+        assert!(!has(&["reflection"]));
+        assert!(!has(&["jemalloc", "reflection"]));
+        assert!(has(&["gpu"]));
+        assert!(has(&["default"]));
+        assert!(has(&["desktop-app-inference", "jemalloc", "reflection"]));
+        assert!(has(&["gpu", "in-process-inference", "jemalloc"]));
+
+        // Count the rows per runner choice over the 2^4 subsets of default, gpu, jemalloc and
+        // reflection.
+        // No explicit runner keeps the 12 subsets with `default` or `gpu`.
+        // The in-process runner keeps all 16.
+        // The desktop runner keeps the 4 subsets without `default` and `gpu`.
+        assert_eq!(have.len(), 12 + 16 + 4);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_require_a_member_of_every_group() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["cuda", "metal", "rustls", "openssl"])?;
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&["cuda", "metal"]), group(&["rustls", "openssl"])],
+            mutually_exclusive_features: vec![
+                group(&["cuda", "metal"]),
+                group(&["rustls", "openssl"]),
+            ],
+            ..ResolvedFeatures::default()
+        };
+
+        let want = vec![
+            vec!["cuda", "openssl"],
+            vec!["cuda", "rustls"],
+            vec!["metal", "openssl"],
+            vec!["metal", "rustls"],
+        ];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_filter_isolated_powersets() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["cuda", "metal", "tracing"])?;
+        let config = ResolvedFeatures {
+            isolated_feature_sets: vec![group(&["cuda", "tracing"]), group(&["metal"])],
+            required_feature_groups: vec![group(&["cuda", "metal"])],
+            ..ResolvedFeatures::default()
+        };
+
+        let want = vec![vec!["cuda"], vec!["cuda", "tracing"], vec!["metal"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_met_by_include_features_keep_every_row() -> eyre::Result<()> {
+        init();
+        let mut package = package_with_features(&["cuda", "metal", "tracing"])?;
+        package
+            .features
+            .insert("gpu".to_string(), vec!["cuda".to_string()]);
+        let config = ResolvedFeatures {
+            include_features: HashSet::from(["gpu".to_string()]),
+            required_feature_groups: vec![group(&["cuda", "metal"])],
+            ..ResolvedFeatures::default()
+        };
+
+        // The pinned `gpu` implies `cuda` in every row, so the full powerset of the other three
+        // features survives.
+        let have = package.feature_combinations(&config)?;
+
+        assert_eq!(have.len(), 8);
+        assert!(have.iter().any(|features| features == &["gpu"]));
+        Ok(())
+    }
+
+    /// Mutual exclusion matches the features a row names, while required groups follow
+    /// implications, so "exactly one" needs an `exclude_feature_sets` entry per implying feature.
+    #[test]
+    fn combinations_required_groups_do_not_extend_mutual_exclusion_to_implied_members()
+    -> eyre::Result<()> {
+        init();
+        let package = inference_service()?;
+        let runners = group(&["in-process-inference", "desktop-app-inference"]);
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![runners.clone()],
+            mutually_exclusive_features: vec![runners],
+            ..ResolvedFeatures::default()
+        };
+
+        let have = package.feature_combinations(&config)?;
+
+        // `gpu` implies the in-process runner, yet still pairs with the desktop runner.
+        assert!(
+            have.iter()
+                .any(|features| features == &["desktop-app-inference", "gpu"])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_do_not_filter_exact_sets() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["cuda", "metal", "tracing"])?;
+
+        // `include_feature_sets` is an escape hatch that other rules do not filter.
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&["cuda", "metal"])],
+            include_feature_sets: vec![group(&["tracing"])],
+            ..ResolvedFeatures::default()
+        };
+        let have = package.feature_combinations(&config)?;
+        assert!(have.iter().any(|features| features == &["tracing"]));
+        assert!(!have.iter().any(Vec::is_empty));
+
+        // A non-empty `allow_feature_sets` is the complete matrix and ignores the groups.
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&["cuda", "metal"])],
+            allow_feature_sets: vec![group(&[]), group(&["tracing"])],
+            ..ResolvedFeatures::default()
+        };
+        let want = vec![vec![], vec!["tracing"]];
+        let have = package.feature_combinations(&config)?;
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_reject_a_group_no_row_can_meet() -> eyre::Result<()> {
+        init();
+        let package = inference_service()?;
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&[
+                "in-process-inference",
+                "desktop-app-inference",
+            ])],
+            exclude_features: group(&[
+                "default",
+                "desktop-app-inference",
+                "gpu",
+                "in-process-inference",
+            ]),
+            ..ResolvedFeatures::default()
+        };
+
+        let err = package
+            .feature_combinations(&config)
+            .expect_err("excluding every way to reach a runner must not empty the matrix");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("[desktop-app-inference, in-process-inference]"),
+            "{message}"
+        );
+        assert!(message.contains("every generated combination"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_accept_exact_sets_replacing_every_row() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["cuda", "metal", "tracing"])?;
+
+        // No generated row can reach a runner, but the exact set keeps the matrix non-empty.
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&["cuda", "metal"])],
+            exclude_features: group(&["cuda", "metal"]),
+            include_feature_sets: vec![group(&["cuda", "tracing"])],
+            ..ResolvedFeatures::default()
+        };
+
+        let want = vec![vec!["cuda", "tracing"]];
+        let have = package.feature_combinations(&config)?;
+
+        sim_assert_eq!(have: have, want: want);
+        Ok(())
+    }
+
+    #[test]
+    fn combinations_required_groups_reject_groups_no_row_meets_together() -> eyre::Result<()> {
+        init();
+        let package = package_with_features(&["cuda", "metal"])?;
+
+        // Each group alone is reachable, but the mutual exclusion forbids meeting both.
+        let config = ResolvedFeatures {
+            required_feature_groups: vec![group(&["cuda"]), group(&["metal"])],
+            mutually_exclusive_features: vec![group(&["cuda", "metal"])],
+            ..ResolvedFeatures::default()
+        };
+
+        let err = package
+            .feature_combinations(&config)
+            .expect_err("jointly unsatisfiable groups must not empty the matrix");
+
+        assert!(err.to_string().contains("every group at once"), "{err}");
         Ok(())
     }
 }

@@ -45,7 +45,8 @@ patch grammar and its interaction with cargo-fc's own variables.
 ## Patch semantics recap
 
 Collection-like keys — `exclude_features`, `include_features`, `only_features`,
-`mutually_exclusive_features`, and the `*_feature_sets` keys — take:
+`mutually_exclusive_features`, `required_feature_groups`, and the
+`*_feature_sets` keys — take:
 
 - `key = [...]` or `{ override = [...] }` — replace the inherited value.
 - `{ add = [...] }` — union with the inherited value.

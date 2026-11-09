@@ -23,6 +23,7 @@ package declares no such feature.
 | [`only_features`](#only_features) | Restrict the varied set to an allowlist. |
 | [`include_features`](#include_features) | Add features to *every* generated combination. |
 | [`mutually_exclusive_features`](#mutually_exclusive_features) | Permit at most one feature from each group. |
+| [`required_feature_groups`](#required_feature_groups) | Require at least one feature from each group. |
 | [`exclude_feature_sets`](#exclude_feature_sets) | Drop specific combinations (e.g. incompatible pairs). |
 | [`include_feature_sets`](#include_feature_sets) | Always add specific exact combinations. |
 | [`allow_feature_sets`](#allow_feature_sets) | Replace the powerset with an exact list of sets. |
@@ -95,6 +96,69 @@ Patch operations add or remove whole groups:
 ```toml
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 mutually_exclusive_features = { add = [["openssl", "rustls"]] }
+```
+
+## `required_feature_groups`
+
+Declare groups of which every generated combination must enable at least one
+member. A combination that enables none of a group's features is dropped, and
+features outside the groups keep their full powerset, so a newly declared
+feature still enters the matrix automatically.
+
+A combination meets a group through the features it implies, too. Here
+`gpu = ["in-process-inference"]` meets the group, and so does `default` when it
+enables a runner:
+
+```toml
+[features]
+default = ["in-process-inference"]
+gpu = ["in-process-inference"]
+in-process-inference = []
+desktop-app-inference = []
+reflection = []
+
+[package.metadata.cargo-fc]
+# Every combination selects at least one runner...
+required_feature_groups = [["in-process-inference", "desktop-app-inference"]]
+# ...and at most one.
+mutually_exclusive_features = [["in-process-inference", "desktop-app-inference"]]
+# `default` and `gpu` imply the in-process runner.
+exclude_feature_sets = [
+  ["default", "desktop-app-inference"],
+  ["gpu", "desktop-app-inference"],
+]
+```
+
+Together these keys make every combination enable exactly one runner. `[]`
+and `[reflection]` are dropped, while `[gpu]`, `[default]`, and
+`[desktop-app-inference, reflection]` stay.
+
+The `exclude_feature_sets` entries are needed because
+`mutually_exclusive_features` only looks at the features a combination names,
+not at the features they imply. Without them, `[desktop-app-inference, gpu]`
+would stay and enable both runners. Add an entry whenever a new feature
+implies a group member.
+
+With several groups, a combination must meet every one of them. Like the
+exclusion rules, the groups do not filter `include_feature_sets`, and a
+non-empty `allow_feature_sets` remains the complete matrix and ignores them.
+
+An empty group is a configuration error, because no combination can meet it.
+It is also an error when the groups drop every generated combination and
+nothing else, such as `include_feature_sets`, keeps the matrix non-empty.
+That usually means `exclude_features` or `only_features` removes every
+feature that reaches a member, and an empty matrix would otherwise look like
+a passing run.
+
+The safety limit from [`max_combinations`](#max_combinations) counts
+combinations before the groups drop any.
+
+Like the feature-set keys, this setting is patchable per target and command.
+Patch operations add or remove whole groups:
+
+```toml
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+required_feature_groups = { add = [["openssl", "rustls"]] }
 ```
 
 ## `exclude_feature_sets`
@@ -181,6 +245,9 @@ max_combinations = 250000
 Mutually exclusive groups are counted after applying their constraint. For
 `u` unconstrained features and groups of effective sizes `n₁, n₂, …`, the
 global base count is `2ᵘ × (n₁ + 1) × (n₂ + 1) × …`.
+
+Required feature groups are not: the limit counts combinations before
+[`required_feature_groups`](#required_feature_groups) drops any.
 
 ## `matrix`
 

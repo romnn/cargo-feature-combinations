@@ -13,7 +13,7 @@ Just as you can override configuration per target triple, you can override it pe
 
 A subcommand override accepts the **same feature-matrix keys as a target
 override** — `exclude_features`, `include_features`, `only_features`,
-`mutually_exclusive_features`, the `*_feature_sets` keys,
+`mutually_exclusive_features`, `required_feature_groups`, the `*_feature_sets` keys,
 `skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`, and
 `matrix` — with identical patch semantics.
 

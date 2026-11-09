@@ -145,6 +145,14 @@ const HELP_TEXT: &str = indoc! {r#"
         ["cuda", "coreml", "webgpu"],
     ]
 
+    # Drop combinations that enable no feature of a group, directly or through an
+    # implying feature. `mutually_exclusive_features` over the same group limits
+    # each combination to naming one member; exclude combinations of a feature
+    # that implies a member with the other members to get exactly one.
+    required_feature_groups = [
+        ["in-process-inference", "desktop-app-inference"],
+    ]
+
     # To exclude only the empty feature set from the matrix, you can either enable
     # `no_empty_feature_set = true` or explicitly list an empty set here:
     #

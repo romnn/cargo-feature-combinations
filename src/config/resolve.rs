@@ -24,6 +24,8 @@ pub struct ResolvedFeatures {
     pub isolated_feature_sets: Vec<HashSet<String>>,
     /// Feature groups whose members are mutually exclusive.
     pub mutually_exclusive_features: Vec<HashSet<String>>,
+    /// Feature groups of which every generated combination enables at least one member.
+    pub required_feature_groups: Vec<HashSet<String>>,
     /// Feature-set patterns to exclude.
     pub exclude_feature_sets: Vec<HashSet<String>>,
     /// Feature sets to include exactly.
@@ -323,6 +325,10 @@ fn apply_single_feature_patch(out: &mut ResolvedFeatures, features: &FeatureMatr
         out.mutually_exclusive_features =
             SetPatchOps::from_single(patch).apply_to_feature_sets(&out.mutually_exclusive_features);
     }
+    if let Some(patch) = &features.required_feature_groups {
+        out.required_feature_groups =
+            SetPatchOps::from_single(patch).apply_to_feature_sets(&out.required_feature_groups);
+    }
     if let Some(patch) = &features.exclude_feature_sets {
         out.exclude_feature_sets =
             SetPatchOps::from_single(patch).apply_to_feature_sets(&out.exclude_feature_sets);
@@ -403,6 +409,7 @@ fn apply_feature_patches<'a>(
     }
     resolve_feature_sets!(isolated_feature_sets);
     resolve_feature_sets!(mutually_exclusive_features);
+    resolve_feature_sets!(required_feature_groups);
     resolve_feature_sets!(exclude_feature_sets);
     resolve_feature_sets!(include_feature_sets);
 
@@ -1227,6 +1234,47 @@ mod tests {
         assert_eq!(
             resolved.mutually_exclusive_features,
             vec![HashSet::from(["metal".to_string(), "vulkan".to_string()])]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn required_feature_groups_combine_base_and_target_patches() -> eyre::Result<()> {
+        let raw = serde_json::json!({
+            "required_feature_groups": [
+                ["cuda", "coreml"],
+                ["openssl", "rustls"],
+            ],
+            "target": {
+                "cfg(a)": {
+                    "required_feature_groups": {
+                        "remove": [["openssl", "rustls"]],
+                        "add": [["metal", "vulkan"]],
+                    },
+                },
+            },
+        });
+        crate::config::validate_package_metadata(&raw, "package.metadata.cargo-fc")?;
+        let config = serde_json::from_value(raw)?;
+
+        let resolved = resolve_config(
+            &config,
+            &TargetTriple("x86_64-unknown-linux-gnu".to_string()),
+            &mut MatchAll,
+        )?;
+
+        // The target patch swaps the TLS group for the GPU group and keeps the base group.
+        let groups = resolved
+            .required_feature_groups
+            .into_iter()
+            .map(|group| group.into_iter().collect::<BTreeSet<_>>())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            groups,
+            BTreeSet::from([
+                BTreeSet::from(["coreml".to_string(), "cuda".to_string()]),
+                BTreeSet::from(["metal".to_string(), "vulkan".to_string()]),
+            ])
         );
         Ok(())
     }

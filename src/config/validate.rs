@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 const FEATURE_MATRIX_KEYS: &[&str] = &[
     "isolated_feature_sets",
     "mutually_exclusive_features",
+    "required_feature_groups",
     "exclude_features",
     "include_features",
     "only_features",
@@ -46,6 +47,7 @@ const PATCH_TYPED_KEYS: &[&str] = &[
     "exclude_packages",
     "isolated_feature_sets",
     "mutually_exclusive_features",
+    "required_feature_groups",
     "exclude_features",
     "include_features",
     "only_features",
@@ -222,7 +224,12 @@ fn validate_value_shape(
                 eyre::bail!("`driver` must not be empty in [{section}]");
             }
         }
-        ValueShape::Patch => validate_patch_shape(key, value, section)?,
+        ValueShape::Patch => {
+            validate_patch_shape(key, value, section)?;
+            if key == "required_feature_groups" {
+                validate_required_feature_groups_not_empty(value, section)?;
+            }
+        }
         ValueShape::EnvPatch => validate_env_patch_shape(value, section)?,
         ValueShape::Array if !value.is_array() => {
             eyre::bail!("`{key}` in [{section}] must be an array");
@@ -351,6 +358,45 @@ fn validate_patch_shape(key: &str, value: &serde_json::Value, section: &str) -> 
         }
     }
 
+    Ok(())
+}
+
+/// Reject an empty group in the groups a `required_feature_groups` value sets or adds.
+///
+/// No combination can enable a member of an empty group, so such a group would remove
+/// every generated combination.
+/// Removing an empty group changes nothing and stays accepted.
+fn validate_required_feature_groups_not_empty(
+    value: &serde_json::Value,
+    section: &str,
+) -> eyre::Result<()> {
+    let set_or_added = match value {
+        serde_json::Value::Array(groups) => vec![("", groups)],
+        serde_json::Value::Object(ops) => ["override", "add"]
+            .into_iter()
+            .filter_map(|op| {
+                ops.get(op)
+                    .and_then(serde_json::Value::as_array)
+                    .map(|groups| (op, groups))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    for (op, groups) in set_or_added {
+        let has_empty_group = groups
+            .iter()
+            .any(|group| group.as_array().is_some_and(Vec::is_empty));
+        if has_empty_group {
+            let key = if op.is_empty() {
+                "required_feature_groups".to_string()
+            } else {
+                format!("required_feature_groups.{op}")
+            };
+            eyre::bail!(
+                "`{key}` in [{section}] contains an empty group; no combination can enable a member of an empty group, so it would remove every generated combination; list at least one feature in each group"
+            );
+        }
+    }
     Ok(())
 }
 
@@ -495,6 +541,7 @@ fn unknown_feature_names<'cfg>(
         check_string_patch!(only_features);
         check_feature_set_patch!(isolated_feature_sets);
         check_feature_set_patch!(mutually_exclusive_features);
+        check_feature_set_patch!(required_feature_groups);
         check_feature_set_patch!(exclude_feature_sets);
         check_feature_set_patch!(include_feature_sets);
         check_feature_set_patch!(allow_feature_sets);
@@ -986,6 +1033,82 @@ mod tests {
             "workspace.metadata.cargo-fc",
         )
         .expect_err("feature groups are package-scoped");
+
+        assert!(err.to_string().contains("per-package"));
+    }
+
+    #[test]
+    fn required_feature_groups_accept_patch_shape_in_package_scopes() {
+        super::validate_package_metadata(
+            &serde_json::json!({
+                "required_feature_groups": [["cuda", "coreml"]],
+                "target": {
+                    "cfg(unix)": {
+                        "required_feature_groups": {
+                            "add": [["openssl", "rustls"]],
+                            "remove": [["cuda", "coreml"]],
+                        },
+                    },
+                },
+                "subcommands": {
+                    "build": {
+                        "required_feature_groups": { "override": [["cuda"]] },
+                    },
+                },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect("required groups should accept feature-set patch syntax");
+    }
+
+    /// An empty group can never be met, so every way of setting or adding one is rejected.
+    #[test]
+    fn required_feature_groups_reject_empty_groups() {
+        let cases = [
+            (
+                serde_json::json!({ "required_feature_groups": [["cuda"], []] }),
+                "`required_feature_groups` in [package.metadata.cargo-fc]",
+            ),
+            (
+                serde_json::json!({ "target": { "cfg(unix)": { "required_feature_groups": { "add": [[]] } } } }),
+                "`required_feature_groups.add` in [package.metadata.cargo-fc.target.'cfg(unix)']",
+            ),
+            (
+                serde_json::json!({ "subcommands": { "test": { "required_feature_groups": { "override": [[]] } } } }),
+                "`required_feature_groups.override` in [package.metadata.cargo-fc.subcommands.test]",
+            ),
+        ];
+        for (raw, location) in cases {
+            let err = super::validate_package_metadata(&raw, "package.metadata.cargo-fc")
+                .expect_err("an empty required group must be rejected");
+            let message = err.to_string();
+
+            assert!(message.contains(location), "{message}");
+            assert!(message.contains("empty group"), "{message}");
+        }
+    }
+
+    /// Removing an empty group cannot shrink the matrix, so it stays a harmless no-op.
+    #[test]
+    fn required_feature_groups_accept_removing_an_empty_group() {
+        super::validate_package_metadata(
+            &serde_json::json!({
+                "required_feature_groups": { "remove": [[]] },
+            }),
+            "package.metadata.cargo-fc",
+        )
+        .expect("removing an empty group is accepted");
+    }
+
+    #[test]
+    fn workspace_rejects_required_feature_groups() {
+        let err = super::validate_workspace_metadata(
+            &serde_json::json!({
+                "required_feature_groups": [["cuda", "coreml"]],
+            }),
+            "workspace.metadata.cargo-fc",
+        )
+        .expect_err("required groups are package-scoped");
 
         assert!(err.to_string().contains("per-package"));
     }
