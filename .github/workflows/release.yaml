@@ -55,7 +55,7 @@ jobs:
             mise.lock
           )
           git update-index --skip-worktree -- "${allowed_dirty_files[@]}"
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           install: false
           cache: true
