@@ -11,8 +11,15 @@
 
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use cargo_feature_combinations::CfgEvaluator;
+use cargo_feature_combinations::config::{Config, FlagConfig, WorkspaceConfig};
+use cargo_feature_combinations::matrix::build_matrix_rows;
+use cargo_feature_combinations::plan::execution::{PlanBuildContext, build_execution_plans};
+use cargo_feature_combinations::plan::targets::{
+    SelectedPackage, TargetPlanRequest, build_target_plans,
+};
 use cargo_feature_combinations::target::{TargetEnvironment, TargetTriple};
+use cargo_feature_combinations::workspace::Workspace as _;
+use cargo_feature_combinations::{CfgEvaluator, Package as _};
 use color_eyre::eyre;
 
 /// A fixed host-target environment with no `CARGO_BUILD_TARGET`.
@@ -37,6 +44,16 @@ impl PairEval {
     pub fn matching(triple: &str, cfg: &str) -> Self {
         Self {
             rules: vec![(triple.to_string(), cfg.to_string())],
+        }
+    }
+
+    /// Matches every one of `cfgs` on `triple`, as when several target sections apply.
+    pub fn matching_all(triple: &str, cfgs: &[&str]) -> Self {
+        Self {
+            rules: cfgs
+                .iter()
+                .map(|cfg| (triple.to_string(), (*cfg).to_string()))
+                .collect(),
         }
     }
 }
@@ -64,4 +81,60 @@ pub fn metadata(temp: &TempDir) -> eyre::Result<cargo_metadata::Metadata> {
         .current_dir(temp.path())
         .no_deps()
         .exec()?)
+}
+
+/// Build matrix rows for the given cargo subcommand using deterministic adapters.
+pub fn matrix_rows_for_command(
+    meta: &cargo_metadata::Metadata,
+    command: Option<&str>,
+    env: &impl TargetEnvironment,
+    evaluator: &mut impl CfgEvaluator,
+) -> eyre::Result<Vec<serde_json::Value>> {
+    let ws_config: WorkspaceConfig = meta.workspace_config()?;
+    let packages = meta.candidate_packages_for_fc()?;
+    let configs: Vec<Config> = packages
+        .iter()
+        .map(|p| p.config())
+        .collect::<eyre::Result<Vec<_>>>()?;
+    let selected: Vec<SelectedPackage<'_>> = packages
+        .iter()
+        .zip(&configs)
+        .map(|(package, config)| SelectedPackage {
+            package,
+            config,
+            ignore_configured_targets: false,
+            target_decision_explicit: false,
+        })
+        .collect();
+    let base_exclude = meta.base_workspace_exclude_packages()?;
+
+    let target_plans = build_target_plans(
+        &selected,
+        &ws_config,
+        &base_exclude,
+        TargetPlanRequest {
+            raw_command: command,
+            resolved_command: command,
+            ..Default::default()
+        },
+        env,
+        evaluator,
+    )?;
+    let context = PlanBuildContext {
+        workspace_config: &ws_config,
+        raw_command: command,
+        resolved_command: command,
+        cli_driver: None,
+        cli_env_set: &[],
+        cli_env_remove: &[],
+        default_diagnostics_allowed: false,
+        host: None,
+        matrix: true,
+    };
+    let mut plan_set =
+        build_execution_plans(&target_plans, FlagConfig::default(), &context, evaluator)?;
+    // Mirror production planning, which always runs the maximal-features pass
+    // after building execution plans.
+    cargo_feature_combinations::plan::maximal::maybe_retain_maximal_feature_sets(&mut plan_set);
+    Ok(build_matrix_rows(&plan_set))
 }
