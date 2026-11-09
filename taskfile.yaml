@@ -174,6 +174,20 @@ tasks:
     cmds:
       - cooldown upgrade --latest {{.CLI_ARGS}}
 
+  mise:upgrade:
+    desc: "upgrade mise-managed tools and refresh the lockfile"
+    env:
+      # A fresh release is invisible for up to an hour behind mise's remote-versions cache
+      # (fetch_remote_versions_cache = "1h"); upgrading is exactly when the listing must be live.
+      MISE_FETCH_REMOTE_VERSIONS_CACHE: "0s"
+      # mise resolves `latest` for GitHub tools through its hosted version index, which trails a
+      # fresh release even with that cache off.
+      # Asking GitHub directly lets an upgrade adopt a release the moment it is published.
+      MISE_USE_VERSIONS_HOST: "0"
+    cmds:
+      - mise upgrade {{.CLI_ARGS}}
+      - mise lock
+
   unused:
     desc: "check for unused cargo workspace dependencies"
     aliases: [unused-dependencies]
