@@ -10,6 +10,16 @@ homebrew_casks:
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     custom_block: |
       os macos: "darwin", linux: "linux"
+
+      postflight_steps do
+        on_macos do
+          if_path_exists "/usr/bin/xattr" do
+            run "/usr/bin/xattr",
+                args:         ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/cargo-feature-combinations"],
+                must_succeed: false
+          end
+        end
+      end
     directory: Casks
     commit_author:
       name: romnn
@@ -21,18 +31,22 @@ homebrew_casks:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
       pull_request:
         enabled: false
-    hooks:
-      post:
-        install: |
-          if OS.mac? && File.exist?("/usr/bin/xattr")
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-feature-combinations"]
-          end
   - name: &cargo-fc cargo-fc
     ids:
       - *cargo-fc
     description: "Plugin for `cargo` to run commands against selected combinations of features."
     custom_block: |
       os macos: "darwin", linux: "linux"
+
+      postflight_steps do
+        on_macos do
+          if_path_exists "/usr/bin/xattr" do
+            run "/usr/bin/xattr",
+                args:         ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/cargo-fc"],
+                must_succeed: false
+          end
+        end
+      end
     directory: Casks
     commit_author:
       name: romnn
@@ -44,12 +58,6 @@ homebrew_casks:
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
       pull_request:
         enabled: false
-    hooks:
-      post:
-        install: |
-          if OS.mac? && File.exist?("/usr/bin/xattr")
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cargo-fc"]
-          end
 
 builds:
   - id: *cargo-feature-combinations
