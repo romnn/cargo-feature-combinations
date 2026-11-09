@@ -127,18 +127,18 @@ fn members_reached_through_implications_meet_the_group() -> eyre::Result<()> {
         edition = "2021"
 
         [features]
-        default = ["in-process-inference"]
-        gpu = ["in-process-inference"]
-        in-process-inference = []
-        desktop-app-inference = []
-        reflection = []
+        default = ["rustls"]
+        native-tls = []
+        rustls = []
+        rustls-webpki-roots = ["rustls"]
+        logging = []
 
         [package.metadata.cargo-fc]
-        required_feature_groups = [["in-process-inference", "desktop-app-inference"]]
-        mutually_exclusive_features = [["in-process-inference", "desktop-app-inference"]]
+        required_feature_groups = [["native-tls", "rustls"]]
+        mutually_exclusive_features = [["native-tls", "rustls"]]
         exclude_feature_sets = [
-            ["default", "desktop-app-inference"],
-            ["gpu", "desktop-app-inference"],
+            ["default", "native-tls"],
+            ["native-tls", "rustls-webpki-roots"],
         ]
     "#})?;
     let meta = metadata(&temp)?;
@@ -153,22 +153,20 @@ fn members_reached_through_implications_meet_the_group() -> eyre::Result<()> {
         .filter_map(|row| row.get("features").and_then(serde_json::Value::as_str))
         .collect::<BTreeSet<_>>();
 
-    // `gpu` and `default` reach the in-process runner only through their implications.
-    assert!(have.contains("gpu"), "{have:?}");
+    // `default` and `rustls-webpki-roots` reach `rustls` only through their implications.
+    assert!(have.contains("rustls-webpki-roots"), "{have:?}");
     assert!(have.contains("default"), "{have:?}");
-    assert!(
-        have.contains("desktop-app-inference,reflection"),
-        "{have:?}"
-    );
+    assert!(have.contains("logging,native-tls"), "{have:?}");
 
-    // Rows that reach no runner are gone, and none combines the two runners.
+    // Rows that reach no backend are gone, and none combines the two backends.
     assert!(!have.contains(""), "{have:?}");
-    assert!(!have.contains("reflection"), "{have:?}");
+    assert!(!have.contains("logging"), "{have:?}");
+    let names = |row: &str, feature: &str| row.split(',').any(|named| named == feature);
     assert!(
-        !have.iter().any(|row| row.contains("desktop-app-inference")
-            && ["in-process-inference", "gpu", "default"]
+        !have.iter().any(|row| names(row, "native-tls")
+            && ["rustls", "rustls-webpki-roots", "default"]
                 .iter()
-                .any(|other| row.split(',').any(|feature| feature == *other))),
+                .any(|other| names(row, other))),
         "{have:?}"
     );
     Ok(())

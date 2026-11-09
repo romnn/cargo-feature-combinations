@@ -311,8 +311,8 @@ fn violates_mutually_exclusive_features(
 /// Keeps the combinations whose implied features meet every required group.
 ///
 /// A combination meets a group when it enables at least one member, either directly or
-/// through a feature that implies it, so `gpu = ["in-process"]` meets
-/// `[in-process, desktop]`.
+/// through a feature that implies it, so `rustls-webpki-roots = ["rustls"]` meets
+/// `[native-tls, rustls]`.
 fn retain_required_feature_groups<'a>(
     package_features: &'a BTreeMap<String, Vec<String>>,
     groups: &[HashSet<String>],
@@ -1514,69 +1514,65 @@ mod test {
             .collect()
     }
 
-    /// The inference service from the issue that motivated required groups: exactly one of two
-    /// runners, where `default` and `gpu` imply the in-process runner.
-    fn inference_service() -> eyre::Result<cargo_metadata::Package> {
-        let mut package = package_with_features(&[
-            "desktop-app-inference",
-            "in-process-inference",
-            "jemalloc",
-            "reflection",
-        ])?;
-        package.features.insert(
-            "default".to_string(),
-            vec!["in-process-inference".to_string()],
-        );
+    /// A crate that needs exactly one of two TLS backends, where `default` and
+    /// `rustls-webpki-roots` imply `rustls`, plus the independent `logging` and `metrics`.
+    fn tls_client() -> eyre::Result<cargo_metadata::Package> {
+        let mut package = package_with_features(&["logging", "metrics", "native-tls", "rustls"])?;
         package
             .features
-            .insert("gpu".to_string(), vec!["in-process-inference".to_string()]);
+            .insert("default".to_string(), vec!["rustls".to_string()]);
+        package.features.insert(
+            "rustls-webpki-roots".to_string(),
+            vec!["rustls".to_string()],
+        );
         Ok(package)
     }
 
     #[test]
     fn combinations_required_groups_with_mutual_exclusion_select_exactly_one() -> eyre::Result<()> {
         init();
-        let package = inference_service()?;
-        let runners = group(&["in-process-inference", "desktop-app-inference"]);
+        let package = tls_client()?;
+        let backends = group(&["native-tls", "rustls"]);
         let config = ResolvedFeatures {
-            required_feature_groups: vec![runners.clone()],
-            mutually_exclusive_features: vec![runners.clone()],
+            required_feature_groups: vec![backends.clone()],
+            mutually_exclusive_features: vec![backends.clone()],
             exclude_feature_sets: vec![
-                group(&["default", "desktop-app-inference"]),
-                group(&["gpu", "desktop-app-inference"]),
+                group(&["default", "native-tls"]),
+                group(&["native-tls", "rustls-webpki-roots"]),
             ],
             ..ResolvedFeatures::default()
         };
 
         let have = package.feature_combinations(&config)?;
 
-        // Every row enables exactly one runner once implications apply.
+        // Every row enables exactly one backend once implications apply.
         let implications = crate::implication::FeatureImplications::new(&package.features);
         for row in &have {
             let enabled = implications.closure(row.iter().copied());
-            let selected = runners
+            let selected = backends
                 .iter()
-                .filter(|runner| enabled.contains(runner.as_str()))
+                .filter(|backend| enabled.contains(backend.as_str()))
                 .count();
-            assert_eq!(selected, 1, "{row:?} must select exactly one runner");
+            assert_eq!(selected, 1, "{row:?} must select exactly one backend");
         }
 
-        // Rows without a runner are gone, rows that reach one through `gpu` or `default` stay,
-        // and runner-independent features still vary freely around both runners.
+        // Rows without a backend are gone, rows that reach `rustls` through `default` or
+        // `rustls-webpki-roots` stay, and the independent features still vary around both
+        // backends.
         let has = |row: &[&str]| have.iter().any(|features| features == row);
         assert!(!has(&[]));
-        assert!(!has(&["reflection"]));
-        assert!(!has(&["jemalloc", "reflection"]));
-        assert!(has(&["gpu"]));
+        assert!(!has(&["logging"]));
+        assert!(!has(&["logging", "metrics"]));
+        assert!(has(&["rustls-webpki-roots"]));
         assert!(has(&["default"]));
-        assert!(has(&["desktop-app-inference", "jemalloc", "reflection"]));
-        assert!(has(&["gpu", "in-process-inference", "jemalloc"]));
+        assert!(has(&["logging", "metrics", "native-tls"]));
+        assert!(has(&["metrics", "rustls", "rustls-webpki-roots"]));
 
-        // Count the rows per runner choice over the 2^4 subsets of default, gpu, jemalloc and
-        // reflection.
-        // No explicit runner keeps the 12 subsets with `default` or `gpu`.
-        // The in-process runner keeps all 16.
-        // The desktop runner keeps the 4 subsets without `default` and `gpu`.
+        // Count the rows per backend choice over the 2^4 subsets of default, logging, metrics
+        // and rustls-webpki-roots.
+        // No explicit backend keeps the 12 subsets with `default` or `rustls-webpki-roots`.
+        // `rustls` keeps all 16.
+        // `native-tls` keeps the 4 subsets without `default` and `rustls-webpki-roots`.
         assert_eq!(have.len(), 12 + 16 + 4);
         Ok(())
     }
@@ -1651,20 +1647,20 @@ mod test {
     fn combinations_required_groups_do_not_extend_mutual_exclusion_to_implied_members()
     -> eyre::Result<()> {
         init();
-        let package = inference_service()?;
-        let runners = group(&["in-process-inference", "desktop-app-inference"]);
+        let package = tls_client()?;
+        let backends = group(&["native-tls", "rustls"]);
         let config = ResolvedFeatures {
-            required_feature_groups: vec![runners.clone()],
-            mutually_exclusive_features: vec![runners],
+            required_feature_groups: vec![backends.clone()],
+            mutually_exclusive_features: vec![backends],
             ..ResolvedFeatures::default()
         };
 
         let have = package.feature_combinations(&config)?;
 
-        // `gpu` implies the in-process runner, yet still pairs with the desktop runner.
+        // `rustls-webpki-roots` implies `rustls`, yet still pairs with `native-tls`.
         assert!(
             have.iter()
-                .any(|features| features == &["desktop-app-inference", "gpu"])
+                .any(|features| features == &["native-tls", "rustls-webpki-roots"])
         );
         Ok(())
     }
@@ -1699,30 +1695,19 @@ mod test {
     #[test]
     fn combinations_required_groups_reject_a_group_no_row_can_meet() -> eyre::Result<()> {
         init();
-        let package = inference_service()?;
+        let package = tls_client()?;
         let config = ResolvedFeatures {
-            required_feature_groups: vec![group(&[
-                "in-process-inference",
-                "desktop-app-inference",
-            ])],
-            exclude_features: group(&[
-                "default",
-                "desktop-app-inference",
-                "gpu",
-                "in-process-inference",
-            ]),
+            required_feature_groups: vec![group(&["native-tls", "rustls"])],
+            exclude_features: group(&["default", "native-tls", "rustls", "rustls-webpki-roots"]),
             ..ResolvedFeatures::default()
         };
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("excluding every way to reach a runner must not empty the matrix");
+            .expect_err("excluding every way to reach a backend must not empty the matrix");
         let message = err.to_string();
 
-        assert!(
-            message.contains("[desktop-app-inference, in-process-inference]"),
-            "{message}"
-        );
+        assert!(message.contains("[native-tls, rustls]"), "{message}");
         assert!(message.contains("every generated combination"), "{message}");
         Ok(())
     }
@@ -1732,7 +1717,7 @@ mod test {
         init();
         let package = package_with_features(&["cuda", "metal", "tracing"])?;
 
-        // No generated row can reach a runner, but the exact set keeps the matrix non-empty.
+        // No generated row can reach a member, but the exact set keeps the matrix non-empty.
         let config = ResolvedFeatures {
             required_feature_groups: vec![group(&["cuda", "metal"])],
             exclude_features: group(&["cuda", "metal"]),

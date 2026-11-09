@@ -150,7 +150,7 @@ const HELP_TEXT: &str = indoc! {r#"
     # each combination to naming one member; exclude combinations of a feature
     # that implies a member with the other members to get exactly one.
     required_feature_groups = [
-        ["in-process-inference", "desktop-app-inference"],
+        ["native-tls", "rustls"],
     ]
 
     # To exclude only the empty feature set from the matrix, you can either enable

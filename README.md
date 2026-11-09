@@ -286,7 +286,7 @@ mutually_exclusive_features = [
 # every combination names at most one member; a feature that implies a member
 # still needs an `exclude_feature_sets` entry against the other members.
 required_feature_groups = [
-    ["in-process-inference", "desktop-app-inference"],
+    ["native-tls", "rustls"],
 ]
 
 # When at least one isolated feature set is configured, stop taking all project 

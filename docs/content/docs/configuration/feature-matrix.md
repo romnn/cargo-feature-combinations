@@ -105,38 +105,38 @@ member. A combination that enables none of a group's features is dropped, and
 features outside the groups keep their full powerset, so a newly declared
 feature still enters the matrix automatically.
 
-A combination meets a group through the features it implies, too. Here
-`gpu = ["in-process-inference"]` meets the group, and so does `default` when it
-enables a runner:
+A combination meets a group through the features it implies, too. Here a crate
+needs exactly one TLS backend, and `rustls-webpki-roots` and `default` both
+enable `rustls`:
 
 ```toml
 [features]
-default = ["in-process-inference"]
-gpu = ["in-process-inference"]
-in-process-inference = []
-desktop-app-inference = []
-reflection = []
+default = ["rustls"]
+native-tls = []
+rustls = []
+rustls-webpki-roots = ["rustls"]
+logging = []
 
 [package.metadata.cargo-fc]
-# Every combination selects at least one runner...
-required_feature_groups = [["in-process-inference", "desktop-app-inference"]]
+# Every combination selects at least one TLS backend...
+required_feature_groups = [["native-tls", "rustls"]]
 # ...and at most one.
-mutually_exclusive_features = [["in-process-inference", "desktop-app-inference"]]
-# `default` and `gpu` imply the in-process runner.
+mutually_exclusive_features = [["native-tls", "rustls"]]
+# `default` and `rustls-webpki-roots` imply `rustls`.
 exclude_feature_sets = [
-  ["default", "desktop-app-inference"],
-  ["gpu", "desktop-app-inference"],
+  ["default", "native-tls"],
+  ["native-tls", "rustls-webpki-roots"],
 ]
 ```
 
-Together these keys make every combination enable exactly one runner. `[]`
-and `[reflection]` are dropped, while `[gpu]`, `[default]`, and
-`[desktop-app-inference, reflection]` stay.
+Together these keys make every combination enable exactly one backend. `[]`
+and `[logging]` are dropped, while `[rustls-webpki-roots]`, `[default]`, and
+`[logging, native-tls]` stay.
 
 The `exclude_feature_sets` entries are needed because
 `mutually_exclusive_features` only looks at the features a combination names,
-not at the features they imply. Without them, `[desktop-app-inference, gpu]`
-would stay and enable both runners. Add an entry whenever a new feature
+not at the features they imply. Without them, `[native-tls, rustls-webpki-roots]`
+would stay and enable both backends. Add an entry whenever a new feature
 implies a group member.
 
 With several groups, a combination must meet every one of them. Like the
