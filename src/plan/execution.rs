@@ -270,7 +270,7 @@ fn resolve_package_execution_plan<'a>(
         let all_combos = planned.package.feature_combinations(&resolved.features)?;
         let prune_result = crate::implication::prune_with_resolved_features(
             all_combos,
-            &planned.package.features,
+            planned.package,
             &resolved.features,
             flags.no_prune_implied,
         );

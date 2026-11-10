@@ -4,6 +4,7 @@
 //! `base → subcommands.<cmd> → target.'cfg(...)' → target.'cfg(...)'.subcommands.<cmd>`, through
 //! the public planning and matrix API with deterministic stub adapters.
 
+use assert_fs::prelude::*;
 use color_eyre::eyre;
 use indoc::{formatdoc, indoc};
 use std::collections::BTreeSet;
@@ -169,6 +170,53 @@ fn members_reached_through_implications_meet_the_group() -> eyre::Result<()> {
                 .any(|other| names(row, other))),
         "{have:?}"
     );
+    Ok(())
+}
+
+/// `tls = ["foo/bar"]` makes Cargo enable the optional dependency's implicit `foo` feature, so
+/// `[tls]` meets the group even though `skip_optional_dependencies` keeps `foo` out of the matrix.
+#[test]
+fn dependency_features_meet_groups_through_the_optional_dependency() -> eyre::Result<()> {
+    let temp = single_crate(indoc! {r#"
+        [package]
+        name = "solo"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        foo = { path = "foo", optional = true }
+
+        [features]
+        native = []
+        tls = ["foo/bar"]
+
+        [package.metadata.cargo-fc]
+        skip_optional_dependencies = true
+        required_feature_groups = [["foo", "native"]]
+    "#})?;
+    temp.child("foo/Cargo.toml").write_str(indoc! {r#"
+        [package]
+        name = "foo"
+        version = "0.1.0"
+        edition = "2021"
+
+        [features]
+        bar = []
+    "#})?;
+    temp.child("foo/src/lib.rs").write_str("")?;
+    let meta = metadata(&temp)?;
+    let rows = matrix_rows_for_command(
+        &meta,
+        None,
+        &HostEnv("host-triple"),
+        &mut PairEval::default(),
+    )?;
+    let have = rows
+        .iter()
+        .filter_map(|row| row.get("features").and_then(serde_json::Value::as_str))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(have, BTreeSet::from(["native", "native,tls", "tls"]));
     Ok(())
 }
 

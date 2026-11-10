@@ -11,6 +11,17 @@
   combination selects exactly one member while the rest of the matrix stays
   open (#26).
 
+### Fixed
+
+- A feature that enables an optional dependency's feature, such as
+  `tls = ["foo/bar"]`, now also counts as enabling the package's own `foo`
+  feature, as Cargo does. Dependencies declared only for specific targets are
+  left out, because Cargo enables their feature only on those targets. Implied-feature pruning drops `[foo, tls]` as
+  equivalent to `[tls]`, and `[tls]` meets a required group containing `foo`
+  even when `skip_optional_dependencies` excludes `foo` (#28). For library
+  users this is breaking: `prune_with_resolved_features` takes the
+  `cargo_metadata::Package` instead of its feature map.
+
 ## [0.8.0]
 
 ### Changed

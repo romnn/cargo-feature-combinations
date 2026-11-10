@@ -266,6 +266,8 @@ requires-gpu = false
 
 Some features imply others. When a `full` feature enables both `json` and `yaml`, a combination like `{full, json}` resolves — after Cargo's feature unification — to the same effective set as `{full}` alone. `cargo fc` drops the redundant combination automatically, so it isn't checked twice.
 
+Enabling a feature of an optional dependency counts too: Cargo turns on the dependency's own feature with it, so with `tls = ["foo/bar"]`, `{foo, tls}` is equivalent to `{tls}`. The weak form `foo?/bar` enables nothing on its own. A dependency declared only under `[target.'cfg(...)'.dependencies]` is left out, because Cargo turns on its feature only for the targets where the dependency applies.
+
 {{< cargofile "pruning/crates/app" >}}
 
 Pruning is **on by default and needs no configuration** — whatever your features, the smaller equivalent combination is kept and the redundant supersets are dropped. `--show-pruned` reveals what was dropped and why (the `SKIP` rows are each equivalent to `[full]`):
