@@ -119,7 +119,7 @@ pub(super) fn feature_combinations<'a>(
     )?;
 
     // Filter out feature sets that contain skip sets
-    let filtered_powerset = base_powerset
+    let mut filtered_powerset = base_powerset
         .into_iter()
         .filter(|feature_set| {
             !violates_mutually_exclusive_features(feature_set, &config.mutually_exclusive_features)
@@ -143,11 +143,11 @@ pub(super) fn feature_combinations<'a>(
         })
         .collect::<BTreeSet<_>>();
 
-    let generated_powerset = filtered_powerset;
-    let mut filtered_powerset = retain_required_feature_groups(
+    let generated_powerset = filtered_powerset.clone();
+    retain_required_feature_groups(
+        &mut filtered_powerset,
         &package.features,
         &config.required_feature_groups,
-        &generated_powerset,
     );
 
     // Add back exact combinations
@@ -314,22 +314,18 @@ fn violates_mutually_exclusive_features(
 /// through a feature that implies it, so `rustls-webpki-roots = ["rustls"]` meets
 /// `[native-tls, rustls]`.
 fn retain_required_feature_groups<'a>(
+    combinations: &mut BTreeSet<BTreeSet<&'a String>>,
     package_features: &'a BTreeMap<String, Vec<String>>,
     groups: &[HashSet<String>],
-    combinations: &BTreeSet<BTreeSet<&'a String>>,
-) -> BTreeSet<BTreeSet<&'a String>> {
+) {
     if groups.is_empty() {
-        return combinations.clone();
+        return;
     }
     let implications = FeatureImplications::new(package_features);
-    combinations
-        .iter()
-        .filter(|combination| {
-            let closure = implications.closure(combination.iter().copied());
-            groups.iter().all(|group| enables_member(&closure, group))
-        })
-        .cloned()
-        .collect()
+    combinations.retain(|combination| {
+        let closure = implications.closure(combination.iter().copied());
+        groups.iter().all(|group| enables_member(&closure, group))
+    });
 }
 
 fn enables_member(closure: &BTreeSet<&str>, group: &HashSet<String>) -> bool {
