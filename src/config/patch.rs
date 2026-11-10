@@ -434,10 +434,11 @@ where
 mod test {
     use super::{FeatureSetVecPatch, StringSetPatch, TargetListPatch};
     use color_eyre::eyre;
+    use color_eyre::eyre::OptionExt as _;
     use serde_json::json;
     use std::collections::HashSet;
 
-    #[test]
+    #[test_util::test]
     fn string_set_patch_array_is_override() -> eyre::Result<()> {
         let v = json!(["a", "b"]);
         let p: StringSetPatch = serde_json::from_value(v)?;
@@ -451,7 +452,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn string_set_patch_object_add_remove() -> eyre::Result<()> {
         let v = json!({"add": ["a"], "remove": ["b"]});
         let p: StringSetPatch = serde_json::from_value(v)?;
@@ -461,7 +462,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn feature_set_vec_patch_array_is_override() -> eyre::Result<()> {
         let v = json!([["a"], ["b", "c"]]);
         let p: FeatureSetVecPatch = serde_json::from_value(v)?;
@@ -475,7 +476,7 @@ mod test {
         values.iter().map(|s| (*s).to_string()).collect()
     }
 
-    #[test]
+    #[test_util::test]
     fn combine_set_patches_unifies_string_sets() -> eyre::Result<()> {
         // One generic engine handles the `HashSet<String>` element type.
         let base = hs(&["default"]);
@@ -487,13 +488,13 @@ mod test {
             "target override",
             [("cfg(a)", &add), ("cfg(b)", &remove)],
         )?
-        .expect("patches present");
+        .ok_or_eyre("patches present")?;
 
         assert_eq!(ops.apply_to(&base), hs(&["cuda"]));
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combine_set_patches_unifies_feature_set_lists() -> eyre::Result<()> {
         // The same engine handles the `Vec<HashSet<String>>` element type.
         let base = vec![hs(&["a"])];
@@ -504,7 +505,7 @@ mod test {
             "target override",
             [("cfg(a)", &add)],
         )?
-        .expect("patch present");
+        .ok_or_eyre("patch present")?;
 
         let mut got = ops.apply_to_feature_sets(&base);
         got.sort_by_key(super::normalize_feature_set);
@@ -512,38 +513,40 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn combine_set_patches_reports_conflicting_overrides() {
-        let a: StringSetPatch = serde_json::from_value(json!(["x"])).unwrap();
-        let b: StringSetPatch = serde_json::from_value(json!(["y"])).unwrap();
+    #[test_util::test]
+    fn combine_set_patches_reports_conflicting_overrides() -> eyre::Result<()> {
+        let a: StringSetPatch = serde_json::from_value(json!(["x"]))?;
+        let b: StringSetPatch = serde_json::from_value(json!(["y"]))?;
 
         let err = super::combine_set_patches(
             "exclude_features",
             "target override",
             [("cfg(a)", &a), ("cfg(b)", &b)],
         )
-        .expect_err("conflicting overrides must error");
+        .err()
+        .ok_or_eyre("conflicting overrides must error")?;
         assert!(err.to_string().contains("conflicting overrides"));
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn target_list_patch_array_is_ordered_override() -> eyre::Result<()> {
         let patch: TargetListPatch = serde_json::from_value(json!(["b", "a", "b"]))?;
 
         let ops = super::combine_target_list_patches("targets", "package config", [("", &patch)])?
-            .expect("patch present");
+            .ok_or_eyre("patch present")?;
 
         assert_eq!(ops.apply_to(&["base".to_string()]), vec!["b", "a"]);
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn target_list_patch_object_applies_in_declaration_order() -> eyre::Result<()> {
         let patch: TargetListPatch =
             serde_json::from_value(json!({ "remove": ["base"], "add": ["z", "a", "z"] }))?;
 
         let ops = super::combine_target_list_patches("targets", "package config", [("", &patch)])?
-            .expect("patch present");
+            .ok_or_eyre("patch present")?;
 
         assert_eq!(
             ops.apply_to(&["base".to_string(), "kept".to_string()]),
@@ -552,7 +555,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn target_list_patch_conflicting_overrides_error() -> eyre::Result<()> {
         let a: TargetListPatch = serde_json::from_value(json!(["a", "b"]))?;
         let b: TargetListPatch = serde_json::from_value(json!(["b", "a"]))?;
@@ -562,7 +565,8 @@ mod test {
             "workspace target override",
             [("cfg(a)", &a), ("cfg(b)", &b)],
         )
-        .expect_err("ordered overrides differ");
+        .err()
+        .ok_or_eyre("ordered overrides differ")?;
 
         assert!(err.to_string().contains("conflicting overrides"));
         Ok(())

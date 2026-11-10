@@ -6,6 +6,7 @@
 
 use assert_fs::prelude::*;
 use color_eyre::eyre;
+use color_eyre::eyre::OptionExt as _;
 use indoc::{formatdoc, indoc};
 use std::collections::BTreeSet;
 
@@ -92,7 +93,7 @@ fn on_linux() -> PairEval {
     PairEval::matching("t-linux", LINUX)
 }
 
-#[test]
+#[test_util::test]
 fn base_groups_drop_rows_without_a_member() -> eyre::Result<()> {
     let settings = indoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -107,7 +108,7 @@ fn base_groups_drop_rows_without_a_member() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn several_groups_must_all_be_met() -> eyre::Result<()> {
     let settings = indoc! {r#"
         required_feature_groups = [["a", "b"], ["c"]]
@@ -119,7 +120,7 @@ fn several_groups_must_all_be_met() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn members_reached_through_implications_meet_the_group() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -175,7 +176,7 @@ fn members_reached_through_implications_meet_the_group() -> eyre::Result<()> {
 
 /// `tls = ["foo/bar"]` makes Cargo enable the optional dependency's implicit `foo` feature, so
 /// `[tls]` meets the group even though `skip_optional_dependencies` keeps `foo` out of the matrix.
-#[test]
+#[test_util::test]
 fn dependency_features_meet_groups_through_the_optional_dependency() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -220,7 +221,7 @@ fn dependency_features_meet_groups_through_the_optional_dependency() -> eyre::Re
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_add_extends_the_base_groups() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -239,7 +240,7 @@ fn target_add_extends_the_base_groups() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_remove_drops_a_base_group() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"], ["c"]]
@@ -254,7 +255,7 @@ fn target_remove_drops_a_base_group() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_array_overrides_the_base_groups() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -270,7 +271,7 @@ fn target_array_overrides_the_base_groups() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn add_wins_over_remove_in_one_patch() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -286,7 +287,7 @@ fn add_wins_over_remove_in_one_patch() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn matching_target_sections_union_their_patches() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -309,8 +310,8 @@ fn matching_target_sections_union_their_patches() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
-fn matching_target_sections_with_different_overrides_conflict() {
+#[test_util::test]
+fn matching_target_sections_with_different_overrides_conflict() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         [package.metadata.cargo-fc.target.'{UNIX}']
         required_feature_groups = [["a"]]
@@ -324,17 +325,19 @@ fn matching_target_sections_with_different_overrides_conflict() {
         None,
         PairEval::matching_all("t-linux", &[UNIX, LINUX]),
     )
-    .expect_err("two matching sections may not override the groups differently");
+    .err()
+    .ok_or_eyre("two matching sections may not override the groups differently")?;
 
     assert!(
         format!("{err:?}").contains("required_feature_groups"),
         "{err:?}"
     );
+    Ok(())
 }
 
 /// Each scope of the precedence chain overrides the broader ones, and a target section beats a
 /// bare `subcommands.<cmd>` section.
-#[test]
+#[test_util::test]
 fn groups_follow_the_precedence_chain() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a"]]
@@ -374,7 +377,7 @@ fn groups_follow_the_precedence_chain() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_patch_builds_on_the_base_groups() -> eyre::Result<()> {
     let settings = indoc! {r#"
         required_feature_groups = [["a", "b"], ["c"]]
@@ -392,7 +395,7 @@ fn subcommand_patch_builds_on_the_base_groups() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn inherit_false_discards_the_base_groups() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -408,8 +411,8 @@ fn inherit_false_discards_the_base_groups() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
-fn inherit_false_rejects_group_patches() {
+#[test_util::test]
+fn inherit_false_rejects_group_patches() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
 
@@ -419,15 +422,17 @@ fn inherit_false_rejects_group_patches() {
     "#};
 
     let err = feature_sets(&settings, None, on_linux())
-        .expect_err("add has nothing to extend on a fresh config");
+        .err()
+        .ok_or_eyre("add has nothing to extend on a fresh config")?;
 
     assert!(
         format!("{err:?}").contains("required_feature_groups"),
         "{err:?}"
     );
+    Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_exclusion_that_empties_the_matrix_is_an_error() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -437,7 +442,8 @@ fn target_exclusion_that_empties_the_matrix_is_an_error() -> eyre::Result<()> {
     "#};
 
     let err = feature_sets(&settings, None, on_linux())
-        .expect_err("a matrix the groups emptied must not pass silently");
+        .err()
+        .ok_or_eyre("a matrix the groups emptied must not pass silently")?;
     let message = format!("{err:?}");
     assert!(message.contains("[a, b]"), "{message}");
     assert!(message.contains("every generated combination"), "{message}");
@@ -448,7 +454,7 @@ fn target_exclusion_that_empties_the_matrix_is_an_error() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn exact_sets_keep_a_matrix_the_groups_emptied() -> eyre::Result<()> {
     let settings = formatdoc! {r#"
         required_feature_groups = [["a", "b"]]
@@ -467,21 +473,23 @@ fn exact_sets_keep_a_matrix_the_groups_emptied() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
-fn manifest_rejects_an_empty_group() {
+#[test_util::test]
+fn manifest_rejects_an_empty_group() -> eyre::Result<()> {
     let settings = formatdoc! {r"
         [package.metadata.cargo-fc.target.'{LINUX}']
         required_feature_groups = {{ add = [[]] }}
     "};
 
     let err = feature_sets(&settings, None, PairEval::default())
-        .expect_err("an empty group can never be met");
+        .err()
+        .ok_or_eyre("an empty group can never be met")?;
 
     assert!(format!("{err:?}").contains("empty group"), "{err:?}");
+    Ok(())
 }
 
-#[test]
-fn manifest_rejects_unknown_members_in_any_scope() {
+#[test_util::test]
+fn manifest_rejects_unknown_members_in_any_scope() -> eyre::Result<()> {
     // The section does not match, yet the typo still fails config load.
     let settings = formatdoc! {r#"
         [package.metadata.cargo-fc.target.'{LINUX}']
@@ -489,7 +497,8 @@ fn manifest_rejects_unknown_members_in_any_scope() {
     "#};
 
     let err = feature_sets(&settings, None, PairEval::default())
-        .expect_err("unknown group members must be rejected");
+        .err()
+        .ok_or_eyre("unknown group members must be rejected")?;
 
     assert!(
         format!("{err:?}").contains(&format!(
@@ -497,9 +506,10 @@ fn manifest_rejects_unknown_members_in_any_scope() {
         )),
         "{err:?}"
     );
+    Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn workspace_scope_rejects_required_groups() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -521,7 +531,8 @@ fn workspace_scope_rejects_required_groups() -> eyre::Result<()> {
         &HostEnv("host-triple"),
         &mut PairEval::default(),
     )
-    .expect_err("feature-matrix settings are per-package");
+    .err()
+    .ok_or_eyre("feature-matrix settings are per-package")?;
 
     assert!(format!("{err:?}").contains("per-package"), "{err:?}");
     Ok(())

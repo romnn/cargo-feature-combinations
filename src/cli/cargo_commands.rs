@@ -275,42 +275,42 @@ mod test {
     };
     use similar_asserts::assert_eq as sim_assert_eq;
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_build_and_short_build() {
         sim_assert_eq!(cargo_subcommand(&["build"]), CargoSubcommand::Build);
         sim_assert_eq!(cargo_subcommand(&["b"]), CargoSubcommand::Build);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_check_and_short_check() {
         sim_assert_eq!(cargo_subcommand(&["check"]), CargoSubcommand::Check);
         sim_assert_eq!(cargo_subcommand(&["c"]), CargoSubcommand::Check);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_clippy_as_lint() {
         sim_assert_eq!(cargo_subcommand(&["clippy"]), CargoSubcommand::Lint);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_test_and_short_test() {
         sim_assert_eq!(cargo_subcommand(&["test"]), CargoSubcommand::Test);
         sim_assert_eq!(cargo_subcommand(&["t"]), CargoSubcommand::Test);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_doc_and_short_doc() {
         sim_assert_eq!(cargo_subcommand(&["doc"]), CargoSubcommand::Doc);
         sim_assert_eq!(cargo_subcommand(&["d"]), CargoSubcommand::Doc);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_detects_run_and_short_run() {
         sim_assert_eq!(cargo_subcommand(&["run"]), CargoSubcommand::Run);
         sim_assert_eq!(cargo_subcommand(&["r"]), CargoSubcommand::Run);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_skips_known_leading_cargo_flags_and_values() {
         let subcommand = cargo_subcommand(&[
             "+nightly",
@@ -326,7 +326,7 @@ mod test {
         sim_assert_eq!(subcommand, CargoSubcommand::Lint);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_handles_help_and_version_flags_before_subcommand() {
         sim_assert_eq!(
             cargo_subcommand(&["--verbose", "--help", "clippy"]),
@@ -338,25 +338,25 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_returns_other_for_unknown_leading_flag() {
         let subcommand = cargo_subcommand(&["--mystery-flag", "clippy"]);
 
         sim_assert_eq!(subcommand, CargoSubcommand::Other);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_token_stops_at_double_dash_after_value_flag() {
         sim_assert_eq!(cargo_subcommand_token(&["--config", "--", "clippy"]), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_treats_unknown_aliases_as_other() {
         sim_assert_eq!(cargo_subcommand(&["lint"]), CargoSubcommand::Other);
         sim_assert_eq!(cargo_subcommand(&["lint", "build"]), CargoSubcommand::Other);
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_token_preserves_literal_token() {
         sim_assert_eq!(
             cargo_subcommand_token(&["clippy"]),
@@ -370,7 +370,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_subcommand_token_none_for_missing_command() {
         let empty: [&str; 0] = [];
         sim_assert_eq!(cargo_subcommand_token(&empty), None);
@@ -378,7 +378,7 @@ mod test {
         sim_assert_eq!(cargo_subcommand_token(&["--"]), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn rustup_toolchain_detects_cargo_toolchain_override() {
         sim_assert_eq!(
             rustup_toolchain(&["+nightly", "--frozen", "check"]),
@@ -386,27 +386,27 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn rustup_toolchain_ignores_args_after_double_dash() {
         sim_assert_eq!(rustup_toolchain(&["run", "--", "+nightly"]), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn rustup_toolchain_ignores_plus_values_after_leading_position() {
         sim_assert_eq!(rustup_toolchain(&["check", "--target-dir", "+out"]), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn builtin_clippy_is_diagnostics_safe() {
         assert!(builtin_diagnostics_safe(Some("clippy")));
     }
 
-    #[test]
+    #[test_util::test]
     fn builtin_test_does_not_have_config_diagnostics_by_default() {
         assert!(!builtin_diagnostics_safe(Some("test")));
     }
 
-    #[test]
+    #[test_util::test]
     fn known_quiet_subcommands_do_not_gain_builtin_capabilities() {
         for token in [
             "add",

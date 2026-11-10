@@ -56,7 +56,7 @@ fn resolved_for_toml(toml_body: &str) -> eyre::Result<ResolvedFeatures> {
     Ok(ResolvedFeatures::from_config(&config_for_toml(toml_body)?))
 }
 
-#[test]
+#[test_util::test]
 fn alias_cargo_feature_combinations() -> eyre::Result<()> {
     let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations]
@@ -68,7 +68,7 @@ fn alias_cargo_feature_combinations() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_cargo_fc() -> eyre::Result<()> {
     let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.cargo-fc]
@@ -80,7 +80,7 @@ fn alias_cargo_fc() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_fc() -> eyre::Result<()> {
     let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.fc]
@@ -93,7 +93,7 @@ fn alias_fc() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_feature_combinations() -> eyre::Result<()> {
     let config = resolved_for_toml(indoc::indoc! {r#"
         [package.metadata.feature-combinations]
@@ -106,7 +106,7 @@ fn alias_feature_combinations() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_cargo_fc_with_target_override() -> eyre::Result<()> {
     let config = config_for_toml(indoc::indoc! {r#"
         [package.metadata.cargo-fc]
@@ -126,7 +126,7 @@ fn alias_cargo_fc_with_target_override() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_fc_with_target_override() -> eyre::Result<()> {
     let config = config_for_toml(indoc::indoc! {r#"
         [package.metadata.fc]
@@ -145,7 +145,7 @@ fn alias_fc_with_target_override() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn no_metadata_produces_default_config() -> eyre::Result<()> {
     let config = resolved_for_toml("")?;
 
@@ -156,7 +156,7 @@ fn no_metadata_produces_default_config() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn alias_cargo_fc_affects_feature_matrix() -> eyre::Result<()> {
     let temp = dummy_crate_with_toml(indoc::indoc! {r#"
         [package.metadata.cargo-fc]

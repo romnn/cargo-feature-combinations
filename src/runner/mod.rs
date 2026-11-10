@@ -553,7 +553,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_invocation_plans_group_by_package_combo_and_target_order() -> eyre::Result<()> {
         let package_a = package("a")?;
         let package_b = package("b")?;
@@ -633,7 +633,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_invocation_plans_split_by_resolved_flags() -> eyre::Result<()> {
         let package = package("a")?;
         let dedupe_flags = ResolvedFlags {
@@ -695,7 +695,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_invocation_plans_split_by_resolved_driver() -> eyre::Result<()> {
         let package = package("a")?;
         let make_plan = |target: &str, driver: Option<&str>| {
@@ -745,7 +745,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_invocation_plans_split_by_resolved_env() -> eyre::Result<()> {
         let package = package("a")?;
         let configured_env = resolved_env(serde_json::json!({

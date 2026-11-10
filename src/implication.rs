@@ -260,7 +260,7 @@ mod test {
         Ok((kept, pruned))
     }
 
-    #[test]
+    #[test_util::test]
     fn no_implications_no_pruning() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &[]), ("C", &[])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -269,7 +269,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn simple_implication_b_implies_a() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["A"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -280,7 +280,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn maybe_prune_uses_resolved_no_prune_flag_only() -> eyre::Result<()> {
         use crate::config::{Config, FlagConfig, ResolvedFeatures};
         use crate::package::Package;
@@ -301,7 +301,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn transitive_chain_c_b_a() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["A"]), ("C", &["B"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -311,7 +311,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn dep_syntax_ignored() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["dep:some_dep", "A"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -321,7 +321,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn slash_syntax_ignored() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["some-crate/feature", "A"])]);
         let (_kept, pruned) = run_prune(&feat)?;
@@ -330,7 +330,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn weak_dep_syntax_ignored() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["?dep:x/y", "A"])]);
         let (_kept, pruned) = run_prune(&feat)?;
@@ -339,7 +339,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn nonexistent_implied_feature_ignored() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["NonExistent"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -349,7 +349,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn diamond_graph() -> eyre::Result<()> {
         let feat = features(&[("A", &[]), ("B", &["A"]), ("C", &["A"]), ("D", &["B", "C"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -369,7 +369,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutual_implication_lexicographic_tiebreak() -> eyre::Result<()> {
         let feat = features(&[("A", &["B"]), ("B", &["A"])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -379,7 +379,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn resolved_set_correctness() -> eyre::Result<()> {
         let package = package_with(features(&[("A", &[]), ("B", &["A"]), ("C", &["B"])]), &[])?;
         let graph = build_implication_graph(&package);
@@ -396,7 +396,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn self_referencing_feature_no_crash() -> eyre::Result<()> {
         let feat = features(&[("A", &["A"]), ("B", &[])]);
         let (kept, pruned) = run_prune(&feat)?;
@@ -406,7 +406,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn empty_features_no_pruning() -> eyre::Result<()> {
         let package = package_with(BTreeMap::new(), &[])?;
         let result = prune_implied_combinations(Vec::new(), &package);
@@ -469,7 +469,7 @@ mod test {
     // The cases below mirror what `cargo tree -e features` reports Cargo enabling for
     // `--no-default-features --features tls`.
 
-    #[test]
+    #[test_util::test]
     fn dependency_feature_enables_the_implicit_optional_dependency_feature() -> eyre::Result<()> {
         let enabled = enabled_by_tls(
             &[("foo", &["dep:foo"]), ("tls", &["foo/bar"])],
@@ -479,7 +479,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn dependency_feature_enables_an_explicit_feature_named_after_the_dependency()
     -> eyre::Result<()> {
         // The explicit `foo` feature hides the implicit one but is enabled the same way, and its
@@ -496,7 +496,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn dependency_feature_uses_the_renamed_dependency_name() -> eyre::Result<()> {
         let enabled = enabled_by_tls(
             &[("baz", &["dep:baz"]), ("tls", &["baz/bar"])],
@@ -506,7 +506,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn target_specific_optional_dependency_forms_no_edge() -> eyre::Result<()> {
         // Cargo enables `foo` here only when building for Windows, so the graph, which serves
         // every target, must not assume it.
@@ -518,7 +518,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn untargeted_listing_forms_the_edge_beside_a_target_specific_one() -> eyre::Result<()> {
         // The untargeted listing is active on every target, whatever the other listing says.
         let enabled = enabled_by_tls(
@@ -532,7 +532,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn weak_dependency_feature_enables_no_feature() -> eyre::Result<()> {
         let enabled = enabled_by_tls(
             &[("foo", &["dep:foo"]), ("tls", &["foo?/bar"])],
@@ -542,7 +542,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn dependency_feature_enables_nothing_without_a_feature_of_that_name() -> eyre::Result<()> {
         // `dep:foo` hides the implicit feature, and no explicit `foo` replaces it.
         let enabled = enabled_by_tls(
@@ -553,7 +553,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn non_optional_dependency_feature_leaves_a_same_named_feature_off() -> eyre::Result<()> {
         let enabled = enabled_by_tls(
             &[("foo", &[]), ("tls", &["foo/bar"])],

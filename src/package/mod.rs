@@ -185,14 +185,7 @@ pub(crate) mod test {
     use super::Package;
     use crate::config::ResolvedFeatures;
     use color_eyre::eyre;
-
-    static INIT: std::sync::Once = std::sync::Once::new();
-
-    pub(crate) fn init() {
-        INIT.call_once(|| {
-            color_eyre::install().ok();
-        });
-    }
+    use color_eyre::eyre::OptionExt as _;
 
     pub(crate) fn package(name: &str) -> eyre::Result<cargo_metadata::Package> {
         package_with_manifest_path(name, "")
@@ -246,9 +239,8 @@ pub(crate) mod test {
         Ok(package)
     }
 
-    #[test]
+    #[test_util::test]
     fn config_from_cargo_fc_alias() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo", "bar"],
             "cargo-fc",
@@ -261,9 +253,8 @@ pub(crate) mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_from_fc_alias() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo", "bar"],
             "fc",
@@ -276,9 +267,8 @@ pub(crate) mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_from_feature_combinations_alias() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["a", "b"],
             "feature-combinations",
@@ -289,9 +279,8 @@ pub(crate) mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_from_cargo_feature_combinations_alias() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["a", "b"],
             "cargo-feature-combinations",
@@ -306,9 +295,8 @@ pub(crate) mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_rejects_unknown_feature_names() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo"],
             "cargo-fc",
@@ -317,15 +305,15 @@ pub(crate) mod test {
 
         let err = package
             .config()
-            .expect_err("unknown feature names should fail config load");
+            .err()
+            .ok_or_eyre("unknown feature names should fail config load")?;
 
         assert!(err.to_string().contains("bar-typo"), "{err}");
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_rejects_unknown_feature_in_unmatched_target_section() -> eyre::Result<()> {
-        init();
         // The feature list does not depend on the resolution target, so even a
         // section whose cfg never matches this host must reference real names.
         let package = package_with_metadata(
@@ -342,15 +330,15 @@ pub(crate) mod test {
 
         let err = package
             .config()
-            .expect_err("unknown names in any target section should fail config load");
+            .err()
+            .ok_or_eyre("unknown names in any target section should fail config load")?;
 
         assert!(err.to_string().contains("ghost"), "{err}");
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_rejects_undeclared_default() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo"],
             "cargo-fc",
@@ -359,15 +347,15 @@ pub(crate) mod test {
 
         let err = package
             .config()
-            .expect_err("excluding an undeclared default feature should fail config load");
+            .err()
+            .ok_or_eyre("excluding an undeclared default feature should fail config load")?;
 
         assert!(err.to_string().contains("`default`"), "{err}");
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_validates_names_from_deprecated_keys() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo"],
             "cargo-fc",
@@ -376,15 +364,15 @@ pub(crate) mod test {
 
         let err = package
             .config()
-            .expect_err("deprecated spellings fold into checked keys");
+            .err()
+            .ok_or_eyre("deprecated spellings fold into checked keys")?;
 
         assert!(err.to_string().contains("typo"), "{err}");
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_default_when_no_metadata() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo"])?;
         let config = package.config()?;
         let resolved = ResolvedFeatures::from_config(&config);
@@ -393,9 +381,8 @@ pub(crate) mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn config_alias_affects_feature_matrix() -> eyre::Result<()> {
-        init();
         let package = package_with_metadata(
             &["foo", "bar"],
             "cargo-fc",

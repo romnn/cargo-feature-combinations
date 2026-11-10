@@ -108,7 +108,7 @@ fn as_vec_string(sets: &[Vec<&str>]) -> Vec<Vec<String>> {
     out
 }
 
-#[test]
+#[test_util::test]
 fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
     // Mirror the `simple` test from cargo-all-features/tests/settings.rs.
     let combos = feature_sets_for_settings("")?;
@@ -137,7 +137,7 @@ fn parity_simple_like_cargo_all_features() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<()> {
     // Mirror the `skip_opt_deps` test from cargo-all-features/tests/settings.rs.
     let settings = indoc::indoc! {r"
@@ -162,7 +162,7 @@ fn parity_skip_optional_dependencies_like_cargo_all_features() -> eyre::Result<(
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn optional_dependency_features_can_be_added_back_via_include_sets() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         skip_optional_dependencies = true

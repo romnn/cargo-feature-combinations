@@ -744,6 +744,7 @@ mod test {
     use crate::config::DEPRECATED_NO_PRUNE_IMPLIED;
     use crate::config::FlagConfig;
     use color_eyre::eyre;
+    use color_eyre::eyre::OptionExt as _;
     use similar_asserts::assert_eq as sim_assert_eq;
 
     fn parse_args(values: &[&str]) -> eyre::Result<(super::Options, Vec<String>)> {
@@ -752,11 +753,14 @@ mod test {
     }
 
     /// The message of an error the parser is expected to produce.
-    fn parse_error(values: &[&str], expectation: &str) -> String {
-        parse_args(values).expect_err(expectation).to_string()
+    fn parse_error(values: &[&str], expectation: &'static str) -> eyre::Result<String> {
+        Ok(parse_args(values)
+            .err()
+            .ok_or_eyre(expectation)?
+            .to_string())
     }
 
-    #[test]
+    #[test_util::test]
     fn bool_values_use_common_spellings() {
         assert_eq!(parse_bool("1"), Some(true));
         assert_eq!(parse_bool("on"), Some(true));
@@ -768,7 +772,7 @@ mod test {
         assert_eq!(parse_bool("maybe"), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn parsed_flags_use_structured_flag_config() {
         let options = super::Options {
             flags: FlagConfig {
@@ -783,7 +787,7 @@ mod test {
         assert_eq!(options.flags.summary_only, Some(true));
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_is_consumed_after_custom_subcommand() -> eyre::Result<()> {
         let (options, forwarded) =
             parse_args(&["+nightly", "udeps", "--maximal-features", "--all-targets"])?;
@@ -793,7 +797,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn structured_flags_preserve_explicit_false_values() {
         let options = super::Options {
             flags: FlagConfig {
@@ -806,7 +810,7 @@ mod test {
         assert_eq!(options.flags.verbose, Some(false));
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_keeps_cargo_fc_flags_after_double_dash() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&[
             "run",
@@ -843,7 +847,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_matrix_only_at_subcommand_position() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["test", "--features", "matrix"])?;
 
@@ -859,7 +863,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_version_only_at_subcommand_position() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["test", "version"])?;
 
@@ -868,7 +872,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_pretty_only_for_matrix_command() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["nextest", "run", "--pretty"])?;
 
@@ -893,7 +897,7 @@ mod test {
 
     /// `cargo fc matrix` spawns no cargo process, so a `--help` after it has
     /// nobody else to reach: it must print the matrix help, not the matrix.
-    #[test]
+    #[test_util::test]
     fn parse_help_after_matrix_asks_for_the_matrix_help() -> eyre::Result<()> {
         let (options, _forwarded) = parse_args(&["matrix", "-p", "cli", "--pretty", "--help"])?;
 
@@ -914,7 +918,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_help_after_version_asks_for_the_version_help() -> eyre::Result<()> {
         let (options, _forwarded) = parse_args(&["version", "--help"])?;
 
@@ -929,24 +933,26 @@ mod test {
 
     /// Cargo build flags used to be forwarded into a void, so a typo produced
     /// a plausible-looking matrix instead of a complaint.
-    #[test]
-    fn parse_matrix_rejects_arguments_it_cannot_honor() {
+    #[test_util::test]
+    fn parse_matrix_rejects_arguments_it_cannot_honor() -> eyre::Result<()> {
         for arg in ["--all-targets", "--release", "--pretyy", "--features=a", ""] {
-            let err = parse_error(&["matrix", arg], "unsupported matrix argument");
+            let err = parse_error(&["matrix", arg], "unsupported matrix argument")?;
             assert!(err.contains(arg), "{err}");
             assert!(err.contains("cargo fc matrix"), "{err}");
         }
+        Ok(())
     }
 
-    #[test]
-    fn parse_version_subcommand_rejects_arguments() {
-        let err = parse_error(&["version", "--pretty"], "`version` takes no arguments");
+    #[test_util::test]
+    fn parse_version_subcommand_rejects_arguments() -> eyre::Result<()> {
+        let err = parse_error(&["version", "--pretty"], "`version` takes no arguments")?;
         assert!(err.contains("takes no arguments"), "{err}");
+        Ok(())
     }
 
     /// The matrix reflects one command's per-command configuration, so a
     /// second bare word is a mistake rather than a silent winner.
-    #[test]
+    #[test_util::test]
     fn parse_matrix_takes_at_most_one_cargo_command() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["matrix", "build"])?;
         assert!(matches!(
@@ -955,14 +961,14 @@ mod test {
         ));
         sim_assert_eq!(forwarded, vec!["build".to_string()]);
 
-        let err = parse_error(&["matrix", "build", "test"], "two commands are ambiguous");
+        let err = parse_error(&["matrix", "build", "test"], "two commands are ambiguous")?;
         assert!(err.contains("one cargo command at a time"), "{err}");
         Ok(())
     }
 
     /// The command token has to reach cargo's own subcommand position, so
     /// `--target` may not be replayed in front of it however it was typed.
-    #[test]
+    #[test_util::test]
     fn parse_matrix_replays_the_command_before_the_target() -> eyre::Result<()> {
         let expected = vec![
             "build".to_string(),
@@ -983,7 +989,7 @@ mod test {
     /// Flags that only shape a run stay accepted so the same command line can
     /// be pointed at `matrix` or at a real run; `note_matrix_noop_flags`
     /// reports the ones that did nothing.
-    #[test]
+    #[test_util::test]
     fn parse_matrix_accepts_run_only_flags() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&[
             "matrix",
@@ -1000,23 +1006,24 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn parse_matrix_rejects_a_double_dash_it_cannot_forward() {
+    #[test_util::test]
+    fn parse_matrix_rejects_a_double_dash_it_cannot_forward() -> eyre::Result<()> {
         let err = parse_error(
             &["matrix", "--", "extra"],
             "`matrix` has nothing to forward to",
-        );
+        )?;
         assert!(err.contains("runs no program"), "{err}");
+        Ok(())
     }
 
     /// A `+toolchain` is only a toolchain override in cargo's leading position;
     /// after `matrix` it would silently become the cargo command instead.
-    #[test]
+    #[test_util::test]
     fn parse_matrix_rejects_a_trailing_toolchain_override() -> eyre::Result<()> {
         let err = parse_error(
             &["matrix", "+nightly"],
             "a trailing +toolchain is not a command",
-        );
+        )?;
         assert!(err.contains("must come before"), "{err}");
 
         let (options, forwarded) = parse_args(&["+nightly", "matrix"])?;
@@ -1030,7 +1037,7 @@ mod test {
 
     /// A leading `--help`/`--version` ends parsing: a later subcommand token
     /// used to overwrite it, so `cargo fc --help matrix` printed the matrix.
-    #[test]
+    #[test_util::test]
     fn parse_leading_help_wins_over_a_later_subcommand() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["--help", "matrix"])?;
         assert!(matches!(
@@ -1047,7 +1054,7 @@ mod test {
     /// `cargo metadata` resolves dependencies itself, so the lockfile flags
     /// must reach it too or `--locked` could still update Cargo.lock during
     /// discovery. They also stay in the forwarded args for the spawned cargo.
-    #[test]
+    #[test_util::test]
     fn parse_locking_flags_reach_metadata_and_cargo() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["check", "--locked", "--offline"])?;
         sim_assert_eq!(options.locking_flags, vec!["--locked", "--offline"]);
@@ -1068,29 +1075,30 @@ mod test {
 
     /// `matrix` spawns nothing, so the lockfile flags constrain only the
     /// metadata step and are not replayed into the forwarded args.
-    #[test]
+    #[test_util::test]
     fn parse_matrix_accepts_locking_flags_for_metadata() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["matrix", "--locked", "build"])?;
         sim_assert_eq!(options.locking_flags, vec!["--locked"]);
         sim_assert_eq!(forwarded, vec!["build".to_string()]);
 
-        let err = parse_error(&["version", "--locked"], "`version` reads no metadata");
+        let err = parse_error(&["version", "--locked"], "`version` reads no metadata")?;
         assert!(err.contains("takes no arguments"), "{err}");
         Ok(())
     }
 
     /// Before, this forwarded `--pretty` as a leading cargo flag, which turned
     /// `matrix` into a cargo subcommand run once per feature combination.
-    #[test]
-    fn parse_pretty_before_matrix_is_rejected() {
+    #[test_util::test]
+    fn parse_pretty_before_matrix_is_rejected() -> eyre::Result<()> {
         let err = parse_error(
             &["--pretty", "matrix"],
             "`--pretty` is not a leading cargo flag",
-        );
+        )?;
         assert!(err.contains("belongs to `cargo fc matrix`"), "{err}");
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_help_after_subcommand_is_forwarded() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["clippy", "--help"])?;
 
@@ -1099,7 +1107,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_value_options_are_last_wins() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["--driver", "cross", "--driver=cargo", "check"])?;
 
@@ -1108,7 +1116,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_env_options_accepts_inline_and_split_forms() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&[
             "--env",
@@ -1130,7 +1138,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parsed_options_debug_redacts_env_values() -> eyre::Result<()> {
         let (options, _forwarded) = parse_args(&["--env", "TOKEN=super-secret", "check"])?;
 
@@ -1142,10 +1150,11 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn parse_env_options_reject_invalid_assignments() {
-        let missing_equals =
-            parse_args(&["--env", "TOKEN", "check"]).expect_err("--env requires an assignment");
+    #[test_util::test]
+    fn parse_env_options_reject_invalid_assignments() -> eyre::Result<()> {
+        let missing_equals = parse_args(&["--env", "TOKEN", "check"])
+            .err()
+            .ok_or_eyre("--env requires an assignment")?;
         assert!(
             missing_equals
                 .to_string()
@@ -1153,24 +1162,29 @@ mod test {
             "{missing_equals}"
         );
 
-        let empty_name =
-            parse_args(&["--env", "=value", "check"]).expect_err("--env requires a nonempty name");
+        let empty_name = parse_args(&["--env", "=value", "check"])
+            .err()
+            .ok_or_eyre("--env requires a nonempty name")?;
         assert!(empty_name.to_string().contains("must not be empty"));
 
         let nul_name = parse_args(&["--env", "BAD\0NAME=value", "check"])
-            .expect_err("--env rejects NUL in names");
+            .err()
+            .ok_or_eyre("--env rejects NUL in names")?;
         assert!(nul_name.to_string().contains("NUL"));
 
         let nul_value = parse_args(&["--env", "TOKEN=bad\0value", "check"])
-            .expect_err("--env rejects NUL in values");
+            .err()
+            .ok_or_eyre("--env rejects NUL in values")?;
         assert!(nul_value.to_string().contains("NUL"));
 
         let unset_equals = parse_args(&["--unset-env", "BAD=NAME", "check"])
-            .expect_err("--unset-env rejects equals in names");
+            .err()
+            .ok_or_eyre("--unset-env rejects equals in names")?;
         assert!(unset_equals.to_string().contains("must not contain `=`"));
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_exclude_alias_strips_cargo_workspace_exclude() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&["check", "--workspace", "--exclude", " skip "])?;
 
@@ -1184,7 +1198,7 @@ mod test {
     ///
     /// `verbose` is the deliberate exception: `--verbose` is cargo's own flag
     /// and is forwarded, so `CARGO_FC_VERBOSE` carries the cargo-fc setting.
-    #[test]
+    #[test_util::test]
     fn every_config_flag_key_is_settable_from_the_cli() -> eyre::Result<()> {
         for key in crate::config::FLAG_KEYS {
             // `dedup` is a spelling alias of `dedupe` rather than a field of its
@@ -1209,7 +1223,7 @@ mod test {
 
     /// Every boolean flag can turn a `Cargo.toml` default back off for one run,
     /// which is the whole point of accepting an inline value.
-    #[test]
+    #[test_util::test]
     fn parse_bool_flags_accept_an_inline_value() -> eyre::Result<()> {
         let (options, forwarded) = parse_args(&[
             "check",
@@ -1230,7 +1244,7 @@ mod test {
     }
 
     /// A bare flag keeps meaning "on", so existing invocations are unaffected.
-    #[test]
+    #[test_util::test]
     fn parse_bare_bool_flag_still_enables() -> eyre::Result<()> {
         let (options, _forwarded) = parse_args(&["check", "--summary-only"])?;
 
@@ -1240,7 +1254,7 @@ mod test {
 
     /// `--dedupe` implies diagnostics-only output, but `--dedupe=false` must not
     /// silently enable a mode the user never asked for.
-    #[test]
+    #[test_util::test]
     fn parse_dedupe_only_implies_diagnostics_when_enabled() -> eyre::Result<()> {
         let (enabled, _) = parse_args(&["clippy", "--dedupe"])?;
         assert_eq!(enabled.flags.dedupe, Some(true));
@@ -1252,7 +1266,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_prune_implied_sets_the_current_key() -> eyre::Result<()> {
         let (enabled, _) = parse_args(&["check", "--prune-implied"])?;
         assert_eq!(enabled.flags.prune_implied, Some(true));
@@ -1264,7 +1278,7 @@ mod test {
 
     /// The deprecated spelling keeps working and folds into the current key,
     /// inverted, so nothing downstream of parsing sees it.
-    #[test]
+    #[test_util::test]
     fn parse_deprecated_prune_spelling_still_works() -> eyre::Result<()> {
         let (disabled, _) = parse_args(&["check", "--no-prune-implied"])?;
         assert_eq!(disabled.flags.prune_implied, Some(false));
@@ -1277,38 +1291,44 @@ mod test {
 
     /// Naming one setting twice is a mistake, not a race the flag order
     /// silently settles.
-    #[test]
-    fn parse_rejects_both_prune_spellings_together() {
+    #[test_util::test]
+    fn parse_rejects_both_prune_spellings_together() -> eyre::Result<()> {
         let err = parse_args(&["check", "--no-prune-implied", "--prune-implied"])
-            .expect_err("mixing prune spellings should fail");
+            .err()
+            .ok_or_eyre("mixing prune spellings should fail")?;
 
         let message = err.to_string();
         assert!(message.contains("`--no-prune-implied`"), "{message}");
         assert!(message.contains("pass only one"), "{message}");
+        Ok(())
     }
 
-    #[test]
-    fn parse_rejects_unparsable_inline_bool_values() {
+    #[test_util::test]
+    fn parse_rejects_unparsable_inline_bool_values() -> eyre::Result<()> {
         let err = parse_args(&["check", "--summary-only=maybe"])
-            .expect_err("a non-boolean value should fail clearly");
+            .err()
+            .ok_or_eyre("a non-boolean value should fail clearly")?;
 
         assert!(err.to_string().contains("--summary-only"), "{err}");
         assert!(err.to_string().contains("maybe"), "{err}");
+        Ok(())
     }
 
     /// `--workspace` and the commands have no configurable default, so a value
     /// is a mistake rather than an override.
-    #[test]
-    fn parse_rejects_values_for_switches_without_a_default() {
+    #[test_util::test]
+    fn parse_rejects_values_for_switches_without_a_default() -> eyre::Result<()> {
         let err = parse_args(&["check", "--workspace=true"])
-            .expect_err("--workspace should not accept a value");
+            .err()
+            .ok_or_eyre("--workspace should not accept a value")?;
 
         assert!(err.to_string().contains("does not accept a value"), "{err}");
+        Ok(())
     }
 
     /// A cargo flag that happens to carry an inline value must reach cargo
     /// untouched.
-    #[test]
+    #[test_util::test]
     fn parse_forwards_inline_values_of_cargo_flags() -> eyre::Result<()> {
         let (_options, forwarded) = parse_args(&["check", "--features=a,b"])?;
 

@@ -157,7 +157,7 @@ mod test {
         Ok(&package_plan.combinations)
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_collapses_an_additive_powerset_to_its_union() -> eyre::Result<()> {
         let package = package("additive")?;
         let mut plan_set = ExecutionPlanSet {
@@ -185,7 +185,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_keeps_incompatible_maximal_sets_separate() -> eyre::Result<()> {
         let package = package("alternatives")?;
         let mut plan_set = ExecutionPlanSet {
@@ -220,7 +220,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_keep_one_row_for_each_of_five_alternatives() {
         let combinations = vec![
             Vec::new(),
@@ -251,7 +251,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_keep_shorter_rows_when_they_are_not_subsets() {
         let combinations = vec![
             Vec::new(),
@@ -266,7 +266,7 @@ mod test {
         sim_assert_eq!(maximal, vec![string_vec(&["a"]), string_vec(&["b", "c"])]);
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_cross_independent_alternative_groups() {
         let combinations = vec![
             Vec::new(),
@@ -297,7 +297,7 @@ mod test {
     /// The flag resolves per package-target: only flagged packages collapse,
     /// and `show_pruned` survives while an uncollapsed package still has
     /// pruned rows to display.
-    #[test]
+    #[test_util::test]
     fn maximal_features_apply_per_package_scope() -> eyre::Result<()> {
         let flagged = package("flagged")?;
         let unflagged = package("unflagged")?;
@@ -353,7 +353,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn maximal_features_uses_the_canonical_implied_feature_representative() -> eyre::Result<()> {
         let package = package("implied")?;
         let mut package_plan = package_plan(

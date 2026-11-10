@@ -150,7 +150,7 @@ fn vs(strs: &[&str]) -> Vec<String> {
     strs.iter().copied().map(String::from).collect()
 }
 
-#[test]
+#[test_util::test]
 fn simple_implication() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -191,7 +191,7 @@ fn simple_implication() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn transitive_chain() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -212,7 +212,7 @@ fn transitive_chain() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn include_features_no_false_pruning() -> eyre::Result<()> {
     // When include_features adds A to every combo, [A, B] is NOT redundant
     // with [A] because their resolved sets differ: {A} vs {A, B}.
@@ -235,7 +235,7 @@ fn include_features_no_false_pruning() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn disabled_via_config() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -255,7 +255,7 @@ fn disabled_via_config() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn disabled_via_no_prune_implied_config() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -274,7 +274,7 @@ fn disabled_via_no_prune_implied_config() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn allow_feature_sets_bypasses_pruning() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -294,7 +294,7 @@ fn allow_feature_sets_bypasses_pruning() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn dep_syntax_not_treated_as_implication() -> eyre::Result<()> {
     let result = run_prune_test_with_dep(
         indoc::indoc! {r#"
@@ -315,7 +315,7 @@ fn dep_syntax_not_treated_as_implication() -> eyre::Result<()> {
 
 /// Cargo enables the implicit `optDep` feature for `optDep/bar`, so listing it beside `tls`
 /// changes nothing.
-#[test]
+#[test_util::test]
 fn dependency_feature_implies_the_optional_dependency_feature() -> eyre::Result<()> {
     let result = run_prune_test_with_dep(
         indoc::indoc! {r#"
@@ -332,7 +332,7 @@ fn dependency_feature_implies_the_optional_dependency_feature() -> eyre::Result<
 
 /// Cargo enables `optDep` for `optDep/bar` only when building for Windows, so `[optDep, tls]`
 /// and `[tls]` build differently elsewhere and both stay.
-#[test]
+#[test_util::test]
 fn target_specific_dependency_feature_prunes_nothing() -> eyre::Result<()> {
     let temp = dummy_crate_with_dep_in(
         "[target.'cfg(windows)'.dependencies]",
@@ -357,7 +357,7 @@ fn target_specific_dependency_feature_prunes_nothing() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn diamond_graph() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -386,7 +386,7 @@ fn diamond_graph() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn no_implications_no_pruning() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {"
@@ -404,7 +404,7 @@ fn no_implications_no_pruning() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn isolated_feature_sets_with_pruning() -> eyre::Result<()> {
     // Pruning applies to the final combined output of isolated sets.
     let result = run_prune_test(
@@ -439,7 +439,7 @@ fn isolated_feature_sets_with_pruning() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn exclude_feature_sets_with_pruning() -> eyre::Result<()> {
     // exclude_feature_sets is applied first, then pruning on the remainder.
     let result = run_prune_test(
@@ -467,7 +467,7 @@ fn exclude_feature_sets_with_pruning() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn no_empty_feature_set_with_pruning() -> eyre::Result<()> {
     let result = run_prune_test(
         indoc::indoc! {r#"
@@ -613,7 +613,7 @@ fn execute_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
     Ok(PruneTestResult { kept, pruned })
 }
 
-#[test]
+#[test_util::test]
 fn target_override_changes_matrix_then_pruning_applies() -> eyre::Result<()> {
     // A target override excludes feature C, changing the matrix.
     // Pruning should apply to the resulting smaller matrix.
@@ -659,7 +659,7 @@ fn target_override_changes_matrix_then_pruning_applies() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_override_disables_pruning_for_specific_target() -> eyre::Result<()> {
     // Base config has pruning enabled (default). A target override disables it.
     let temp = TempDir::new()?;
@@ -691,7 +691,7 @@ fn target_override_disables_pruning_for_specific_target() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_override_include_features_interacts_with_pruning() -> eyre::Result<()> {
     // A target override adds A to include_features, making it appear in every combo.
     // This changes whether pruning can fire.

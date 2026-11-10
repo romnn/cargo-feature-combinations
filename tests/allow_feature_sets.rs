@@ -76,7 +76,7 @@ fn contains_exact_set(combos: &[Vec<String>], expected: &[&str]) -> bool {
     })
 }
 
-#[test]
+#[test_util::test]
 fn allow_feature_sets_is_exact_allowlist() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         allow_feature_sets = [["hydrate"], ["ssr"]]
@@ -93,20 +93,22 @@ fn allow_feature_sets_is_exact_allowlist() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
-fn allow_feature_sets_rejects_non_existent_features() {
+#[test_util::test]
+fn allow_feature_sets_rejects_non_existent_features() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         allow_feature_sets = [["hydrate", "does-not-exist"], ["ssr"]]
     "#};
 
     let err = feature_sets_for_settings(settings)
-        .expect_err("unknown feature names should fail config load");
+        .err()
+        .ok_or_eyre("unknown feature names should fail config load")?;
 
     assert!(err.to_string().contains("does-not-exist"), "{err}");
     assert!(err.to_string().contains("allow_feature_sets"), "{err}");
+    Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn allow_feature_sets_can_be_combined_with_no_empty_feature_set() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         allow_feature_sets = [[], ["hydrate"]]

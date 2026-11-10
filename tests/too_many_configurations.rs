@@ -5,7 +5,7 @@ use cargo_feature_combinations::{Package as _, ResolvedFeatures};
 use color_eyre::eyre::{self, OptionExt};
 use std::fmt::Write as _;
 
-#[test]
+#[test_util::test]
 fn too_many_feature_configurations_errors_gracefully() -> eyre::Result<()> {
     let temp = assert_fs::TempDir::new()?;
 

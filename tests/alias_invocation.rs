@@ -125,7 +125,7 @@ fn parse_records(contents: &str) -> eyre::Result<Vec<Recorded>> {
 
 /// Regression test for #23: a cwd-relative path in an alias body resolves
 /// against the invocation directory for members at every depth.
-#[test]
+#[test_util::test]
 fn relative_alias_path_resolves_from_invocation_directory() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
     fixture.write_alias_config(indoc! {r#"
@@ -165,7 +165,7 @@ fn relative_alias_path_resolves_from_invocation_directory() -> eyre::Result<()> 
 }
 
 /// A `CARGO_ALIAS_<NAME>` variable overrides the config-file alias, as in Cargo.
-#[test]
+#[test_util::test]
 fn env_alias_overrides_config_alias() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
     fixture.write_alias_config(indoc! {r#"
@@ -205,7 +205,7 @@ fn env_alias_overrides_config_alias() -> eyre::Result<()> {
 
 /// A manifest in a normal alias body locates the workspace, so the planned
 /// package is selected by its ID instead of a second, conflicting manifest.
-#[test]
+#[test_util::test]
 fn alias_manifest_selects_package_by_id() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
     fixture.write_alias_config(indoc! {r#"
@@ -247,7 +247,7 @@ fn alias_manifest_selects_package_by_id() -> eyre::Result<()> {
 
 /// From outside the workspace, a wrapper alias's outer `cargo run` gets the
 /// manifest cargo-fc was given, and the wrapped command gets the package.
-#[test]
+#[test_util::test]
 fn wrapper_alias_outside_workspace_uses_cargo_fc_manifest() -> eyre::Result<()> {
     let fixture = Fixture::new()?;
     let outside = fixture.path("outside")?;

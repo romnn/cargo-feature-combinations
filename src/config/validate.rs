@@ -690,6 +690,8 @@ fn valid_in(kind: SettingKind, scope: ScopeId) -> Result<(), &'static str> {
 mod tests {
     use super::{SettingKind, setting_kind, valid_in};
     use crate::config::scope::ScopeId;
+    use color_eyre::eyre;
+    use color_eyre::eyre::{OptionExt as _, WrapErr as _};
     use serde::Serialize;
     use serde_json::Value;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -701,8 +703,8 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn feature_names_accept_known_names_in_all_scopes() {
+    #[test_util::test]
+    fn feature_names_accept_known_names_in_all_scopes() -> eyre::Result<()> {
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
             "exclude_features": ["cuda"],
             "mutually_exclusive_features": [["cuda", "coreml"]],
@@ -718,7 +720,7 @@ mod tests {
                 },
             },
         }))
-        .expect("deserialize config");
+        .wrap_err("deserialize config")?;
 
         super::validate_feature_names(
             &config,
@@ -726,11 +728,12 @@ mod tests {
             "pkg",
             "package.metadata.cargo-fc",
         )
-        .expect("all referenced names are declared features");
+        .wrap_err("all referenced names are declared features")?;
+        Ok(())
     }
 
-    #[test]
-    fn feature_names_reject_unknown_names_with_locations() {
+    #[test_util::test]
+    fn feature_names_reject_unknown_names_with_locations() -> eyre::Result<()> {
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
             "exclude_features": ["typo-a"],
             "target": {
@@ -739,7 +742,7 @@ mod tests {
                 },
             },
         }))
-        .expect("deserialize config");
+        .wrap_err("deserialize config")?;
 
         let err = super::validate_feature_names(
             &config,
@@ -747,7 +750,8 @@ mod tests {
             "pkg",
             "package.metadata.cargo-fc",
         )
-        .expect_err("unknown names should fail, even in non-matching target sections");
+        .err()
+        .ok_or_eyre("unknown names should fail, even in non-matching target sections")?;
         let message = err.to_string();
 
         assert!(message.contains("`typo-a` (exclude_features)"), "{message}");
@@ -756,16 +760,17 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("package features are: cuda"), "{message}");
+        Ok(())
     }
 
-    #[test]
-    fn feature_names_reject_undeclared_default() {
+    #[test_util::test]
+    fn feature_names_reject_undeclared_default() -> eyre::Result<()> {
         // Cargo itself rejects `--features default` when the package declares
         // no `default` feature, so cargo-fc is deliberately just as strict.
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
             "exclude_features": ["default"],
         }))
-        .expect("deserialize config");
+        .wrap_err("deserialize config")?;
 
         let err = super::validate_feature_names(
             &config,
@@ -773,13 +778,15 @@ mod tests {
             "pkg",
             "package.metadata.cargo-fc",
         )
-        .expect_err("undeclared default is not exempt");
+        .err()
+        .ok_or_eyre("undeclared default is not exempt")?;
 
         assert!(err.to_string().contains("`default`"), "{err}");
+        Ok(())
     }
 
-    #[test]
-    fn feature_name_validation_covers_every_patch_typed_feature_key() {
+    #[test_util::test]
+    fn feature_name_validation_covers_every_patch_typed_feature_key() -> eyre::Result<()> {
         // Guards `unknown_feature_names()` against drift: a key registered in
         // the schema key lists but missing from the walk would silently skip
         // validation for that key.
@@ -797,7 +804,7 @@ mod tests {
                     serde_json::from_value::<crate::config::Config>(serde_json::Value::Object(map))
                         .ok()
                 })
-                .unwrap_or_else(|| panic!("`{key}` accepts neither name-list shape"));
+                .ok_or_else(|| eyre::eyre!("`{key}` accepts neither name-list shape"))?;
 
             let Err(err) = super::validate_feature_names(
                 &config,
@@ -805,21 +812,22 @@ mod tests {
                 "pkg",
                 "package.metadata.cargo-fc",
             ) else {
-                panic!(
+                eyre::bail!(
                     "`{key}` referencing unknown feature `ghost` passed validation; add the key to unknown_feature_names()"
                 );
             };
             let message = err.to_string();
             assert!(message.contains(&format!("({key})")), "{key}: {message}");
         }
+        Ok(())
     }
 
-    #[test]
-    fn feature_names_check_remove_operations() {
+    #[test_util::test]
+    fn feature_names_check_remove_operations() -> eyre::Result<()> {
         let config: crate::config::Config = serde_json::from_value(serde_json::json!({
             "exclude_features": { "remove": ["typo"] },
         }))
-        .expect("deserialize config");
+        .wrap_err("deserialize config")?;
 
         let err = super::validate_feature_names(
             &config,
@@ -827,19 +835,21 @@ mod tests {
             "pkg",
             "package.metadata.cargo-fc",
         )
-        .expect_err("remove operations reference feature names too");
+        .err()
+        .ok_or_eyre("remove operations reference feature names too")?;
 
         assert!(err.to_string().contains("`typo`"), "{err}");
+        Ok(())
     }
 
-    #[test]
-    fn exclude_package_names_reject_unknown_members() {
+    #[test_util::test]
+    fn exclude_package_names_reject_unknown_members() -> eyre::Result<()> {
         let ws_config: crate::config::WorkspaceConfig = serde_json::from_value(serde_json::json!({
             "target": {
                 "cfg(unix)": { "exclude_packages": { "add": ["ghost"] } },
             },
         }))
-        .expect("deserialize workspace config");
+        .wrap_err("deserialize workspace config")?;
         let base_exclude = HashSet::from(["ghost-base".to_string()]);
         let members = BTreeSet::from(["member-a"]);
 
@@ -849,7 +859,8 @@ mod tests {
             &members,
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("unknown packages should fail");
+        .err()
+        .ok_or_eyre("unknown packages should fail")?;
         let message = err.to_string();
 
         assert!(message.contains("`ghost`"), "{message}");
@@ -858,17 +869,18 @@ mod tests {
             message.contains("workspace members are: member-a"),
             "{message}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn exclude_package_names_accept_members() {
+    #[test_util::test]
+    fn exclude_package_names_accept_members() -> eyre::Result<()> {
         let ws_config: crate::config::WorkspaceConfig = serde_json::from_value(serde_json::json!({
             "exclude_packages": ["member-b"],
             "target": {
                 "cfg(unix)": { "exclude_packages": { "remove": ["member-b"] } },
             },
         }))
-        .expect("deserialize workspace config");
+        .wrap_err("deserialize workspace config")?;
         let base_exclude = HashSet::from(["member-b".to_string()]);
         let members = BTreeSet::from(["member-a", "member-b"]);
 
@@ -878,7 +890,8 @@ mod tests {
             &members,
             "workspace.metadata.cargo-fc",
         )
-        .expect("workspace members are valid excludes");
+        .wrap_err("workspace members are valid excludes")?;
+        Ok(())
     }
 
     fn scope_ids() -> [ScopeId; 8] {
@@ -894,7 +907,7 @@ mod tests {
         ]
     }
 
-    #[test]
+    #[test_util::test]
     fn every_known_key_has_a_setting_kind() {
         for key in crate::config::FLAG_KEYS
             .iter()
@@ -919,18 +932,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn feature_matrix_key_list_matches_schema() {
-        let schema_keys = keys_for(crate::config::FeatureMatrixPatch::default());
+    #[test_util::test]
+    fn feature_matrix_key_list_matches_schema() -> eyre::Result<()> {
+        let schema_keys = keys_for(crate::config::FeatureMatrixPatch::default())?;
         let validation_keys = super::FEATURE_MATRIX_KEYS
             .iter()
             .map(|key| (*key).to_string())
             .collect::<BTreeSet<_>>();
 
         assert_eq!(validation_keys, schema_keys);
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn every_setting_kind_is_valid_somewhere() {
         for kind in [
             SettingKind::Flag,
@@ -954,31 +968,34 @@ mod tests {
         }
     }
 
-    #[test]
-    fn package_metadata_rejects_unknown_flag_keys() {
+    #[test_util::test]
+    fn package_metadata_rejects_unknown_flag_keys() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({ "fail-fast": true }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("hyphenated cargo-fc flag should fail");
+        .err()
+        .ok_or_eyre("hyphenated cargo-fc flag should fail")?;
 
         assert!(err.to_string().contains("fail-fast"));
         assert!(err.to_string().contains("use `_`, not `-`"));
+        Ok(())
     }
 
-    #[test]
-    fn package_subcommand_accepts_feature_matrix_keys() {
+    #[test_util::test]
+    fn package_subcommand_accepts_feature_matrix_keys() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "subcommands": { "test": { "exclude_features": ["gpu"] } },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package subcommand should accept feature-matrix keys");
+        .wrap_err("package subcommand should accept feature-matrix keys")?;
+        Ok(())
     }
 
-    #[test]
-    fn package_target_subcommand_accepts_feature_matrix_keys() {
+    #[test_util::test]
+    fn package_target_subcommand_accepts_feature_matrix_keys() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "target": {
@@ -989,11 +1006,12 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package target subcommand should accept feature-matrix keys");
+        .wrap_err("package target subcommand should accept feature-matrix keys")?;
+        Ok(())
     }
 
-    #[test]
-    fn mutually_exclusive_features_accepts_patch_shape_in_package_scopes() {
+    #[test_util::test]
+    fn mutually_exclusive_features_accepts_patch_shape_in_package_scopes() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "mutually_exclusive_features": [["cuda", "coreml"]],
@@ -1007,38 +1025,43 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("feature groups should accept feature-set patch syntax");
+        .wrap_err("feature groups should accept feature-set patch syntax")?;
+        Ok(())
     }
 
-    #[test]
-    fn mutually_exclusive_features_rejects_invalid_patch_shape() {
+    #[test_util::test]
+    fn mutually_exclusive_features_rejects_invalid_patch_shape() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "mutually_exclusive_features": { "add": "cuda" },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("feature group patch operations must contain arrays");
+        .err()
+        .ok_or_eyre("feature group patch operations must contain arrays")?;
 
         assert!(err.to_string().contains("mutually_exclusive_features"));
         assert!(err.to_string().contains("must be an array"));
+        Ok(())
     }
 
-    #[test]
-    fn workspace_rejects_mutually_exclusive_features() {
+    #[test_util::test]
+    fn workspace_rejects_mutually_exclusive_features() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "mutually_exclusive_features": [["cuda", "coreml"]],
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("feature groups are package-scoped");
+        .err()
+        .ok_or_eyre("feature groups are package-scoped")?;
 
         assert!(err.to_string().contains("per-package"));
+        Ok(())
     }
 
-    #[test]
-    fn required_feature_groups_accept_patch_shape_in_package_scopes() {
+    #[test_util::test]
+    fn required_feature_groups_accept_patch_shape_in_package_scopes() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "required_feature_groups": [["cuda", "coreml"]],
@@ -1058,12 +1081,13 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("required groups should accept feature-set patch syntax");
+        .wrap_err("required groups should accept feature-set patch syntax")?;
+        Ok(())
     }
 
     /// An empty group can never be met, so every way of setting or adding one is rejected.
-    #[test]
-    fn required_feature_groups_reject_empty_groups() {
+    #[test_util::test]
+    fn required_feature_groups_reject_empty_groups() -> eyre::Result<()> {
         let cases = [
             (
                 serde_json::json!({ "required_feature_groups": [["cuda"], []] }),
@@ -1080,46 +1104,52 @@ mod tests {
         ];
         for (raw, location) in cases {
             let err = super::validate_package_metadata(&raw, "package.metadata.cargo-fc")
-                .expect_err("an empty required group must be rejected");
+                .err()
+                .ok_or_eyre("an empty required group must be rejected")?;
             let message = err.to_string();
 
             assert!(message.contains(location), "{message}");
             assert!(message.contains("empty group"), "{message}");
         }
+        Ok(())
     }
 
     /// Removing an empty group cannot shrink the matrix, so it stays a harmless no-op.
-    #[test]
-    fn required_feature_groups_accept_removing_an_empty_group() {
+    #[test_util::test]
+    fn required_feature_groups_accept_removing_an_empty_group() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "required_feature_groups": { "remove": [[]] },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("removing an empty group is accepted");
+        .wrap_err("removing an empty group is accepted")?;
+        Ok(())
     }
 
-    #[test]
-    fn workspace_rejects_required_feature_groups() {
+    #[test_util::test]
+    fn workspace_rejects_required_feature_groups() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "required_feature_groups": [["cuda", "coreml"]],
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("required groups are package-scoped");
+        .err()
+        .ok_or_eyre("required groups are package-scoped")?;
 
         assert!(err.to_string().contains("per-package"));
+        Ok(())
     }
 
-    #[test]
-    fn workspace_base_rejects_inherit_false() {
+    #[test_util::test]
+    fn workspace_base_rejects_inherit_false() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({ "inherit": false }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace base should reject inherit = false");
+        .err()
+        .ok_or_eyre("workspace base should reject inherit = false")?;
         assert!(err.to_string().contains("nothing broader to discard"));
 
         // The deprecated `replace = true` alias hits the same rule.
@@ -1127,21 +1157,24 @@ mod tests {
             &serde_json::json!({ "replace": true }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace base should reject the legacy replace alias");
+        .err()
+        .ok_or_eyre("workspace base should reject the legacy replace alias")?;
         assert!(err.to_string().contains("nothing broader to discard"));
+        Ok(())
     }
 
-    #[test]
-    fn workspace_base_accepts_redundant_inherit_true() {
+    #[test_util::test]
+    fn workspace_base_accepts_redundant_inherit_true() -> eyre::Result<()> {
         super::validate_workspace_metadata(
             &serde_json::json!({ "inherit": true }),
             "workspace.metadata.cargo-fc",
         )
-        .expect("inherit = true at the workspace base is a harmless no-op");
+        .wrap_err("inherit = true at the workspace base is a harmless no-op")?;
+        Ok(())
     }
 
-    #[test]
-    fn package_base_and_subcommands_accept_inherit_false() {
+    #[test_util::test]
+    fn package_base_and_subcommands_accept_inherit_false() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "inherit": false,
@@ -1149,7 +1182,7 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package base and subcommands should accept inherit = false");
+        .wrap_err("package base and subcommands should accept inherit = false")?;
 
         // The deprecated `replace = true` alias is still parsed and accepted.
         super::validate_package_metadata(
@@ -1159,52 +1192,59 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package base and subcommands should accept the legacy replace alias");
+        .wrap_err("package base and subcommands should accept the legacy replace alias")?;
+        Ok(())
     }
 
-    #[test]
-    fn workspace_subcommand_accepts_exclude_packages() {
+    #[test_util::test]
+    fn workspace_subcommand_accepts_exclude_packages() -> eyre::Result<()> {
         super::validate_workspace_metadata(
             &serde_json::json!({
                 "subcommands": { "test": { "exclude_packages": { "add": ["foo"] } } },
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect("workspace subcommand should accept exclude_packages");
+        .wrap_err("workspace subcommand should accept exclude_packages")?;
+        Ok(())
     }
 
-    #[test]
-    fn package_subcommand_rejects_exclude_packages() {
+    #[test_util::test]
+    fn package_subcommand_rejects_exclude_packages() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "subcommands": { "test": { "exclude_packages": ["foo"] } },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("package subcommand should reject exclude_packages");
+        .err()
+        .ok_or_eyre("package subcommand should reject exclude_packages")?;
         assert!(err.to_string().contains("workspace scope"));
+        Ok(())
     }
 
-    #[test]
-    fn workspace_subcommand_rejects_feature_matrix_keys() {
+    #[test_util::test]
+    fn workspace_subcommand_rejects_feature_matrix_keys() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "subcommands": { "test": { "exclude_features": ["gpu"] } },
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace subcommand should reject per-package feature-matrix keys");
+        .err()
+        .ok_or_eyre("workspace subcommand should reject per-package feature-matrix keys")?;
 
         assert!(err.to_string().contains("per-package"));
+        Ok(())
     }
 
-    #[test]
-    fn package_metadata_rejects_wrong_value_shapes_with_key_context() {
+    #[test_util::test]
+    fn package_metadata_rejects_wrong_value_shapes_with_key_context() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({ "exclude_features": "gpu" }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("patch field should reject string value");
+        .err()
+        .ok_or_eyre("patch field should reject string value")?;
         assert!(err.to_string().contains("exclude_features"), "{err}");
         assert!(err.to_string().contains("must be an array"), "{err}");
 
@@ -1212,7 +1252,8 @@ mod tests {
             &serde_json::json!({ "pedantic": "true" }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("flag field should reject string value");
+        .err()
+        .ok_or_eyre("flag field should reject string value")?;
         assert!(err.to_string().contains("pedantic"), "{err}");
         assert!(err.to_string().contains("boolean"), "{err}");
 
@@ -1220,29 +1261,33 @@ mod tests {
             &serde_json::json!({ "exclude_features": { "append": ["gpu"] } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("patch field should reject unknown operation");
+        .err()
+        .ok_or_eyre("patch field should reject unknown operation")?;
         assert!(err.to_string().contains("append"), "{err}");
+        Ok(())
     }
 
-    #[test]
-    fn deprecated_feature_keys_have_specific_scope_error() {
+    #[test_util::test]
+    fn deprecated_feature_keys_have_specific_scope_error() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "target": { "cfg(unix)": { "denylist": ["gpu"] } },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("deprecated feature key should fail outside package base");
+        .err()
+        .ok_or_eyre("deprecated feature key should fail outside package base")?;
 
         let message = err.to_string();
         assert!(message.contains("deprecated"), "{message}");
         assert!(message.contains("exclude_features"), "{message}");
+        Ok(())
     }
 
     /// Every deprecated key names a setting that already has a current
     /// spelling, so a scope using both is ambiguous rather than additive.
-    #[test]
-    fn deprecated_and_current_spelling_in_one_scope_error() {
+    #[test_util::test]
+    fn deprecated_and_current_spelling_in_one_scope_error() -> eyre::Result<()> {
         for (deprecated, replacement, value) in [
             ("denylist", "exclude_features", serde_json::json!(["gpu"])),
             (
@@ -1266,16 +1311,18 @@ mod tests {
                 &serde_json::Value::Object(scope),
                 "package.metadata.cargo-fc",
             )
-            .expect_err("one setting spelled two ways should fail");
+            .err()
+            .ok_or_eyre("one setting spelled two ways should fail")?;
 
             let message = err.to_string();
             assert!(message.contains(deprecated), "{message}");
             assert!(message.contains(replacement), "{message}");
         }
+        Ok(())
     }
 
     /// The deprecated spellings stay accepted on their own.
-    #[test]
+    #[test_util::test]
     fn deprecated_spelling_alone_still_validates() -> color_eyre::eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({ "denylist": ["gpu"], "replace": true, "no_prune_implied": true }),
@@ -1283,27 +1330,30 @@ mod tests {
         )
     }
 
-    #[test]
-    fn misplaced_known_keys_get_scope_aware_reasons() {
+    #[test_util::test]
+    fn misplaced_known_keys_get_scope_aware_reasons() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({ "exclude_features": ["gpu"] }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace base should reject feature-matrix keys");
+        .err()
+        .ok_or_eyre("workspace base should reject feature-matrix keys")?;
         assert!(err.to_string().contains("per-package"), "{err}");
 
         let err = super::validate_package_metadata(
             &serde_json::json!({ "subcommands": { "test": { "exclude_packages": ["foo"] } } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("package subcommand should reject exclude_packages");
+        .err()
+        .ok_or_eyre("package subcommand should reject exclude_packages")?;
         assert!(err.to_string().contains("workspace scope"), "{err}");
 
         let err = super::validate_package_metadata(
             &serde_json::json!({ "target": { "cfg(unix)": { "targets": ["x"] } } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("target section should reject a targets list");
+        .err()
+        .ok_or_eyre("target section should reject a targets list")?;
         assert!(
             err.to_string().contains("not valid anywhere inside"),
             "{err}"
@@ -1313,20 +1363,22 @@ mod tests {
             &serde_json::json!({ "expand_targets": true }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("package base should reject expand_targets");
+        .err()
+        .ok_or_eyre("package base should reject expand_targets")?;
         assert!(
             err.to_string().contains("per-subcommand capability"),
             "{err}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn targets_list_rejected_in_target_nested_subcommand() {
+    #[test_util::test]
+    fn targets_list_rejected_in_target_nested_subcommand() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({ "subcommands": { "test": { "targets": ["x"] } } }),
             "package.metadata.cargo-fc",
         )
-        .expect("base subcommand accepts a targets list");
+        .wrap_err("base subcommand accepts a targets list")?;
 
         let err = super::validate_package_metadata(
             &serde_json::json!({
@@ -1334,26 +1386,29 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("target-nested subcommand should reject a targets list");
+        .err()
+        .ok_or_eyre("target-nested subcommand should reject a targets list")?;
         assert!(err.to_string().contains("targets"), "{err}");
 
         super::validate_workspace_metadata(
             &serde_json::json!({ "subcommands": { "test": { "targets": ["x"] } } }),
             "workspace.metadata.cargo-fc",
         )
-        .expect("workspace base subcommand accepts a targets list");
+        .wrap_err("workspace base subcommand accepts a targets list")?;
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "target": { "cfg(unix)": { "subcommands": { "test": { "targets": ["x"] } } } },
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace target-nested subcommand should reject a targets list");
+        .err()
+        .ok_or_eyre("workspace target-nested subcommand should reject a targets list")?;
         assert!(err.to_string().contains("targets"), "{err}");
+        Ok(())
     }
 
-    #[test]
-    fn driver_is_accepted_in_every_scope() {
+    #[test_util::test]
+    fn driver_is_accepted_in_every_scope() -> eyre::Result<()> {
         super::validate_workspace_metadata(
             &serde_json::json!({
                 "driver": "cargo-zigbuild",
@@ -1367,7 +1422,7 @@ mod tests {
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect("workspace scopes should accept driver everywhere");
+        .wrap_err("workspace scopes should accept driver everywhere")?;
 
         super::validate_package_metadata(
             &serde_json::json!({
@@ -1382,11 +1437,12 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("package scopes should accept driver everywhere");
+        .wrap_err("package scopes should accept driver everywhere")?;
+        Ok(())
     }
 
-    #[test]
-    fn env_is_accepted_in_every_scope() {
+    #[test_util::test]
+    fn env_is_accepted_in_every_scope() -> eyre::Result<()> {
         let config = serde_json::json!({
             "env": { "add": { "BASE": "base" } },
             "target": {
@@ -1403,18 +1459,20 @@ mod tests {
         });
 
         super::validate_workspace_metadata(&config, "workspace.metadata.cargo-fc")
-            .expect("workspace scopes should accept env everywhere");
+            .wrap_err("workspace scopes should accept env everywhere")?;
         super::validate_package_metadata(&config, "package.metadata.cargo-fc")
-            .expect("package scopes should accept env everywhere");
+            .wrap_err("package scopes should accept env everywhere")?;
+        Ok(())
     }
 
-    #[test]
-    fn env_rejects_bare_map_with_operation_hint() {
+    #[test_util::test]
+    fn env_rejects_bare_map_with_operation_hint() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({ "env": { "RUST_BACKTRACE": "1" } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("a bare environment map is ambiguous");
+        .err()
+        .ok_or_eyre("a bare environment map is ambiguous")?;
         let message = err.to_string();
 
         assert!(
@@ -1425,15 +1483,17 @@ mod tests {
             message.contains("`env.add.RUST_BACKTRACE = \"...\"`"),
             "{message}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn env_rejects_non_string_values_and_remove_entries() {
+    #[test_util::test]
+    fn env_rejects_non_string_values_and_remove_entries() -> eyre::Result<()> {
         let add_err = super::validate_package_metadata(
             &serde_json::json!({ "env": { "add": { "COUNT": 3 } } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("environment additions must contain strings");
+        .err()
+        .ok_or_eyre("environment additions must contain strings")?;
         assert!(
             add_err.to_string().contains("`env.add.COUNT`")
                 && add_err.to_string().contains("must be a string"),
@@ -1444,22 +1504,25 @@ mod tests {
             &serde_json::json!({ "env": { "remove": [true] } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("environment removals must contain strings");
+        .err()
+        .ok_or_eyre("environment removals must contain strings")?;
         assert!(
             remove_err.to_string().contains("`env.remove[0]`")
                 && remove_err.to_string().contains("must be a string"),
             "{remove_err}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn env_rejects_invalid_names_and_nul_values() {
+    #[test_util::test]
+    fn env_rejects_invalid_names_and_nul_values() -> eyre::Result<()> {
         for name in ["", "BAD=NAME", "BAD\0NAME"] {
             let err = super::validate_package_metadata(
                 &serde_json::json!({ "env": { "add": { name: "value" } } }),
                 "package.metadata.cargo-fc",
             )
-            .expect_err("invalid environment variable name should fail");
+            .err()
+            .ok_or_eyre("invalid environment variable name should fail")?;
             assert!(
                 err.to_string().contains("environment variable name"),
                 "{err}"
@@ -1470,26 +1533,30 @@ mod tests {
             &serde_json::json!({ "env": { "add": { "VALID": "bad\0value" } } }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("NUL in environment variable value should fail");
+        .err()
+        .ok_or_eyre("NUL in environment variable value should fail")?;
         assert!(err.to_string().contains("`env.add.VALID`"), "{err}");
         assert!(err.to_string().contains("NUL"), "{err}");
+        Ok(())
     }
 
-    #[test]
-    fn empty_driver_is_rejected_in_every_scope() {
+    #[test_util::test]
+    fn empty_driver_is_rejected_in_every_scope() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "target": { "cfg(unix)": { "subcommands": { "test": { "driver": " " } } } },
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("empty driver should fail");
+        .err()
+        .ok_or_eyre("empty driver should fail")?;
         assert!(err.to_string().contains("driver"));
         assert!(err.to_string().contains("must not be empty"));
+        Ok(())
     }
 
-    #[test]
-    fn inherit_false_rejects_add_remove_in_same_package_section() {
+    #[test_util::test]
+    fn inherit_false_rejects_add_remove_in_same_package_section() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "inherit": false,
@@ -1497,16 +1564,18 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("inherit = false with add/remove in the same section should fail");
+        .err()
+        .ok_or_eyre("inherit = false with add/remove in the same section should fail")?;
 
         let message = err.to_string();
         assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("exclude_features"), "{message}");
+        Ok(())
     }
 
-    #[test]
-    fn legacy_replace_true_rejects_add_remove_in_same_workspace_section() {
+    #[test_util::test]
+    fn legacy_replace_true_rejects_add_remove_in_same_workspace_section() -> eyre::Result<()> {
         let err = super::validate_workspace_metadata(
             &serde_json::json!({
                 "subcommands": {
@@ -1518,7 +1587,8 @@ mod tests {
             }),
             "workspace.metadata.cargo-fc",
         )
-        .expect_err("workspace command replace with add/remove should fail");
+        .err()
+        .ok_or_eyre("workspace command replace with add/remove should fail")?;
 
         let message = err.to_string();
         assert!(message.contains("inherit = false"), "{message}");
@@ -1528,10 +1598,12 @@ mod tests {
             message.contains("workspace.metadata.cargo-fc.subcommands.test"),
             "{message}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn broader_non_inheriting_add_remove_errors_even_when_narrower_also_opts_out() {
+    #[test_util::test]
+    fn broader_non_inheriting_add_remove_errors_even_when_narrower_also_opts_out()
+    -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "inherit": false,
@@ -1542,16 +1614,18 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("broader invalid non-inheriting section should fail at load time");
+        .err()
+        .ok_or_eyre("broader invalid non-inheriting section should fail at load time")?;
 
         let message = err.to_string();
         assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("package.metadata.cargo-fc"), "{message}");
+        Ok(())
     }
 
-    #[test]
-    fn unmatched_target_non_inheriting_add_remove_errors_at_load_time() {
+    #[test_util::test]
+    fn unmatched_target_non_inheriting_add_remove_errors_at_load_time() -> eyre::Result<()> {
         let err = super::validate_package_metadata(
             &serde_json::json!({
                 "target": {
@@ -1563,16 +1637,18 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect_err("invalid target section should fail without cfg evaluation");
+        .err()
+        .ok_or_eyre("invalid target section should fail without cfg evaluation")?;
 
         let message = err.to_string();
         assert!(message.contains("inherit = false"), "{message}");
         assert!(message.contains("add/remove"), "{message}");
         assert!(message.contains("target.'cfg(target_os = \"definitely-not-this-target\")'"));
+        Ok(())
     }
 
-    #[test]
-    fn non_inheriting_rule_is_section_local_for_nested_subcommands() {
+    #[test_util::test]
+    fn non_inheriting_rule_is_section_local_for_nested_subcommands() -> eyre::Result<()> {
         super::validate_package_metadata(
             &serde_json::json!({
                 "inherit": false,
@@ -1582,7 +1658,7 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("parent non-inheriting section should not constrain nested subcommand patches");
+        .wrap_err("parent non-inheriting section should not constrain nested subcommand patches")?;
 
         super::validate_package_metadata(
             &serde_json::json!({
@@ -1593,13 +1669,14 @@ mod tests {
             }),
             "package.metadata.cargo-fc",
         )
-        .expect("subcommand non-inheriting section should not constrain parent patches");
+        .wrap_err("subcommand non-inheriting section should not constrain parent patches")?;
+        Ok(())
     }
 
-    fn keys_for<T: Serialize>(value: T) -> BTreeSet<String> {
-        match serde_json::to_value(value).expect("serialize default") {
-            Value::Object(map) => map.keys().cloned().collect(),
-            other => panic!("expected object, got {other:?}"),
+    fn keys_for<T: Serialize>(value: T) -> eyre::Result<BTreeSet<String>> {
+        match serde_json::to_value(value).wrap_err("serialize default")? {
+            Value::Object(map) => Ok(map.keys().cloned().collect()),
+            other => eyre::bail!("expected object, got {other:?}"),
         }
     }
 }

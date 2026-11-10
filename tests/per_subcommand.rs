@@ -23,7 +23,7 @@ fn any_row_has_feature(rows: &[serde_json::Value], feature: &str) -> bool {
     })
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<()> {
     // `gpu` is excluded for `test` but kept for `build` and every other command.
     let temp = single_crate(indoc! {r#"
@@ -65,7 +65,7 @@ fn subcommand_override_excludes_feature_only_for_that_command() -> eyre::Result<
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Result<()> {
     // `maximal_features` is enabled only for `check`, so its matrix collapses
     // to the single all-features row while `build` keeps the full powerset.
@@ -105,7 +105,7 @@ fn subcommand_scoped_maximal_features_collapses_only_that_command() -> eyre::Res
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_only_features_restricts_matrix_for_that_command() -> eyre::Result<()> {
     // `cargo fc test` runs a single, focused feature: only `core`.
     let temp = single_crate(indoc! {r#"
@@ -134,7 +134,7 @@ fn subcommand_only_features_restricts_matrix_for_that_command() -> eyre::Result<
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_and_subcommand_feature_overrides_compose() -> eyre::Result<()> {
     // `a` is excluded for the linux target; `b` is excluded for `test`. Running
     // `cargo fc test` on linux drops both.
@@ -174,7 +174,7 @@ fn target_and_subcommand_feature_overrides_compose() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_subcommand_override_narrows_to_target_and_command() -> eyre::Result<()> {
     // A `target.'cfg(...)'.subcommands.test` section applies only when both the
     // target matches and the command is `test`.
@@ -205,7 +205,7 @@ fn target_subcommand_override_narrows_to_target_and_command() -> eyre::Result<()
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_alias_resolves_to_builtin_override() -> eyre::Result<()> {
     // `t` is cargo's built-in alias for `test`; the `subcommands.test` override
     // must apply when the raw token is the alias.
@@ -239,7 +239,7 @@ fn row_package_names(rows: &[serde_json::Value]) -> std::collections::HashSet<St
         .collect()
 }
 
-#[test]
+#[test_util::test]
 fn workspace_subcommand_excludes_package_for_that_command() -> eyre::Result<()> {
     // `exclude a package when testing`: the workspace subcommand override drops
     // `skip` for `cargo fc test`, but it participates for `cargo fc build`.

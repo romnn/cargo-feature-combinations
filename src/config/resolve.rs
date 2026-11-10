@@ -547,6 +547,7 @@ mod tests {
     };
     use crate::target::TargetTriple;
     use color_eyre::eyre;
+    use color_eyre::eyre::OptionExt as _;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
     use std::ffi::OsString;
     use std::process::Command;
@@ -582,7 +583,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[test_util::test]
     fn broad_diagnostics_config_is_gated_for_unsafe_command() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.flags.diagnostics_only = Some(true);
@@ -594,7 +595,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn broad_diagnostics_true_with_dedupe_false_still_warns() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.flags.diagnostics_only = Some(true);
@@ -608,7 +609,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cli_diagnostics_rescues_gated_broad_config_warning() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.flags.diagnostics_only = Some(true);
@@ -631,7 +632,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn command_dedupe_bypasses_diagnostics_gate() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.subcommands.insert(
@@ -661,7 +662,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_replace_discards_broader_flags_and_driver() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.flags.pedantic = Some(true);
@@ -687,7 +688,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_inherit_false_discards_broader_flags_and_driver() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.flags.pedantic = Some(true);
@@ -717,7 +718,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cli_driver_overrides_resolved_driver() -> eyre::Result<()> {
         let mut ws = WorkspaceConfig::default();
         ws.base.settings.driver = Some("cargo-zigbuild".to_string());
@@ -738,7 +739,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cli_env_overlay_applies_last_with_additions_winning() -> eyre::Result<()> {
         let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
             "env": {
@@ -810,7 +811,7 @@ mod tests {
         )
     }
 
-    #[test]
+    #[test_util::test]
     fn env_resolves_precedence_and_target_removal() -> eyre::Result<()> {
         let workspace_raw = serde_json::json!({
             "env": { "add": { "SHARED": "workspace", "CANCEL": "workspace" } },
@@ -878,7 +879,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn inherit_false_discards_broader_env_patch() -> eyre::Result<()> {
         let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
             "env": { "add": { "BROAD": "workspace" } },
@@ -908,7 +909,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn env_override_resets_accumulated_removals() -> eyre::Result<()> {
         let workspace: WorkspaceConfig = serde_json::from_value(serde_json::json!({
             "env": { "remove": ["AMBIENT"] },
@@ -935,7 +936,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn sibling_env_patches_agree_and_add_wins_over_remove() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "target": {
@@ -988,7 +989,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn sibling_env_conflict_names_key_without_values() -> eyre::Result<()> {
         let package: Config = serde_json::from_value(serde_json::json!({
             "target": {
@@ -1022,7 +1023,8 @@ mod tests {
                 default_targets_enabled: true,
             },
         )
-        .expect_err("sibling environment additions must agree");
+        .err()
+        .ok_or_eyre("sibling environment additions must agree")?;
         let message = err.to_string();
 
         assert!(message.contains("`env.add.TOKEN`"), "{message}");
@@ -1032,8 +1034,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn target_command_errors_use_selected_command_name_for_short_alias() {
+    #[test_util::test]
+    fn target_command_errors_use_selected_command_name_for_short_alias() -> eyre::Result<()> {
         let ws = WorkspaceConfig {
             targets: BTreeMap::from([
                 (
@@ -1090,14 +1092,16 @@ mod tests {
                     default_targets_enabled: true,
                 },
             )
-            .expect_err("conflicting target command flags should fail");
+            .err()
+            .ok_or_eyre("conflicting target command flags should fail")?;
         let message = err.to_string();
 
         assert!(message.contains("subcommands.test.pedantic"), "{message}");
         assert!(!message.contains("subcommands.t.pedantic"), "{message}");
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn non_replacing_sibling_add_applies_onto_fresh_base() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "exclude_features": ["base"],
@@ -1120,7 +1124,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn multiple_matching_replacing_sections_combine_agreeing_overrides() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "exclude_features": ["base"],
@@ -1151,7 +1155,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_features_resolve_from_package_base() -> eyre::Result<()> {
         let config: Config = serde_json::from_value(serde_json::json!({
             "mutually_exclusive_features": [["cuda", "coreml"]],
@@ -1166,7 +1170,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_features_combine_sibling_add_remove_patches() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "mutually_exclusive_features": [
@@ -1212,7 +1216,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_features_target_override_replaces_base() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "mutually_exclusive_features": [["cuda", "coreml"]],
@@ -1238,7 +1242,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn required_feature_groups_combine_base_and_target_patches() -> eyre::Result<()> {
         let raw = serde_json::json!({
             "required_feature_groups": [
