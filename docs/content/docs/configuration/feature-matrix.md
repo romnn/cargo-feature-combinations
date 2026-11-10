@@ -23,6 +23,7 @@ package declares no such feature.
 | [`only_features`](#only_features) | Restrict the varied set to an allowlist. |
 | [`include_features`](#include_features) | Add features to *every* generated combination. |
 | [`mutually_exclusive_features`](#mutually_exclusive_features) | Permit at most one feature from each group. |
+| [`required_feature_groups`](#required_feature_groups) | Require at least one feature from each group. |
 | [`exclude_feature_sets`](#exclude_feature_sets) | Drop specific combinations (e.g. incompatible pairs). |
 | [`include_feature_sets`](#include_feature_sets) | Always add specific exact combinations. |
 | [`allow_feature_sets`](#allow_feature_sets) | Replace the powerset with an exact list of sets. |
@@ -95,6 +96,69 @@ Patch operations add or remove whole groups:
 ```toml
 [package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
 mutually_exclusive_features = { add = [["openssl", "rustls"]] }
+```
+
+## `required_feature_groups`
+
+Declare groups of which every generated combination must enable at least one
+member. A combination that enables none of a group's features is dropped, and
+features outside the groups keep their full powerset, so a newly declared
+feature still enters the matrix automatically.
+
+A combination meets a group through the features it implies, too. Here a crate
+needs exactly one TLS backend, and `rustls-webpki-roots` and `default` both
+enable `rustls`:
+
+```toml
+[features]
+default = ["rustls"]
+native-tls = []
+rustls = []
+rustls-webpki-roots = ["rustls"]
+logging = []
+
+[package.metadata.cargo-fc]
+# Every combination selects at least one TLS backend...
+required_feature_groups = [["native-tls", "rustls"]]
+# ...and at most one.
+mutually_exclusive_features = [["native-tls", "rustls"]]
+# `default` and `rustls-webpki-roots` imply `rustls`.
+exclude_feature_sets = [
+  ["default", "native-tls"],
+  ["native-tls", "rustls-webpki-roots"],
+]
+```
+
+Together these keys make every combination enable exactly one backend. `[]`
+and `[logging]` are dropped, while `[rustls-webpki-roots]`, `[default]`, and
+`[logging, native-tls]` stay.
+
+The `exclude_feature_sets` entries are needed because
+`mutually_exclusive_features` only looks at the features a combination names,
+not at the features they imply. Without them, `[native-tls, rustls-webpki-roots]`
+would stay and enable both backends. Add an entry whenever a new feature
+implies a group member.
+
+With several groups, a combination must meet every one of them. Like the
+exclusion rules, the groups do not filter `include_feature_sets`, and a
+non-empty `allow_feature_sets` remains the complete matrix and ignores them.
+
+An empty group is a configuration error, because no combination can meet it.
+It is also an error when the groups drop every generated combination and
+nothing else, such as `include_feature_sets`, keeps the matrix non-empty.
+That usually means `exclude_features` or `only_features` removes every
+feature that reaches a member, and an empty matrix would otherwise look like
+a passing run.
+
+The safety limit from [`max_combinations`](#max_combinations) counts
+combinations before the groups drop any.
+
+Like the feature-set keys, this setting is patchable per target and command.
+Patch operations add or remove whole groups:
+
+```toml
+[package.metadata.cargo-fc.target.'cfg(target_os = "linux")']
+required_feature_groups = { add = [["openssl", "rustls"]] }
 ```
 
 ## `exclude_feature_sets`
@@ -181,6 +245,9 @@ max_combinations = 250000
 Mutually exclusive groups are counted after applying their constraint. For
 `u` unconstrained features and groups of effective sizes `n₁, n₂, …`, the
 global base count is `2ᵘ × (n₁ + 1) × (n₂ + 1) × …`.
+
+Required feature groups are not: the limit counts combinations before
+[`required_feature_groups`](#required_feature_groups) drops any.
 
 ## `matrix`
 

@@ -31,5 +31,8 @@ Mutually exclusive groups retain cross-play with every independent feature and
 are counted directly as `(group size + 1)` choices, so they are the right tool
 when features are alternatives rather than independent sub-matrices.
 
+`required_feature_groups` does not help with the limit: it removes
+combinations only after they are counted.
+
 See [`mutually_exclusive_features`]({{< relref "../configuration/feature-matrix.md#mutually_exclusive_features" >}})
 and [`isolated_feature_sets`]({{< relref "../configuration/feature-matrix.md#isolated_feature_sets" >}}).

@@ -68,7 +68,10 @@ fn build_implication_graph(features: &BTreeMap<String, Vec<String>>) -> DiGraphM
 /// The resolved set is the combination itself plus all features transitively
 /// reachable via the implication graph. Uses `&str` references into the
 /// features map to avoid allocations.
-fn resolved_set<'a>(combo: &[&'a String], graph: &DiGraphMap<&'a str, ()>) -> BTreeSet<&'a str> {
+fn resolved_set<'a>(
+    combo: impl IntoIterator<Item = &'a String>,
+    graph: &DiGraphMap<&'a str, ()>,
+) -> BTreeSet<&'a str> {
     let mut resolved = BTreeSet::new();
     for feature in combo {
         if resolved.insert(feature.as_str()) {
@@ -79,6 +82,30 @@ fn resolved_set<'a>(combo: &[&'a String], graph: &DiGraphMap<&'a str, ()>) -> BT
         }
     }
     resolved
+}
+
+/// The features a combination enables once Cargo applies one package's feature implications.
+pub(crate) struct FeatureImplications<'a> {
+    graph: DiGraphMap<&'a str, ()>,
+}
+
+impl<'a> FeatureImplications<'a> {
+    pub(crate) fn new(features: &'a BTreeMap<String, Vec<String>>) -> Self {
+        Self {
+            graph: build_implication_graph(features),
+        }
+    }
+
+    /// Returns `combination` plus every feature it transitively implies.
+    ///
+    /// Every feature in `combination` must be declared by the package the implications were
+    /// built from.
+    pub(crate) fn closure(
+        &self,
+        combination: impl IntoIterator<Item = &'a String>,
+    ) -> BTreeSet<&'a str> {
+        resolved_set(combination, &self.graph)
+    }
 }
 
 /// Apply pruning when the caller already resolved features and pruning flags.
@@ -124,7 +151,7 @@ fn prune_implied_combinations<'a>(
     // Combos in the same group produce identical compiled output.
     let mut groups: BTreeMap<BTreeSet<&'a str>, Vec<Vec<&'a String>>> = BTreeMap::new();
     for combo in combos {
-        let resolved = resolved_set(&combo, &graph);
+        let resolved = resolved_set(combo.iter().copied(), &graph);
         groups.entry(resolved).or_default().push(combo);
     }
 
@@ -340,11 +367,11 @@ mod test {
         let b = "B".to_string();
         let c = "C".to_string();
 
-        sim_assert_eq!(resolved_set(&[], &graph), BTreeSet::<&str>::new());
-        sim_assert_eq!(resolved_set(&[&a], &graph), BTreeSet::from(["A"]));
-        sim_assert_eq!(resolved_set(&[&b], &graph), BTreeSet::from(["A", "B"]));
-        sim_assert_eq!(resolved_set(&[&c], &graph), BTreeSet::from(["A", "B", "C"]));
-        sim_assert_eq!(resolved_set(&[&a, &b], &graph), BTreeSet::from(["A", "B"]));
+        sim_assert_eq!(resolved_set([], &graph), BTreeSet::<&str>::new());
+        sim_assert_eq!(resolved_set([&a], &graph), BTreeSet::from(["A"]));
+        sim_assert_eq!(resolved_set([&b], &graph), BTreeSet::from(["A", "B"]));
+        sim_assert_eq!(resolved_set([&c], &graph), BTreeSet::from(["A", "B", "C"]));
+        sim_assert_eq!(resolved_set([&a, &b], &graph), BTreeSet::from(["A", "B"]));
     }
 
     #[test]

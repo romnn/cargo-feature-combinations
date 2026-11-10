@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added patchable `required_feature_groups`, which drop every generated
+  combination that enables no feature of a group, directly or through feature
+  implications. Combined with `mutually_exclusive_features` over the same
+  group, and `exclude_feature_sets` for features that imply a member, every
+  combination selects exactly one member while the rest of the matrix stays
+  open (#26).
+
 ## [0.8.0]
 
 ### Changed

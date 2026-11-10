@@ -40,6 +40,32 @@ and “not `b + c`,” use the pairwise form:
 exclude_feature_sets = [["a", "b"], ["b", "c"]]
 ```
 
+## Exactly one alternative
+
+When the crate cannot build with *no* alternative either, for example because
+it `compile_error!`s unless one backend is enabled, also require the group.
+`required_feature_groups` drops every combination that enables none of its
+features, while `logging` and `metrics` keep varying around each backend:
+
+```toml
+[package.metadata.cargo-fc]
+mutually_exclusive_features = [["native-tls", "rustls", "boring"]]
+required_feature_groups = [["native-tls", "rustls", "boring"]]
+```
+
+This visits `3 × 2² = 12` combinations: each backend crossed with every subset
+of the two independent features.
+
+A feature that implies a backend, such as `default = ["rustls"]`, meets the
+required group. Mutual exclusion only looks at the features a combination
+names, though, so exclude its pairings with the other backends yourself:
+
+```toml
+exclude_feature_sets = [["default", "native-tls"], ["default", "boring"]]
+```
+
+See [`required_feature_groups`]({{< relref "../configuration/feature-matrix.md#required_feature_groups" >}}).
+
 ## Only incompatible on some targets
 
 If alternatives conflict only on one target, add their group there instead of

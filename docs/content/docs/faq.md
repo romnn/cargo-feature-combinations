@@ -19,6 +19,7 @@ The powerset grows as `2ⁿ`. Rather than only raising [`max_combinations`]({{< 
 
 - [`skip_optional_dependencies`]({{< relref "configuration/feature-matrix.md#skip_optional_dependencies" >}}) if optional deps are inflating it.
 - [`mutually_exclusive_features`]({{< relref "configuration/feature-matrix.md#mutually_exclusive_features" >}}) for alternative backends or runtimes.
+- [`required_feature_groups`]({{< relref "configuration/feature-matrix.md#required_feature_groups" >}}) when every build needs at least one of those alternatives.
 - [`isolated_feature_sets`]({{< relref "recipes/large-feature-sets.md" >}}) for independent feature groups.
 - [`only_features`]({{< relref "configuration/feature-matrix.md#only_features" >}}) or [`allow_feature_sets`]({{< relref "recipes/restrict-matrix.md" >}}) to restrict what's varied.
 

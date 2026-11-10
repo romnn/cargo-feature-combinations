@@ -173,7 +173,7 @@ it does not apply in that scope (`*` marks the deprecated root-package
 The places a setting is *not* overridable, and why:
 
 1. **feature matrix** (`exclude_features`, `only_features`,
-   `mutually_exclusive_features`, `*_feature_sets`,
+   `mutually_exclusive_features`, `required_feature_groups`, `*_feature_sets`,
    `skip_optional_dependencies`, `no_empty_feature_set`, `max_combinations`,
    `matrix`) — a workspace
    isn't a crate, so it has no features to shape.
@@ -278,6 +278,15 @@ max_combinations = 250000
 # over every feature outside the groups. The no-backend choice is included.
 mutually_exclusive_features = [
     ["cuda", "coreml", "webgpu"],
+]
+
+# Drop every generated combination that enables no feature of a group, directly
+# or through a feature that implies one. Features outside the groups keep their
+# full powerset. Combined with `mutually_exclusive_features` over the same group,
+# every combination names at most one member; a feature that implies a member
+# still needs an `exclude_feature_sets` entry against the other members.
+required_feature_groups = [
+    ["native-tls", "rustls"],
 ]
 
 # When at least one isolated feature set is configured, stop taking all project 
@@ -748,7 +757,8 @@ machine — but it means full coverage of such rows needs one runner per native
 platform; one machine's green run is not the whole matrix.
 
 Patch semantics for collection-like keys such as `exclude_features`, `include_features`,
-`only_features`, `mutually_exclusive_features`, and `*_feature_sets`:
+`only_features`, `mutually_exclusive_features`, `required_feature_groups`, and
+`*_feature_sets`:
 
 - **Array syntax is always an override**
   - `exclude_features = ["cuda"]` replaces the entire value.
@@ -811,7 +821,8 @@ per cargo subcommand under:
 
 A subcommand override accepts the **same feature-matrix keys as a target
 override** — `exclude_features`, `include_features`, `only_features`,
-`mutually_exclusive_features`, `*_feature_sets`, `skip_optional_dependencies`,
+`mutually_exclusive_features`, `required_feature_groups`, `*_feature_sets`,
+`skip_optional_dependencies`,
 `no_empty_feature_set`, `max_combinations`, and `matrix` — with identical patch
 semantics (`key = [...]` or `{ override = [...] }`
 to replace; `{ add = [...] }` / `{ remove = [...] }` for incremental edits). This lets the feature combinations

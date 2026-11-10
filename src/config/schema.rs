@@ -125,6 +125,9 @@ pub struct FeatureMatrixPatch {
     /// Patch operations for groups whose members may not be combined.
     #[serde(default)]
     pub mutually_exclusive_features: Option<FeatureSetVecPatch>,
+    /// Patch operations for groups of which every combination must enable a member.
+    #[serde(default)]
+    pub required_feature_groups: Option<FeatureSetVecPatch>,
     /// Patch operations for excluded features.
     #[serde(default)]
     pub exclude_features: Option<StringSetPatch>,
