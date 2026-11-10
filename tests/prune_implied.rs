@@ -36,6 +36,15 @@ fn dummy_crate(features_toml: &str, settings: &str) -> eyre::Result<TempDir> {
 }
 
 fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<TempDir> {
+    dummy_crate_with_dep_in("[dependencies]", features_toml, settings)
+}
+
+/// Like [`dummy_crate_with_dep`], with `optDep` declared under `dependency_table`.
+fn dummy_crate_with_dep_in(
+    dependency_table: &str,
+    features_toml: &str,
+    settings: &str,
+) -> eyre::Result<TempDir> {
     let temp = TempDir::new()?;
 
     let dep_dir = temp.child("optDep");
@@ -44,6 +53,9 @@ fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<Tem
         name = "optDep"
         version = "0.1.0"
         edition = "2024"
+
+        [features]
+        bar = []
     "#})?;
     dep_dir
         .child("src/lib.rs")
@@ -59,7 +71,7 @@ fn dummy_crate_with_dep(features_toml: &str, settings: &str) -> eyre::Result<Tem
 
             {features_toml}
 
-            [dependencies]
+            {dependency_table}
             optDep = {{ path = "optDep", optional = true }}
 
             [package.metadata.cargo-feature-combinations]
@@ -115,8 +127,7 @@ fn run_prune_in_dir(temp: &TempDir) -> eyre::Result<PruneTestResult> {
     let resolved = ResolvedFeatures::from_config(&config);
     let combos = pkg.feature_combinations(&resolved)?;
     let flags = ResolvedFlags::from_config(config.base.settings.flags);
-    let result =
-        prune_with_resolved_features(combos, &pkg.features, &resolved, flags.no_prune_implied);
+    let result = prune_with_resolved_features(combos, pkg, &resolved, flags.no_prune_implied);
 
     let mut kept: Vec<Vec<String>> = result
         .keep
@@ -302,6 +313,50 @@ fn dep_syntax_not_treated_as_implication() -> eyre::Result<()> {
     Ok(())
 }
 
+/// Cargo enables the implicit `optDep` feature for `optDep/bar`, so listing it beside `tls`
+/// changes nothing.
+#[test]
+fn dependency_feature_implies_the_optional_dependency_feature() -> eyre::Result<()> {
+    let result = run_prune_test_with_dep(
+        indoc::indoc! {r#"
+            [features]
+            tls = ["optDep/bar"]
+        "#},
+        "",
+    )?;
+
+    sim_assert_eq!(result.kept, vec![vs(&[]), vs(&["optDep"]), vs(&["tls"])]);
+    sim_assert_eq!(result.pruned, vec![(vs(&["optDep", "tls"]), vs(&["tls"]))]);
+    Ok(())
+}
+
+/// Cargo enables `optDep` for `optDep/bar` only when building for Windows, so `[optDep, tls]`
+/// and `[tls]` build differently elsewhere and both stay.
+#[test]
+fn target_specific_dependency_feature_prunes_nothing() -> eyre::Result<()> {
+    let temp = dummy_crate_with_dep_in(
+        "[target.'cfg(windows)'.dependencies]",
+        indoc::indoc! {r#"
+            [features]
+            tls = ["optDep/bar"]
+        "#},
+        "",
+    )?;
+    let result = run_prune_in_dir(&temp)?;
+
+    sim_assert_eq!(
+        result.kept,
+        vec![
+            vs(&[]),
+            vs(&["optDep"]),
+            vs(&["optDep", "tls"]),
+            vs(&["tls"])
+        ]
+    );
+    sim_assert_eq!(result.pruned, Vec::new());
+    Ok(())
+}
+
 #[test]
 fn diamond_graph() -> eyre::Result<()> {
     let result = run_prune_test(
@@ -466,7 +521,7 @@ fn resolve_and_prune(temp: &TempDir, matching_cfgs: &[&str]) -> eyre::Result<Pru
     let config = resolve_config(&base, &TargetTriple("x".to_string()), &mut eval)?;
 
     let combos = pkg.feature_combinations(&config)?;
-    let result = prune_with_resolved_features(combos, &pkg.features, &config, false);
+    let result = prune_with_resolved_features(combos, pkg, &config, false);
 
     let mut kept: Vec<Vec<String>> = result
         .keep

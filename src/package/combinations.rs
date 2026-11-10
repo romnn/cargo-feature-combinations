@@ -146,7 +146,7 @@ pub(super) fn feature_combinations<'a>(
     let generated_powerset = filtered_powerset.clone();
     retain_required_feature_groups(
         &mut filtered_powerset,
-        &package.features,
+        package,
         &config.required_feature_groups,
     );
 
@@ -179,8 +179,7 @@ pub(super) fn feature_combinations<'a>(
         && !config.required_feature_groups.is_empty()
     {
         return Err(required_feature_groups_removed_every_row(
-            &package.name,
-            &package.features,
+            package,
             &config.required_feature_groups,
             &generated_powerset,
         ));
@@ -315,13 +314,13 @@ fn violates_mutually_exclusive_features(
 /// `[native-tls, rustls]`.
 fn retain_required_feature_groups<'a>(
     combinations: &mut BTreeSet<BTreeSet<&'a String>>,
-    package_features: &'a BTreeMap<String, Vec<String>>,
+    package: &'a cargo_metadata::Package,
     groups: &[HashSet<String>],
 ) {
     if groups.is_empty() {
         return;
     }
-    let implications = FeatureImplications::new(package_features);
+    let implications = FeatureImplications::new(package);
     combinations.retain(|combination| {
         let closure = implications.closure(combination.iter().copied());
         groups.iter().all(|group| enables_member(&closure, group))
@@ -339,12 +338,12 @@ fn enables_member(closure: &BTreeSet<&str>, group: &HashSet<String>) -> bool {
 /// An empty matrix would pass without running anything, which is almost always a group whose
 /// members other settings exclude, so it is an error rather than a silent loss of coverage.
 fn required_feature_groups_removed_every_row(
-    package_name: &str,
-    package_features: &BTreeMap<String, Vec<String>>,
+    package: &cargo_metadata::Package,
     groups: &[HashSet<String>],
     generated: &BTreeSet<BTreeSet<&String>>,
 ) -> eyre::Report {
-    let implications = FeatureImplications::new(package_features);
+    let package_name = &package.name;
+    let implications = FeatureImplications::new(package);
     let closures = generated
         .iter()
         .map(|combination| implications.closure(combination.iter().copied()))
@@ -1542,7 +1541,7 @@ mod test {
         let have = package.feature_combinations(&config)?;
 
         // Every row enables exactly one backend once implications apply.
-        let implications = crate::implication::FeatureImplications::new(&package.features);
+        let implications = crate::implication::FeatureImplications::new(&package);
         for row in &have {
             let enabled = implications.closure(row.iter().copied());
             let selected = backends

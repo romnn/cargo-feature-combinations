@@ -7,7 +7,7 @@
 
 use petgraph::graphmap::DiGraphMap;
 use petgraph::visit::Dfs;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// A feature combination that was pruned because another (smaller)
 /// combination resolves to the same effective feature set.
@@ -31,10 +31,32 @@ pub struct PruneResult<'a> {
 
 /// Build a directed implication graph from a package's feature definitions.
 ///
-/// An edge `A → B` means enabling feature A also enables feature B. Only
-/// plain feature names are considered — dependency activations (`dep:X`,
-/// `crate/feature`, `?dep:X/feature`) are filtered out.
-fn build_implication_graph(features: &BTreeMap<String, Vec<String>>) -> DiGraphMap<&str, ()> {
+/// An edge `A → B` means enabling feature A also enables feature B.
+/// That holds when A lists B, and when A lists `B/feature` for an optional dependency named `B`:
+/// Cargo then also enables the package's own feature `B`, the implicit one for the dependency or
+/// an explicit one of that name.
+/// Other values enable no feature of this package and form no edge: `dep:B` only enables the
+/// dependency, the weak `B?/feature` never enables it, and `B/feature` for a non-optional
+/// dependency leaves a same-named feature off.
+///
+/// A target-specific optional dependency forms no edge either.
+/// Cargo enables its feature only when the dependency is active for the target being built,
+/// while this graph serves every target, and an edge Cargo does not follow would let pruning
+/// merge combinations that build differently.
+fn build_implication_graph(package: &cargo_metadata::Package) -> DiGraphMap<&str, ()> {
+    let features = &package.features;
+    let optional_dependencies = package
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.optional && dependency.target.is_none())
+        .map(|dependency| {
+            dependency
+                .rename
+                .as_deref()
+                .unwrap_or(dependency.name.as_str())
+        })
+        .collect::<HashSet<_>>();
+
     let mut graph = DiGraphMap::new();
 
     // Every feature is a node, even if it implies nothing — resolved_set
@@ -45,17 +67,16 @@ fn build_implication_graph(features: &BTreeMap<String, Vec<String>>) -> DiGraphM
 
     for (feature_name, implied_values) in features {
         for implied in implied_values {
-            // Feature values can be:
-            //   "other_feature"          → intra-crate implication (what we want)
-            //   "dep:name"               → optional dep activation
-            //   "crate/feature"          → dep feature activation
-            //   "?dep:name/feature"      → weak dep feature
-            // Only plain names that match a key in the feature map form edges.
-            if implied.contains('/') || implied.contains(':') {
-                continue;
-            }
-            if features.contains_key(implied) && implied != feature_name {
-                graph.add_edge(feature_name.as_str(), implied.as_str(), ());
+            let implied_feature = match implied.split_once('/') {
+                Some((dependency, _)) if optional_dependencies.contains(dependency) => dependency,
+                Some(_) => continue,
+                None if implied.contains(':') => continue,
+                None => implied.as_str(),
+            };
+            if let Some((implied_feature, _)) = features.get_key_value(implied_feature)
+                && implied_feature != feature_name
+            {
+                graph.add_edge(feature_name.as_str(), implied_feature.as_str(), ());
             }
         }
     }
@@ -90,9 +111,9 @@ pub(crate) struct FeatureImplications<'a> {
 }
 
 impl<'a> FeatureImplications<'a> {
-    pub(crate) fn new(features: &'a BTreeMap<String, Vec<String>>) -> Self {
+    pub(crate) fn new(package: &'a cargo_metadata::Package) -> Self {
         Self {
-            graph: build_implication_graph(features),
+            graph: build_implication_graph(package),
         }
     }
 
@@ -112,21 +133,21 @@ impl<'a> FeatureImplications<'a> {
 #[must_use]
 pub fn prune_with_resolved_features<'a>(
     combos: Vec<Vec<&'a String>>,
-    features: &'a BTreeMap<String, Vec<String>>,
+    package: &'a cargo_metadata::Package,
     config: &crate::config::ResolvedFeatures,
     no_prune: bool,
 ) -> PruneResult<'a> {
     let active = !no_prune && config.allow_feature_sets.is_empty();
-    maybe_prune_active(combos, features, active)
+    maybe_prune_active(combos, package, active)
 }
 
 fn maybe_prune_active<'a>(
     combos: Vec<Vec<&'a String>>,
-    features: &'a BTreeMap<String, Vec<String>>,
+    package: &'a cargo_metadata::Package,
     active: bool,
 ) -> PruneResult<'a> {
     if active {
-        prune_implied_combinations(combos, features)
+        prune_implied_combinations(combos, package)
     } else {
         PruneResult {
             keep: combos,
@@ -142,9 +163,9 @@ fn maybe_prune_active<'a>(
 /// lexicographic) is kept as the representative; the rest are pruned.
 fn prune_implied_combinations<'a>(
     combos: Vec<Vec<&'a String>>,
-    features: &'a BTreeMap<String, Vec<String>>,
+    package: &'a cargo_metadata::Package,
 ) -> PruneResult<'a> {
-    let graph = build_implication_graph(features);
+    let graph = build_implication_graph(package);
 
     // Group combos by their resolved feature set — the full set of features
     // that Cargo would enable after applying all transitive implications.
@@ -224,7 +245,7 @@ mod test {
         };
         let resolved = ResolvedFeatures::from_config(&config);
         let combos = pkg.feature_combinations(&resolved)?;
-        let result = prune_implied_combinations(combos, &pkg.features);
+        let result = prune_implied_combinations(combos, &pkg);
 
         let kept: Vec<Vec<String>> = result
             .keep
@@ -273,7 +294,7 @@ mod test {
         };
         let resolved = ResolvedFeatures::from_config(&config);
         let combos = pkg.feature_combinations(&resolved)?;
-        let result = prune_with_resolved_features(combos, &pkg.features, &resolved, false);
+        let result = prune_with_resolved_features(combos, &pkg, &resolved, false);
 
         sim_assert_eq!(result.keep.len(), 3);
         sim_assert_eq!(result.pruned.len(), 1);
@@ -359,9 +380,9 @@ mod test {
     }
 
     #[test]
-    fn resolved_set_correctness() {
-        let feat = features(&[("A", &[]), ("B", &["A"]), ("C", &["B"])]);
-        let graph = build_implication_graph(&feat);
+    fn resolved_set_correctness() -> eyre::Result<()> {
+        let package = package_with(features(&[("A", &[]), ("B", &["A"]), ("C", &["B"])]), &[])?;
+        let graph = build_implication_graph(&package);
 
         let a = "A".to_string();
         let b = "B".to_string();
@@ -372,6 +393,7 @@ mod test {
         sim_assert_eq!(resolved_set([&b], &graph), BTreeSet::from(["A", "B"]));
         sim_assert_eq!(resolved_set([&c], &graph), BTreeSet::from(["A", "B", "C"]));
         sim_assert_eq!(resolved_set([&a, &b], &graph), BTreeSet::from(["A", "B"]));
+        Ok(())
     }
 
     #[test]
@@ -385,10 +407,159 @@ mod test {
     }
 
     #[test]
-    fn empty_features_no_pruning() {
-        let feat: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let result = prune_implied_combinations(Vec::new(), &feat);
+    fn empty_features_no_pruning() -> eyre::Result<()> {
+        let package = package_with(BTreeMap::new(), &[])?;
+        let result = prune_implied_combinations(Vec::new(), &package);
         sim_assert_eq!(result.keep.len(), 0);
         sim_assert_eq!(result.pruned.len(), 0);
+        Ok(())
+    }
+
+    /// A dependency named `name` in the manifest, renamed when `package` differs from it, and
+    /// declared under `[target.'<target>'.dependencies]` when `target` is set.
+    fn dependency(
+        name: &str,
+        package: &str,
+        optional: bool,
+        target: Option<&str>,
+    ) -> eyre::Result<cargo_metadata::Dependency> {
+        Ok(serde_json::from_value(serde_json::json!({
+            "name": package,
+            "rename": (name != package).then_some(name),
+            "optional": optional,
+            "source": null,
+            "req": "*",
+            "kind": null,
+            "uses_default_features": true,
+            "features": [],
+            "target": target,
+            "registry": null,
+            "path": null,
+        }))?)
+    }
+
+    fn package_with(
+        features: BTreeMap<String, Vec<String>>,
+        dependencies: &[cargo_metadata::Dependency],
+    ) -> eyre::Result<cargo_metadata::Package> {
+        let mut package = crate::package::test::package_with_features(&[])?;
+        package.features = features;
+        package.dependencies = dependencies.to_vec();
+        Ok(package)
+    }
+
+    /// The features `tls` enables, given a package with `features` and `dependencies`.
+    fn enabled_by_tls(
+        features_table: &[(&str, &[&str])],
+        dependencies: &[cargo_metadata::Dependency],
+    ) -> eyre::Result<BTreeSet<String>> {
+        let package = package_with(features(features_table), dependencies)?;
+        let tls = "tls".to_string();
+        Ok(FeatureImplications::new(&package)
+            .closure([&tls])
+            .into_iter()
+            .map(String::from)
+            .collect())
+    }
+
+    fn names(names: &[&str]) -> BTreeSet<String> {
+        names.iter().copied().map(String::from).collect()
+    }
+
+    // The cases below mirror what `cargo tree -e features` reports Cargo enabling for
+    // `--no-default-features --features tls`.
+
+    #[test]
+    fn dependency_feature_enables_the_implicit_optional_dependency_feature() -> eyre::Result<()> {
+        let enabled = enabled_by_tls(
+            &[("foo", &["dep:foo"]), ("tls", &["foo/bar"])],
+            &[dependency("foo", "foo", true, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["foo", "tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_feature_enables_an_explicit_feature_named_after_the_dependency()
+    -> eyre::Result<()> {
+        // The explicit `foo` feature hides the implicit one but is enabled the same way, and its
+        // own implications follow.
+        let enabled = enabled_by_tls(
+            &[
+                ("foo", &["dep:foo", "extra"]),
+                ("extra", &[]),
+                ("tls", &["foo/bar"]),
+            ],
+            &[dependency("foo", "foo", true, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["extra", "foo", "tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_feature_uses_the_renamed_dependency_name() -> eyre::Result<()> {
+        let enabled = enabled_by_tls(
+            &[("baz", &["dep:baz"]), ("tls", &["baz/bar"])],
+            &[dependency("baz", "foo", true, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["baz", "tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn target_specific_optional_dependency_forms_no_edge() -> eyre::Result<()> {
+        // Cargo enables `foo` here only when building for Windows, so the graph, which serves
+        // every target, must not assume it.
+        let enabled = enabled_by_tls(
+            &[("foo", &["dep:foo"]), ("tls", &["foo/bar"])],
+            &[dependency("foo", "foo", true, Some("cfg(windows)"))?],
+        )?;
+        sim_assert_eq!(enabled, names(&["tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn untargeted_listing_forms_the_edge_beside_a_target_specific_one() -> eyre::Result<()> {
+        // The untargeted listing is active on every target, whatever the other listing says.
+        let enabled = enabled_by_tls(
+            &[("foo", &["dep:foo"]), ("tls", &["foo/bar"])],
+            &[
+                dependency("foo", "foo", true, Some("cfg(windows)"))?,
+                dependency("foo", "foo", true, None)?,
+            ],
+        )?;
+        sim_assert_eq!(enabled, names(&["foo", "tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn weak_dependency_feature_enables_no_feature() -> eyre::Result<()> {
+        let enabled = enabled_by_tls(
+            &[("foo", &["dep:foo"]), ("tls", &["foo?/bar"])],
+            &[dependency("foo", "foo", true, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_feature_enables_nothing_without_a_feature_of_that_name() -> eyre::Result<()> {
+        // `dep:foo` hides the implicit feature, and no explicit `foo` replaces it.
+        let enabled = enabled_by_tls(
+            &[("use-foo", &["dep:foo"]), ("tls", &["foo/bar"])],
+            &[dependency("foo", "foo", true, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["tls"]));
+        Ok(())
+    }
+
+    #[test]
+    fn non_optional_dependency_feature_leaves_a_same_named_feature_off() -> eyre::Result<()> {
+        let enabled = enabled_by_tls(
+            &[("foo", &[]), ("tls", &["foo/bar"])],
+            &[dependency("foo", "foo", false, None)?],
+        )?;
+        sim_assert_eq!(enabled, names(&["tls"]));
+        Ok(())
     }
 }
