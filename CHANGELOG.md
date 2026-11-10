@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.9.0]
+
 ### Added
 
 - Added patchable `required_feature_groups`, which drop every generated
