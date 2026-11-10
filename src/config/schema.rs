@@ -187,12 +187,14 @@ mod tests {
     use super::{FeatureMatrixPatch, ScopeConfig, SectionConfig};
     use crate::config::FlagConfig;
     use crate::config::patch::{StringSetPatch, TargetListPatch};
+    use color_eyre::eyre;
+    use color_eyre::eyre::{OptionExt as _, WrapErr as _};
     use serde::Serialize;
     use serde_json::Value;
     use std::collections::BTreeSet;
 
-    #[test]
-    fn scope_config_splits_flattened_feature_and_flag_keys() {
+    #[test_util::test]
+    fn scope_config_splits_flattened_feature_and_flag_keys() -> eyre::Result<()> {
         let value = serde_json::json!({
             "replace": true,
             "exclude_features": ["gpu"],
@@ -201,7 +203,8 @@ mod tests {
             "matrix": { "kind": "ci" },
             "pedantic": true,
         });
-        let scope: ScopeConfig = serde_json::from_value(value).expect("deserialize ScopeConfig");
+        let scope: ScopeConfig =
+            serde_json::from_value(value).wrap_err("deserialize ScopeConfig")?;
         assert!(scope.deprecated.replace);
         assert_eq!(scope.flags.pedantic, Some(true));
         assert_eq!(scope.features.skip_optional_dependencies, Some(true));
@@ -214,10 +217,11 @@ mod tests {
             Some(StringSetPatch::Patch { .. })
         ));
         assert!(scope.features.matrix.is_some());
+        Ok(())
     }
 
-    #[test]
-    fn should_inherit_reads_inherit_then_legacy_replace() {
+    #[test_util::test]
+    fn should_inherit_reads_inherit_then_legacy_replace() -> eyre::Result<()> {
         let cases = [
             (
                 serde_json::json!({ "inherit": false }),
@@ -239,15 +243,16 @@ mod tests {
             (serde_json::json!({}), true, "default"),
         ];
         for (value, expected, name) in cases {
-            let scope: ScopeConfig = serde_json::from_value(value).expect(name);
+            let scope: ScopeConfig = serde_json::from_value(value).wrap_err(name)?;
             assert_eq!(scope.should_inherit(), expected, "{name}");
         }
 
         assert!(ScopeConfig::default().should_inherit());
+        Ok(())
     }
 
-    #[test]
-    fn section_config_splits_subcommands_from_settings() {
+    #[test_util::test]
+    fn section_config_splits_subcommands_from_settings() -> eyre::Result<()> {
         let value = serde_json::json!({
             "targets": ["wasm", "linux"],
             "subcommands": {
@@ -255,39 +260,42 @@ mod tests {
             },
         });
         let section: SectionConfig =
-            serde_json::from_value(value).expect("deserialize SectionConfig");
+            serde_json::from_value(value).wrap_err("deserialize SectionConfig")?;
 
         assert!(matches!(
             section.settings.targets,
             Some(TargetListPatch::Override(_))
         ));
-        let command = section.subcommands.get("test").expect("test command");
+        let command = section.subcommands.get("test").ok_or_eyre("test command")?;
         assert_eq!(command.expand_targets, Some(false));
         assert_eq!(command.flags.verbose, Some(true));
+        Ok(())
     }
 
-    #[test]
-    fn absent_keys_default_to_none() {
+    #[test_util::test]
+    fn absent_keys_default_to_none() -> eyre::Result<()> {
         let scope: ScopeConfig =
-            serde_json::from_value(serde_json::json!({})).expect("deserialize empty");
+            serde_json::from_value(serde_json::json!({})).wrap_err("deserialize empty")?;
         assert!(scope.expand_targets.is_none());
         assert!(scope.env.is_none());
         assert!(scope.features.exclude_features.is_none());
         assert!(scope.features.skip_optional_dependencies.is_none());
+        Ok(())
     }
 
-    #[test]
-    fn empty_override_array_is_a_replace_not_absent() {
+    #[test_util::test]
+    fn empty_override_array_is_a_replace_not_absent() -> eyre::Result<()> {
         let scope: ScopeConfig = serde_json::from_value(serde_json::json!({ "only_features": [] }))
-            .expect("deserialize empty override");
+            .wrap_err("deserialize empty override")?;
         match scope.features.only_features {
             Some(StringSetPatch::Override(set)) => assert!(set.is_empty()),
-            other => panic!("expected empty override, got {other:?}"),
+            other => eyre::bail!("expected empty override, got {other:?}"),
         }
+        Ok(())
     }
 
-    #[test]
-    fn flattened_schema_key_sets_are_disjoint() {
+    #[test_util::test]
+    fn flattened_schema_key_sets_are_disjoint() -> eyre::Result<()> {
         let scope = [
             "inherit",
             "replace",
@@ -300,18 +308,19 @@ mod tests {
         .into_iter()
         .map(String::from)
         .collect::<BTreeSet<_>>();
-        let features = keys_for(FeatureMatrixPatch::default());
-        let flags = keys_for(FlagConfig::default());
+        let features = keys_for(FeatureMatrixPatch::default())?;
+        let flags = keys_for(FlagConfig::default())?;
 
         assert_disjoint("scope", &scope, "features", &features);
         assert_disjoint("scope", &scope, "flags", &flags);
         assert_disjoint("features", &features, "flags", &flags);
+        Ok(())
     }
 
-    fn keys_for<T: Serialize>(value: T) -> BTreeSet<String> {
-        match serde_json::to_value(value).expect("serialize default") {
-            Value::Object(map) => map.keys().cloned().collect(),
-            other => panic!("expected object, got {other:?}"),
+    fn keys_for<T: Serialize>(value: T) -> eyre::Result<BTreeSet<String>> {
+        match serde_json::to_value(value).wrap_err("serialize default")? {
+            Value::Object(map) => Ok(map.keys().cloned().collect()),
+            other => eyre::bail!("expected object, got {other:?}"),
         }
     }
 

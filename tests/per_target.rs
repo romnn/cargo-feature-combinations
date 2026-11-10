@@ -123,7 +123,7 @@ fn targets_in(rows: &[serde_json::Value]) -> HashSet<String> {
         .collect()
 }
 
-#[test]
+#[test_util::test]
 fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -152,7 +152,7 @@ fn no_configured_targets_matrix_includes_host_on_every_row() -> eyre::Result<()>
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -178,7 +178,7 @@ fn package_targets_multiply_matrix_rows() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -200,7 +200,7 @@ fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Result<()> {
     // A package-level `targets` list is a capability statement: an explicit
     // `--target` outside it skips the package instead of forcing the build.
@@ -226,7 +226,7 @@ fn explicit_cli_target_skips_package_with_other_configured_targets() -> eyre::Re
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
     // `targets = []` restricts the package to its single default target: a
     // foreign explicit `--target` skips it, the host target keeps it.
@@ -255,7 +255,7 @@ fn explicit_cli_target_honors_package_opt_out() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<()> {
     // `--no-targets --target <triple>` deliberately ignores all configured
     // target lists, package-level constraints included.
@@ -278,7 +278,7 @@ fn no_targets_with_explicit_cli_target_forces_package_opt_out() -> eyre::Result<
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn package_opt_out_uses_host_target() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -302,7 +302,7 @@ fn package_opt_out_uses_host_target() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn capability_denied_ignores_configured_targets() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -327,7 +327,7 @@ fn capability_denied_ignores_configured_targets() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
     // `a` is excluded only for `t-linux` via a matching cfg override, so the
     // linux rows must not contain `a` while the wasm rows do.
@@ -366,7 +366,7 @@ fn target_override_changes_feature_rows_per_target() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn matrix_user_fields_are_nested_under_metadata() -> eyre::Result<()> {
     let temp = single_crate(indoc! {r#"
         [package]
@@ -430,7 +430,7 @@ fn workspace(root_toml: &str) -> eyre::Result<TempDir> {
     Ok(temp)
 }
 
-#[test]
+#[test_util::test]
 fn workspace_targets_multiply_matrix_rows() -> eyre::Result<()> {
     let temp = workspace(indoc! {r#"
         [workspace]
@@ -456,7 +456,7 @@ fn workspace_targets_multiply_matrix_rows() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn package_targets_override_workspace_targets() -> eyre::Result<()> {
     let temp = TempDir::new()?;
     temp.child("Cargo.toml").write_str(indoc! {r#"
@@ -487,7 +487,7 @@ fn package_targets_override_workspace_targets() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn workspace_target_override_excludes_package_for_matching_target() -> eyre::Result<()> {
     let temp = TempDir::new()?;
     temp.child("Cargo.toml").write_str(indoc! {r#"
@@ -528,7 +528,7 @@ fn workspace_target_override_excludes_package_for_matching_target() -> eyre::Res
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn unavailable_target_with_override_fails_clearly() -> eyre::Result<()> {
     // An invalid triple combined with a target override forces real cfg
     // evaluation (rustc), which fails with a clear, triple-named error.

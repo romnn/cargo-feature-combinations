@@ -241,7 +241,7 @@ mod test {
         TargetTriple("aarch64-unknown-linux-gnu".to_string())
     }
 
-    #[test]
+    #[test_util::test]
     fn matches_simple_true_for_target_arch() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::new(None);
         let host = host_triple()?;
@@ -267,7 +267,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn rejects_feature_predicate() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::new(None);
 
@@ -280,7 +280,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cross_flag_tracks_host_vs_target() -> eyre::Result<()> {
         let host = linux_x86();
         let cross = linux_aarch64();
@@ -303,7 +303,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cross_errors_when_host_is_unknown() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::new(None);
 
@@ -315,7 +315,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn rejects_unknown_bare_flag() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::new(None);
 
@@ -335,7 +335,7 @@ mod test {
 
     /// Bare identifiers that cfg-expr types (`unix`, `test`, and friends) must
     /// not trip the unknown-flag rejection.
-    #[test]
+    #[test_util::test]
     fn typed_bare_identifiers_still_evaluate() -> eyre::Result<()> {
         let mut eval = RustcCfgEvaluator::new(None);
 

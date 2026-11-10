@@ -1,0 +1,21 @@
+[package]
+name = "test-util"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Test attribute that installs the color-eyre report handler"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+color-eyre = "0.6"

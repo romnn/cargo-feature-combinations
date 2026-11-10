@@ -213,18 +213,8 @@ mod test {
     use color_eyre::eyre;
     use serde_json::json;
 
-    static INIT: std::sync::Once = std::sync::Once::new();
-
-    fn init() {
-        INIT.call_once(|| {
-            color_eyre::install().ok();
-        });
-    }
-
-    #[test]
+    #[test_util::test]
     fn workspace_with_package() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -236,10 +226,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_with_excluded_package() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -256,10 +244,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_with_excluded_package_cargo_fc_alias() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -279,10 +265,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_with_excluded_package_fc_alias() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -302,10 +286,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_with_excluded_package_feature_combinations_alias() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -325,10 +307,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_config_reads_install_missing_targets() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -349,10 +329,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_config_reads_omit_host_target_flag() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -373,10 +351,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_metadata_rejects_unknown_flag_keys() -> eyre::Result<()> {
-        init();
-
         let package = crate::package::test::package_with_features(&[])?;
         let metadata = workspace_builder()
             .packages(vec![package.clone()])
@@ -397,7 +373,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn json_has_values_treats_false_as_default_empty_value() {
         assert!(!json_has_values(Some(&json!(false))));
         assert!(json_has_values(Some(&json!(true))));

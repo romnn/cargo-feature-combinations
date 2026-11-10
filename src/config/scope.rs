@@ -275,9 +275,11 @@ fn command_entry_for_token<'a>(
 mod tests {
     use super::command_entry_for_token;
     use crate::config::ScopeConfig;
+    use color_eyre::eyre;
+    use color_eyre::eyre::OptionExt as _;
     use std::collections::BTreeMap;
 
-    #[test]
+    #[test_util::test]
     fn builtin_short_alias_inherits_long_command_policy() {
         let subcommands = BTreeMap::from([(
             "build".to_string(),
@@ -295,7 +297,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn builtin_short_alias_exact_policy_wins_over_long_command_policy() {
         let subcommands = BTreeMap::from([
             (
@@ -322,12 +324,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn command_entry_returns_matched_name() {
+    #[test_util::test]
+    fn command_entry_returns_matched_name() -> eyre::Result<()> {
         let subcommands = BTreeMap::from([("test".to_string(), ScopeConfig::default())]);
 
-        let (name, _config) = command_entry_for_token("t", &subcommands).expect("alias match");
+        let (name, _config) =
+            command_entry_for_token("t", &subcommands).ok_or_eyre("alias match")?;
 
         assert_eq!(name, "test");
+        Ok(())
     }
 }

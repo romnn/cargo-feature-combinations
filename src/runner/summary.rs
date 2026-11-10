@@ -390,7 +390,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn summary_target_field_prefix() {
         sim_assert_eq!(SummaryTarget::Hidden.field_prefix(), "");
         sim_assert_eq!(
@@ -407,7 +407,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn print_summary_returns_one_for_pedantic_warning_exit_zero() {
         let summary = vec![summary_with_failure(Some(0), false)];
         let mut stdout = termcolor::StandardStream::stdout(termcolor::ColorChoice::Never);
@@ -417,7 +417,7 @@ mod test {
         sim_assert_eq!(exit, Some(1));
     }
 
-    #[test]
+    #[test_util::test]
     fn print_summary_returns_one_for_failure_without_exit_code() {
         let summary = vec![summary_with_failure(None, false)];
         let mut stdout = termcolor::StandardStream::stdout(termcolor::ColorChoice::Never);
@@ -427,7 +427,7 @@ mod test {
         sim_assert_eq!(exit, Some(1));
     }
 
-    #[test]
+    #[test_util::test]
     fn print_summary_preserves_nonzero_failure_exit_code() {
         let summary = vec![summary_with_failure(Some(101), false)];
         let mut stdout = termcolor::StandardStream::stdout(termcolor::ColorChoice::Never);
@@ -437,14 +437,14 @@ mod test {
         sim_assert_eq!(exit, Some(101));
     }
 
-    #[test]
+    #[test_util::test]
     fn error_regex_single_mod_multiple_errors() {
         let stderr = include_str!("../../test-data/single_mod_multiple_errors_stderr.txt");
         let errors: Vec<_> = error_counts(stderr).collect();
         sim_assert_eq!(&errors, &vec![2]);
     }
 
-    #[test]
+    #[test_util::test]
     fn error_regex_with_target_kind() {
         let stderr =
             "error: could not compile `docparser-paddleocr-vl` (lib) due to 24 previous errors";
@@ -452,7 +452,7 @@ mod test {
         sim_assert_eq!(&errors, &vec![24]);
     }
 
-    #[test]
+    #[test_util::test]
     fn error_regex_with_target_kind_bin() {
         let stderr =
             "error: could not compile `my-crate` (bin \"my-crate\") due to 3 previous errors";
@@ -460,7 +460,7 @@ mod test {
         sim_assert_eq!(&errors, &vec![3]);
     }
 
-    #[test]
+    #[test_util::test]
     fn warning_regex_two_mod_multiple_warnings() {
         let stderr = include_str!("../../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();

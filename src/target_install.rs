@@ -379,7 +379,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn install_contexts_skip_host_and_group_by_package_working_dir() -> eyre::Result<()> {
         let package_a = package("a", "/workspace/a/Cargo.toml")?;
         let package_b = package("b", "/workspace/b/Cargo.toml")?;
@@ -395,7 +395,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn missing_targets_filter_installed_without_reordering() {
         let candidates = vec![
             TargetTriple("wasm".to_string()),
@@ -409,7 +409,7 @@ mod test {
         assert_eq!(triples(&targets), vec!["wasm", "darwin"]);
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_installs_only_missing_non_host_targets() -> eyre::Result<()>
     {
         let package = package("a", "/workspace/a/Cargo.toml")?;
@@ -429,7 +429,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_skips_rustup_when_only_host_is_planned() -> eyre::Result<()>
     {
         let package = package("a", "/workspace/a/Cargo.toml")?;
@@ -443,7 +443,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_continues_when_rustup_list_fails() -> eyre::Result<()> {
         let package = package("a", "/workspace/a/Cargo.toml")?;
         let plans = plan_set(&["wasm"], &[&package]);
@@ -459,7 +459,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_continues_when_host_is_unknown() -> eyre::Result<()> {
         let package = package("a", "/workspace/a/Cargo.toml")?;
         let mut plans = plan_set(&["wasm"], &[&package]);
@@ -473,7 +473,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_skips_zero_combination_package_plans() -> eyre::Result<()> {
         let package = package("a", "/workspace/a/Cargo.toml")?;
         let plans = empty_plan_set(&["wasm"], &[&package]);
@@ -486,7 +486,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ensure_missing_targets_installed_retries_batch_failure_individually() -> eyre::Result<()> {
         let package = package("a", "/workspace/a/Cargo.toml")?;
         let plans = plan_set(&["wasm", "windows"], &[&package]);

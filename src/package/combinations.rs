@@ -669,8 +669,9 @@ mod test {
     use super::FeatureCombinationError;
     use crate::config::{Config, ResolvedFeatures};
     use crate::package::Package as _;
-    use crate::package::test::{init, package_with_features};
+    use crate::package::test::package_with_features;
     use color_eyre::eyre;
+    use color_eyre::eyre::OptionExt as _;
     use itertools::Itertools;
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::{BTreeSet, HashSet};
@@ -743,9 +744,8 @@ mod test {
             .collect()
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo-c", "foo-a", "foo-b"])?;
         let config = Config::default();
         let want = vec![
@@ -764,9 +764,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_only_features() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo", "bar", "baz"])?;
         let config = ResolvedFeatures {
             only_features: HashSet::from(["foo".to_string(), "bar".to_string()]),
@@ -780,9 +779,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_preserve_open_world_powerset() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml", "webgpu", "tracing"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![HashSet::from([
@@ -808,9 +806,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_ignore_unknown_and_degenerate_groups() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "tracing"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![
@@ -833,9 +830,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_respect_universe_filters() -> eyre::Result<()> {
-        init();
         let mut package = package_with_features(&["cuda", "coreml", "tracing"])?;
         package
             .features
@@ -871,9 +867,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_collapse_around_included_member() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml", "tracing"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![HashSet::from([
@@ -891,10 +886,9 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_collapse_around_included_excluded_member() -> eyre::Result<()>
     {
-        init();
         let package = package_with_features(&["cuda", "coreml", "tracing"])?;
         // `cuda` is excluded from the varied universe but still chained into
         // every combination through `include_features`, so the group must
@@ -916,10 +910,9 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_reject_forced_conflict_with_excluded_member()
     -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         // Excluding `cuda` does not stop `include_features` from forcing it
         // into every combination, so this must still be a forced conflict
@@ -936,7 +929,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("forcing two mutually exclusive features should fail");
+            .err()
+            .ok_or_eyre("forcing two mutually exclusive features should fail")?;
         let message = err.to_string();
 
         assert!(message.contains("cuda"), "{message}");
@@ -945,9 +939,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_reject_forced_conflict() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![HashSet::from([
@@ -960,7 +953,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("forcing two mutually exclusive features should fail");
+            .err()
+            .ok_or_eyre("forcing two mutually exclusive features should fail")?;
         let message = err.to_string();
 
         assert!(message.contains("test"), "{message}");
@@ -970,9 +964,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_include_exact_set_is_escape_hatch() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![HashSet::from([
@@ -990,9 +983,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_allow_feature_sets_ignore_mutually_exclusive_groups() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![
@@ -1011,9 +1003,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_filter_isolated_powersets() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml", "tracing"])?;
         let config = ResolvedFeatures {
             isolated_feature_sets: vec![HashSet::from([
@@ -1042,9 +1033,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_respect_no_empty_feature_set() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![HashSet::from([
@@ -1062,10 +1052,9 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_use_named_features_not_implication_closures()
     -> eyre::Result<()> {
-        init();
         let mut package = package_with_features(&["a", "b"])?;
         package
             .features
@@ -1082,9 +1071,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_mutually_exclusive_reject_overlapping_groups() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "coreml"])?;
         let config = ResolvedFeatures {
             mutually_exclusive_features: vec![
@@ -1096,7 +1084,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("overlapping mutually exclusive groups should fail");
+            .err()
+            .ok_or_eyre("overlapping mutually exclusive groups should fail")?;
         let message = err.to_string();
 
         assert!(message.contains("test"), "{message}");
@@ -1106,9 +1095,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_direct_generator_matches_pairwise_exclusion_oracle() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["a", "b", "c", "d", "e"])?;
         let group_families = [
             vec![],
@@ -1175,9 +1163,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_limit_uses_constrained_count() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["a", "b", "c", "free-a", "free-b"])?;
         let group = HashSet::from(["a".to_string(), "b".to_string(), "c".to_string()]);
         let config = ResolvedFeatures {
@@ -1196,7 +1183,8 @@ mod test {
                 max_combinations: Some(15),
                 ..ResolvedFeatures::default()
             })
-            .expect_err("the constrained 16-row matrix should exceed limit 15");
+            .err()
+            .ok_or_eyre("the constrained 16-row matrix should exceed limit 15")?;
         assert!(matches!(
             err.downcast_ref::<FeatureCombinationError>(),
             Some(FeatureCombinationError::TooManyConfigurations {
@@ -1208,9 +1196,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn mutually_exclusive_group_avoids_naive_powerset_overflow() -> eyre::Result<()> {
-        init();
         let features = (0..128)
             .map(|index| format!("f{index}"))
             .collect::<Vec<_>>();
@@ -1228,9 +1215,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_respects_configured_max_combinations() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo", "bar"])?;
         let config = ResolvedFeatures {
             max_combinations: Some(3),
@@ -1239,7 +1225,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("2 features produce 4 combinations and should exceed limit 3");
+            .err()
+            .ok_or_eyre("2 features produce 4 combinations and should exceed limit 3")?;
 
         assert!(matches!(
             err.downcast_ref::<FeatureCombinationError>(),
@@ -1248,9 +1235,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_isolated() -> eyre::Result<()> {
-        init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-b", "car-a"])?;
         let config = ResolvedFeatures {
@@ -1275,9 +1261,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_isolated_non_existent() -> eyre::Result<()> {
-        init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = ResolvedFeatures {
@@ -1300,9 +1285,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_isolated_denylist() -> eyre::Result<()> {
-        init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-b", "bar-a", "car-a", "car-b"])?;
         let config = ResolvedFeatures {
@@ -1326,9 +1310,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_isolated_non_existent_denylist() -> eyre::Result<()> {
-        init();
         let package =
             package_with_features(&["foo-b", "foo-a", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = ResolvedFeatures {
@@ -1346,9 +1329,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_isolated_non_existent_denylist_exact() -> eyre::Result<()> {
-        init();
         let package =
             package_with_features(&["foo-a", "foo-b", "bar-a", "bar-b", "car-a", "car-b"])?;
         let config = ResolvedFeatures {
@@ -1371,9 +1353,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_allow_feature_sets_exact() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["hydrate", "ssr", "other"])?;
         let config = ResolvedFeatures {
             allow_feature_sets: vec![
@@ -1390,9 +1371,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_allow_feature_sets_ignores_other_options() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["hydrate", "ssr"])?;
         let config = ResolvedFeatures {
             allow_feature_sets: vec![HashSet::from(["hydrate".to_string()])],
@@ -1410,9 +1390,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_allow_feature_sets_normalize_unknown_features() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["hydrate", "ssr"])?;
         // Unknown names are rejected at config load; a `ResolvedFeatures`
         // built directly (library callers, tests) still normalizes them away
@@ -1432,9 +1411,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_no_empty_feature_set_filters_generated_empty() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo", "bar"])?;
         let config = ResolvedFeatures {
             no_empty_feature_set: true,
@@ -1448,9 +1426,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_no_empty_feature_set_filters_included_empty() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo"])?;
         let config = ResolvedFeatures {
             include_feature_sets: vec![HashSet::new()],
@@ -1465,9 +1442,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_exclude_empty_feature_set_only() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["foo", "bar"])?;
         let config = ResolvedFeatures {
             exclude_feature_sets: vec![HashSet::new()],
@@ -1481,9 +1457,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn too_many_feature_configurations() -> eyre::Result<()> {
-        init();
         let features: Vec<String> = (0..25).map(|i| format!("f{i}")).collect();
         let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
         let package = package_with_features(&feature_refs)?;
@@ -1523,9 +1498,8 @@ mod test {
         Ok(package)
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_with_mutual_exclusion_select_exactly_one() -> eyre::Result<()> {
-        init();
         let package = tls_client()?;
         let backends = group(&["native-tls", "rustls"]);
         let config = ResolvedFeatures {
@@ -1572,9 +1546,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_require_a_member_of_every_group() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "metal", "rustls", "openssl"])?;
         let config = ResolvedFeatures {
             required_feature_groups: vec![group(&["cuda", "metal"]), group(&["rustls", "openssl"])],
@@ -1597,9 +1570,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_filter_isolated_powersets() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "metal", "tracing"])?;
         let config = ResolvedFeatures {
             isolated_feature_sets: vec![group(&["cuda", "tracing"]), group(&["metal"])],
@@ -1614,9 +1586,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_met_by_include_features_keep_every_row() -> eyre::Result<()> {
-        init();
         let mut package = package_with_features(&["cuda", "metal", "tracing"])?;
         package
             .features
@@ -1638,10 +1609,9 @@ mod test {
 
     /// Mutual exclusion matches the features a row names, while required groups follow
     /// implications, so "exactly one" needs an `exclude_feature_sets` entry per implying feature.
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_do_not_extend_mutual_exclusion_to_implied_members()
     -> eyre::Result<()> {
-        init();
         let package = tls_client()?;
         let backends = group(&["native-tls", "rustls"]);
         let config = ResolvedFeatures {
@@ -1660,9 +1630,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_do_not_filter_exact_sets() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "metal", "tracing"])?;
 
         // `include_feature_sets` is an escape hatch that other rules do not filter.
@@ -1687,9 +1656,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_reject_a_group_no_row_can_meet() -> eyre::Result<()> {
-        init();
         let package = tls_client()?;
         let config = ResolvedFeatures {
             required_feature_groups: vec![group(&["native-tls", "rustls"])],
@@ -1699,7 +1667,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("excluding every way to reach a backend must not empty the matrix");
+            .err()
+            .ok_or_eyre("excluding every way to reach a backend must not empty the matrix")?;
         let message = err.to_string();
 
         assert!(message.contains("[native-tls, rustls]"), "{message}");
@@ -1707,9 +1676,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_accept_exact_sets_replacing_every_row() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "metal", "tracing"])?;
 
         // No generated row can reach a member, but the exact set keeps the matrix non-empty.
@@ -1727,9 +1695,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn combinations_required_groups_reject_groups_no_row_meets_together() -> eyre::Result<()> {
-        init();
         let package = package_with_features(&["cuda", "metal"])?;
 
         // Each group alone is reachable, but the mutual exclusion forbids meeting both.
@@ -1741,7 +1708,8 @@ mod test {
 
         let err = package
             .feature_combinations(&config)
-            .expect_err("jointly unsatisfiable groups must not empty the matrix");
+            .err()
+            .ok_or_eyre("jointly unsatisfiable groups must not empty the matrix")?;
 
         assert!(err.to_string().contains("every group at once"), "{err}");
         Ok(())

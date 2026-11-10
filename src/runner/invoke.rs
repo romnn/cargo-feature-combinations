@@ -514,7 +514,7 @@ mod test {
         values.iter().copied().map(String::from).collect()
     }
 
-    #[test]
+    #[test_util::test]
     fn feature_selection_is_qualified_to_the_planned_package() {
         let features = string_vec(&["backend-a", "shared"]);
 
@@ -525,7 +525,7 @@ mod test {
         sim_assert_eq!(feature_selection_flag("my-crate", &[]), "--features=");
     }
 
-    #[test]
+    #[test_util::test]
     fn member_is_selected_by_its_manifest() -> eyre::Result<()> {
         let member = package_with_manifest_path("a", "/ws/crates/a/Cargo.toml")?;
 
@@ -536,7 +536,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn root_package_is_also_selected_by_name() -> eyre::Result<()> {
         let root = package_with_manifest_path("root", "/ws/Cargo.toml")?;
 
@@ -548,7 +548,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn selection_by_name_uses_the_fully_qualified_package_id() -> eyre::Result<()> {
         let mut root = package_with_manifest_path("serde", "/ws/Cargo.toml")?;
         root.id.repr = "path+file:///ws#serde@0.1.0".to_string();
@@ -573,7 +573,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn existing_manifest_leaves_selection_to_the_package_id() -> eyre::Result<()> {
         let member = package_with_manifest_path("a", "/ws/crates/a/Cargo.toml")?;
 
@@ -586,7 +586,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn errors_only_appends_after_plain_rustflags() {
         let (key, value) =
             errors_only_rustflags_env(None, Some(OsString::from("-Dwarnings --cfg ci")));
@@ -595,7 +595,7 @@ mod test {
         sim_assert_eq!(value, OsString::from("-Dwarnings --cfg ci -Awarnings"));
     }
 
-    #[test]
+    #[test_util::test]
     fn errors_only_extends_encoded_rustflags_when_present() {
         let (key, value) = errors_only_rustflags_env(
             Some(OsString::from("-Dwarnings\x1f--cfg=ci")),
@@ -609,7 +609,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn errors_only_handles_empty_encoded_rustflags() {
         let (key, value) = errors_only_rustflags_env(Some(OsString::new()), None);
 
@@ -626,7 +626,7 @@ mod test {
         Ok(resolved)
     }
 
-    #[test]
+    #[test_util::test]
     fn errors_only_composes_with_resolved_rustflags() -> eyre::Result<()> {
         let env = resolved_env(serde_json::json!({
             "add": { "RUSTFLAGS": "-Dwarnings --cfg ci" },
@@ -648,7 +648,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn color_forcing_honors_effective_user_values() -> eyre::Result<()> {
         let configured = resolved_env(serde_json::json!({
             "add": { "CARGO_TERM_COLOR": "never" },
@@ -670,7 +670,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn configured_cargo_driver_is_not_clobbered() -> eyre::Result<()> {
         let env = resolved_env(serde_json::json!({
             "add": { "CARGO_DRIVER": "configured-driver" },

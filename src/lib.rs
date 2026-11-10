@@ -711,7 +711,7 @@ mod test {
         ))
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_marks_nested_run_wrapper_aliases() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
@@ -736,7 +736,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_keeps_direct_run_args_on_cargo_side() -> eyre::Result<()> {
         let workspace = workspace_with_aliases("[alias]\n")?;
 
@@ -756,7 +756,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_keeps_run_alias_user_args_on_cargo_side() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
@@ -780,7 +780,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_preserves_run_alias_argument_position() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
@@ -804,7 +804,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_preserves_cli_target_for_run_wrapper_aliases() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
@@ -846,7 +846,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_ignores_wrapper_cargo_target_for_target_planning() -> eyre::Result<()>
     {
         let workspace = workspace_with_aliases(indoc! {r#"
@@ -878,7 +878,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn prepare_cargo_command_reads_cli_target_from_expanded_alias() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
             [alias]
@@ -904,7 +904,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_selected_for_supported_multi_target_command() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -924,7 +924,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_allows_drivers_to_split_across_targets() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -966,7 +966,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_falls_back_for_run() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -986,7 +986,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_allows_run_wrapper_aliases() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -1006,7 +1006,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_falls_back_for_pruned_summaries() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -1026,7 +1026,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn aggregate_execution_mode_is_noop_for_single_target() -> eyre::Result<()> {
         let package = test_package("a")?;
         let flags = config::ResolvedFlags {
@@ -1046,7 +1046,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn no_targets_flag_disables_configured_targets() -> eyre::Result<()> {
         let options = Options {
             flags: config::FlagConfig {
@@ -1064,7 +1064,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn builtin_command_allows_capability_without_no_targets() -> eyre::Result<()> {
         let options = Options::default();
         let ws = config::WorkspaceConfig::default();
@@ -1076,7 +1076,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn builtin_command_can_be_disabled_by_workspace_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
@@ -1095,7 +1095,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_subcommand_replace_discards_broader_expand_targets_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
@@ -1136,7 +1136,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn resolved_alias_inherits_builtin_capability_by_default() -> eyre::Result<()> {
         let options = Options::default();
         let ws = config::WorkspaceConfig::default();
@@ -1148,7 +1148,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_alias_policy_wins_over_resolved_builtin_policy() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
@@ -1167,7 +1167,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_alias_policy_can_enable_unresolved_expanded_command() -> eyre::Result<()> {
         let options = Options::default();
         let mut ws = config::WorkspaceConfig::default();
@@ -1186,7 +1186,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn no_targets_flag_disables_configured_targets_for_matrix() -> eyre::Result<()> {
         let options = Options {
             command: Some(Command::FeatureMatrix { pretty: false }),
@@ -1205,19 +1205,19 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn find_metadata_value_returns_none_for_empty_object() {
         let meta = json!({});
         assert!(find_metadata_value(&meta).is_none());
     }
 
-    #[test]
+    #[test_util::test]
     fn find_metadata_value_returns_none_for_unrelated_keys() {
         let meta = json!({ "other-tool": { "key": "value" } });
         assert!(find_metadata_value(&meta).is_none());
     }
 
-    #[test]
+    #[test_util::test]
     fn find_metadata_value_finds_each_alias() -> eyre::Result<()> {
         for &alias in METADATA_KEYS {
             let meta = json!({ alias: { "exclude_features": ["foo"] } });
@@ -1229,7 +1229,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn find_metadata_value_prefers_longest_alias() -> eyre::Result<()> {
         let meta = json!({
             "cargo-feature-combinations": { "source": "long" },
@@ -1241,7 +1241,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn find_metadata_value_prefers_cargo_fc_over_fc() -> eyre::Result<()> {
         let meta = json!({
             "cargo-fc": { "source": "cargo-fc" },
@@ -1252,7 +1252,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn pkg_metadata_section_formats_correctly() {
         assert_eq!(
             pkg_metadata_section("cargo-fc"),
@@ -1261,7 +1261,7 @@ mod test {
         assert_eq!(pkg_metadata_section("fc"), "package.metadata.fc");
     }
 
-    #[test]
+    #[test_util::test]
     fn ws_metadata_section_formats_correctly() {
         assert_eq!(
             ws_metadata_section("cargo-fc"),
@@ -1269,12 +1269,12 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn default_metadata_key_is_cargo_fc() {
         assert_eq!(DEFAULT_METADATA_KEY, "cargo-fc");
     }
 
-    #[test]
+    #[test_util::test]
     fn default_pkg_metadata_section_uses_default_key() {
         assert_eq!(DEFAULT_PKG_METADATA_SECTION, "package.metadata.cargo-fc");
     }

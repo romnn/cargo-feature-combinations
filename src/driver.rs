@@ -184,7 +184,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn default_driver_is_plain_cargo_for_the_host_target() {
         let default = DefaultDriver {
             host: target::detect_host(&DriverTestEnv { host: Some("host") }),
@@ -197,7 +197,7 @@ mod tests {
     /// The host target keeps plain cargo even when the same run also plans a
     /// cross target, so its artifacts stay interchangeable with an ordinary
     /// `cargo` build.
-    #[test]
+    #[test_util::test]
     fn default_driver_is_per_target_not_per_run() {
         let default = DefaultDriver {
             host: target::detect_host(&DriverTestEnv { host: Some("host") }),
@@ -214,7 +214,7 @@ mod tests {
         assert!(default.needs_cross_driver(&TargetTriple("wasm".to_string())));
     }
 
-    #[test]
+    #[test_util::test]
     fn finalize_driver_treats_explicit_cargo_as_plain_cargo() -> eyre::Result<()> {
         assert_eq!(
             finalize_driver(Some("cargo"), Some("cargo-zigbuild"))?,
@@ -223,7 +223,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn finalize_driver_uses_explicit_custom_driver() -> eyre::Result<()> {
         assert_eq!(
             finalize_driver(Some("cross"), None)?,
@@ -232,7 +232,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn finalize_driver_uses_default_only_when_unset() -> eyre::Result<()> {
         assert_eq!(
             finalize_driver(None, Some("cargo-zigbuild"))?,
@@ -242,12 +242,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn finalize_driver_rejects_empty_driver() {
         assert!(finalize_driver(Some("   "), None).is_err());
     }
 
-    #[test]
+    #[test_util::test]
     fn default_driver_falls_back_to_plain_cargo_when_host_detection_fails() {
         let default = DefaultDriver {
             host: target::detect_host(&DriverTestEnv { host: None }),
@@ -258,14 +258,14 @@ mod tests {
         assert_eq!(default.for_target(&TargetTriple("wasm".to_string())), None);
     }
 
-    #[test]
+    #[test_util::test]
     fn probe_driver_accepts_working_driver() {
         // rustc is on PATH for every test run of this crate and its
         // `--version` exits successfully.
         assert!(probe_driver("rustc").is_ok());
     }
 
-    #[test]
+    #[test_util::test]
     fn probe_driver_reports_missing_driver() {
         let failure = probe_driver("cargo-fc-test-missing-driver").unwrap_err();
         assert_eq!(failure.reason, "was not found");
@@ -276,7 +276,7 @@ mod tests {
     /// shim with no version configured) must fail the probe with its stderr
     /// preserved, not count as available.
     #[cfg(unix)]
-    #[test]
+    #[test_util::test]
     fn probe_driver_rejects_failing_version_probe() -> eyre::Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
 

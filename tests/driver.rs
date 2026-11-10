@@ -82,7 +82,7 @@ fn drivers_by_target(
     Ok(out)
 }
 
-#[test]
+#[test_util::test]
 fn target_scoped_driver_resolves_only_for_its_target() -> eyre::Result<()> {
     // The wasm target cross-compiles with `cross`; the linux target inherits the
     // package driver `cargo-zigbuild`.
@@ -115,7 +115,7 @@ fn target_scoped_driver_resolves_only_for_its_target() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn subcommand_driver_overrides_package_driver_for_that_command() -> eyre::Result<()> {
     // The package builds with `cargo-zigbuild`, but `cargo fc test` forces plain
     // `cargo` for the whole package.

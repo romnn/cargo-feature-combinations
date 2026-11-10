@@ -180,46 +180,53 @@ pub(crate) fn validate_value(value: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::{CombinedEnvOps, EnvPatch, EnvValue, ResolvedEnv};
+    use color_eyre::eyre;
+    use color_eyre::eyre::WrapErr as _;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use std::ffi::OsStr;
     use std::process::Command;
 
-    #[test]
-    fn patch_deserializes_all_operations() {
+    #[test_util::test]
+    fn patch_deserializes_all_operations() -> eyre::Result<()> {
         let patch: EnvPatch = serde_json::from_value(json!({
             "override": { "BASE": "base" },
             "remove": ["OLD"],
             "add": { "NEW": "new" },
         }))
-        .expect("deserialize env patch");
+        .wrap_err("deserialize env patch")?;
 
-        assert!(patch.r#override.as_ref().is_some_and(|map| {
-            serde_json::to_value(map).expect("serialize override") == json!({ "BASE": "base" })
-        }));
+        let override_value = patch
+            .r#override
+            .as_ref()
+            .map(|map| serde_json::to_value(map).wrap_err("serialize override"))
+            .transpose()?;
+        assert!(override_value.is_some_and(|value| value == json!({ "BASE": "base" })));
         assert_eq!(patch.remove.into_iter().collect::<Vec<_>>(), ["OLD"]);
         assert_eq!(
-            serde_json::to_value(patch.add).expect("serialize additions"),
+            serde_json::to_value(patch.add).wrap_err("serialize additions")?,
             json!({ "NEW": "new" })
         );
+        Ok(())
     }
 
-    #[test]
-    fn value_debug_output_is_redacted() {
-        let value: EnvValue =
-            serde_json::from_value(json!("secret-value")).expect("deserialize environment value");
+    #[test_util::test]
+    fn value_debug_output_is_redacted() -> eyre::Result<()> {
+        let value: EnvValue = serde_json::from_value(json!("secret-value"))
+            .wrap_err("deserialize environment value")?;
 
         assert_eq!(format!("{value:?}"), "EnvValue(<redacted>)");
+        Ok(())
     }
 
-    #[test]
-    fn resolved_patch_preserves_disjoint_set_and_remove_states() {
+    #[test_util::test]
+    fn resolved_patch_preserves_disjoint_set_and_remove_states() -> eyre::Result<()> {
         let mut resolved = ResolvedEnv::default();
         resolved.apply_patch(&CombinedEnvOps {
             r#override: None,
             add: BTreeMap::from([(
                 "SHARED".to_string(),
-                serde_json::from_value(json!("set")).expect("deserialize value"),
+                serde_json::from_value(json!("set")).wrap_err("deserialize value")?,
             )]),
             remove: BTreeSet::from(["SHARED".to_string(), "REMOVED".to_string()]),
         });
@@ -227,16 +234,17 @@ mod tests {
         assert!(resolved.set.contains_key("SHARED"));
         assert!(!resolved.remove.contains("SHARED"));
         assert!(resolved.remove.contains("REMOVED"));
+        Ok(())
     }
 
-    #[test]
-    fn apply_to_records_sets_and_removals_without_clearing_ambient_env() {
+    #[test_util::test]
+    fn apply_to_records_sets_and_removals_without_clearing_ambient_env() -> eyre::Result<()> {
         let mut resolved = ResolvedEnv::default();
         resolved.apply_patch(&CombinedEnvOps {
             r#override: None,
             add: BTreeMap::from([(
                 "ADDED".to_string(),
-                serde_json::from_value(json!("value")).expect("deserialize value"),
+                serde_json::from_value(json!("value")).wrap_err("deserialize value")?,
             )]),
             remove: BTreeSet::from(["REMOVED".to_string()]),
         });
@@ -250,5 +258,6 @@ mod tests {
             Some(&Some(OsStr::new("value")))
         );
         assert_eq!(env.get(OsStr::new("REMOVED")), Some(&None));
+        Ok(())
     }
 }

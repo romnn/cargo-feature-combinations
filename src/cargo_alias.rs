@@ -313,7 +313,7 @@ mod tests {
         expand_aliases_with_env(args, cwd, |_| None).args
     }
 
-    #[test]
+    #[test_util::test]
     fn expands_string_alias_in_place() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -331,7 +331,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn expands_nested_aliases_until_builtin() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -350,7 +350,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn splits_string_alias_on_whitespace_like_cargo() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -379,7 +379,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn keeps_array_alias_elements_verbatim() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -396,7 +396,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn legacy_config_wins_over_config_toml_in_one_directory() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -425,7 +425,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn tracks_only_alias_provided_double_dash() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -454,7 +454,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn leaves_builtin_subcommand_untouched() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -470,7 +470,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn leaves_non_target_builtin_subcommand_untouched() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -486,7 +486,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn preserves_toolchain_prefix() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -502,7 +502,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn empty_alias_keeps_subcommand_token() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -522,7 +522,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn env_alias_overrides_config_alias() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -548,7 +548,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn env_alias_expands_without_config_files() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         let env_var =
@@ -560,7 +560,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn env_alias_extends_array_alias() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -580,7 +580,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn array_aliases_join_across_config_levels() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -605,7 +605,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn nearest_config_to_cwd_wins() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
@@ -635,7 +635,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn caps_cyclic_alias_expansion() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(

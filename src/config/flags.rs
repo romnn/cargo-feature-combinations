@@ -482,9 +482,10 @@ pub(crate) fn combine_driver<T>(
 #[cfg(test)]
 mod tests {
     use super::{FlagConfig, ResolvedFlags};
+    use color_eyre::eyre::OptionExt as _;
     use std::collections::BTreeSet;
 
-    #[test]
+    #[test_util::test]
     fn flag_subset_macros_match_documented_special_cases() {
         macro_rules! define_master_fields {
             ($($field:ident),+ $(,)?) => {
@@ -517,7 +518,7 @@ mod tests {
         assert_eq!(simple_resolved, expected_simple_resolved);
     }
 
-    #[test]
+    #[test_util::test]
     fn flag_overlay_preserves_diagnostics_couplings() -> color_eyre::eyre::Result<()> {
         // A narrower dedupe = true rescues a broader diagnostics_only = false.
         let mut flags = FlagConfig {
@@ -549,32 +550,36 @@ mod tests {
     }
 
     /// One scope may name the setting once, whichever spelling it uses.
-    #[test]
-    fn contradictory_prune_spellings_in_one_scope_error() {
+    #[test_util::test]
+    fn contradictory_prune_spellings_in_one_scope_error() -> color_eyre::eyre::Result<()> {
         let err = both_prune_spellings()
             .normalize(super::FlagSource::Config)
-            .expect_err("contradictory prune spelling should fail");
+            .err()
+            .ok_or_eyre("contradictory prune spelling should fail")?;
 
         let message = err.to_string();
         assert!(message.contains("`no_prune_implied`"), "{message}");
         assert!(message.contains("same scope"), "{message}");
+        Ok(())
     }
 
     /// The same contradiction typed as flags names the flags, not the keys.
-    #[test]
-    fn contradictory_prune_spellings_on_the_cli_error() {
+    #[test_util::test]
+    fn contradictory_prune_spellings_on_the_cli_error() -> color_eyre::eyre::Result<()> {
         let err = both_prune_spellings()
             .normalize(super::FlagSource::CommandLine)
-            .expect_err("contradictory prune spelling should fail");
+            .err()
+            .ok_or_eyre("contradictory prune spelling should fail")?;
 
         let message = err.to_string();
         assert!(message.contains("`--no-prune-implied`"), "{message}");
         assert!(message.contains("pass only one"), "{message}");
+        Ok(())
     }
 
     /// The deprecated spelling folds into the current field, inverted, so
     /// nothing downstream of normalization sees it.
-    #[test]
+    #[test_util::test]
     fn deprecated_prune_spelling_folds_into_the_current_key() -> color_eyre::eyre::Result<()> {
         let mut flags = FlagConfig {
             deprecated: super::DeprecatedFlagKeys {
@@ -601,7 +606,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn combine_driver_trims_whitespace_and_conflicts() -> color_eyre::eyre::Result<()> {
         let entries = [("cfg(a)", Some("cross")), ("cfg(b)", Some("cross "))];
         let out = super::combine_driver("driver", "target override", &entries, |value| *value)?;

@@ -187,7 +187,7 @@ mod test {
         Ok(resolved)
     }
 
-    #[test]
+    #[test_util::test]
     fn resolved_toolchain_is_removed_from_the_forwarded_args() -> eyre::Result<()> {
         let mut args = vec!["+nightly", "udeps", "--all-targets"];
 
@@ -203,7 +203,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn args_without_a_toolchain_are_left_alone() -> eyre::Result<()> {
         let mut args = vec!["udeps", "--all-targets"];
 
@@ -214,7 +214,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn toolchain_stays_in_the_args_without_a_toolchain_manager() -> eyre::Result<()> {
         let mut args = vec!["+nightly", "udeps"];
 
@@ -225,7 +225,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn unresolvable_toolchain_fails_instead_of_running_the_wrong_one() {
         let mut args = vec!["+nightly", "udeps"];
 
@@ -235,7 +235,7 @@ mod test {
         assert!(err.to_string().contains("nightly"), "{err}");
     }
 
-    #[test]
+    #[test_util::test]
     fn toolchain_pins_both_rustup_and_cargo_for_the_child() {
         let mut command = Command::new("cargo");
 
@@ -252,7 +252,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn configured_child_env_wins_over_the_toolchain_override() -> eyre::Result<()> {
         let env = resolved_env(serde_json::json!({
             "add": { "RUSTUP_TOOLCHAIN": "beta" },

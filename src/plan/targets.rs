@@ -584,6 +584,7 @@ mod test {
     use crate::package::test::package;
     use crate::target::{TargetEnvironment, TargetSource, TargetTriple};
     use color_eyre::eyre;
+    use color_eyre::eyre::{OptionExt as _, WrapErr as _};
     use std::collections::{BTreeMap, HashSet};
 
     struct TestEnv {
@@ -616,7 +617,7 @@ mod test {
             panic!("empty selection should not read CARGO_BUILD_TARGET");
         }
         fn host_target(&self) -> eyre::Result<TargetTriple> {
-            panic!("empty selection should not resolve the host target");
+            eyre::bail!("empty selection should not resolve the host target");
         }
     }
 
@@ -635,7 +636,7 @@ mod test {
 
     impl CfgEvaluator for FailIfUsedEval {
         fn matches(&mut self, _cfg_expr: &str, _target: &TargetTriple) -> eyre::Result<bool> {
-            panic!("empty selection should not evaluate target overrides");
+            eyre::bail!("empty selection should not evaluate target overrides");
         }
     }
 
@@ -705,7 +706,7 @@ mod test {
         Chain::workspace(ws, &plan.ws_matched, raw, resolved).exclude_packages(base)
     }
 
-    #[test]
+    #[test_util::test]
     fn empty_selection_skips_target_resolution() -> eyre::Result<()> {
         let mut ws = workspace_targets(&["linux"]);
         ws.targets.insert(
@@ -729,7 +730,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn no_config_falls_back_to_host_single_target() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -756,7 +757,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_targets_expand_in_order() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -788,7 +789,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_targets_override_workspace_and_keep_order_after() -> eyre::Result<()> {
         // `web` opts into wasm only; `core` inherits the workspace list.
         let web = package("web")?;
@@ -859,7 +860,7 @@ mod test {
         config
     }
 
-    #[test]
+    #[test_util::test]
     fn package_targets_add_patch_extends_workspace_list() -> eyre::Result<()> {
         // `targets = { add = ["extra"] }` keeps the inherited workspace targets
         // and appends the extra one in declaration order.
@@ -895,7 +896,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_targets_remove_patch_drops_workspace_target() -> eyre::Result<()> {
         // `targets = { remove = ["windows"] }` prunes one inherited target.
         let pkg = package("a")?;
@@ -921,7 +922,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn subcommand_targets_override_restricts_to_host() -> eyre::Result<()> {
         // "test only on host": `subcommands.test.targets = ["only-host"]` applies
         // for `cargo fc test` but leaves other commands on the workspace list.
@@ -977,7 +978,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_subcommand_targets_patch_is_command_aware() -> eyre::Result<()> {
         // A workspace `subcommands.test.targets = { remove = ["windows"] }` prunes
         // a target for `test` only; other commands keep the full workspace list.
@@ -1032,7 +1033,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn unused_workspace_target_does_not_evaluate_overrides() -> eyre::Result<()> {
         let pkg = package("web")?;
         let cfg = config_with_targets(Some(&["wasm"]));
@@ -1061,7 +1062,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_opt_out_uses_fallback() -> eyre::Result<()> {
         let pkg = package("native")?;
         let cfg = config_with_targets(Some(&[]));
@@ -1093,7 +1094,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_replace_discards_inherited_workspace_targets() -> eyre::Result<()> {
         let pkg = package("native")?;
         let mut cfg = Config::default();
@@ -1121,7 +1122,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_overrides_workspace_lists() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -1154,7 +1155,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_skips_package_constrained_to_other_targets() -> eyre::Result<()> {
         // `web` can only build for wasm; `core` inherits the workspace list.
         // The CLI target overrides the workspace list but not the package's
@@ -1196,7 +1197,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_keeps_package_listing_that_target() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["wasm32-unknown-unknown", "aarch64-apple-darwin"]));
@@ -1228,7 +1229,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_skips_host_only_package_for_foreign_target() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&[]));
@@ -1256,7 +1257,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_keeps_host_only_package_for_default_target() -> eyre::Result<()> {
         // `--target <host>` runs the host slice of the configured plan, which
         // includes the `targets = []` opt-out packages.
@@ -1316,7 +1317,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_filter_ignores_config_scoped_no_targets() -> eyre::Result<()> {
         // `ignore_configured_targets` models a config-scoped `no_targets` (or
         // a command without the targets capability). Neither lifts the package
@@ -1353,7 +1354,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn forced_explicit_cli_target_overrides_package_constraints() -> eyre::Result<()> {
         // CLI `--no-targets --target <triple>`: `--no-targets` means "ignore
         // configured target lists", so the pair runs every selected package
@@ -1399,7 +1400,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_rejects_empty_configured_triple() -> eyre::Result<()> {
         // A malformed package list fails under an explicit `--target` with
         // the same error every configured-list expansion reports, instead of
@@ -1429,7 +1430,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_matches_padded_configured_triple() -> eyre::Result<()> {
         // Configured triples are trimmed before the membership check, exactly
         // as configured-list expansion trims them.
@@ -1461,7 +1462,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn explicit_cli_target_respects_subcommand_scoped_opt_out() -> eyre::Result<()> {
         // `subcommands.test.targets = []` is a per-command opt-out: it filters
         // an explicit `--target` for `cargo fc test` but not for other
@@ -1513,7 +1514,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn duplicate_targets_deduped_preserving_order() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["linux", "windows", "linux"]));
@@ -1538,7 +1539,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn same_triple_keeps_distinct_sources_per_package() -> eyre::Result<()> {
         // `a` inherits the workspace `linux`; `b` lists `linux` itself.
         let a = package("a")?;
@@ -1573,7 +1574,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn capability_denied_ignores_configured_lists() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["wasm32-unknown-unknown"]));
@@ -1603,7 +1604,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn ignored_configured_targets_do_not_mark_target_display() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -1635,7 +1636,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_build_target_used_as_fallback_source() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -1665,7 +1666,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_target_override_excludes_only_matching_targets() -> eyre::Result<()> {
         let native = package("native-cli")?;
         let wasm_app = package("wasm-app")?;
@@ -1726,20 +1727,20 @@ mod test {
         assert_eq!(plans.plans.len(), 2);
         let excluded = |plan: &super::TargetPlan<'_>| {
             excluded_for_plan(&HashSet::new(), &ws, plan, None, None)
-                .expect("exclude resolution should succeed")
+                .wrap_err("exclude resolution should succeed")
         };
         // The wasm32 override excludes native-cli only on wasm; the linux
         // override excludes wasm-app only on linux.
         assert_eq!(plans.plans[0].target.0, "linux");
-        assert!(excluded(&plans.plans[0]).contains("wasm-app"));
-        assert!(!excluded(&plans.plans[0]).contains("native-cli"));
+        assert!(excluded(&plans.plans[0])?.contains("wasm-app"));
+        assert!(!excluded(&plans.plans[0])?.contains("native-cli"));
         assert_eq!(plans.plans[1].target.0, "wasm");
-        assert!(excluded(&plans.plans[1]).contains("native-cli"));
-        assert!(!excluded(&plans.plans[1]).contains("wasm-app"));
+        assert!(excluded(&plans.plans[1])?.contains("native-cli"));
+        assert!(!excluded(&plans.plans[1])?.contains("wasm-app"));
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_target_override_applies_to_single_target() -> eyre::Result<()> {
         // No configured target list, single host target, but a workspace target
         // override still excludes a package for the matching host cfg.
@@ -1788,7 +1789,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn conflicting_workspace_target_flags_error() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = Config::default();
@@ -1871,7 +1872,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn base_exclude_applies_to_all_targets() -> eyre::Result<()> {
         let keep = package("keep")?;
         let drop = package("drop")?;
@@ -1902,8 +1903,8 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn subcommand_exclude_packages_is_command_aware() {
+    #[test_util::test]
+    fn subcommand_exclude_packages_is_command_aware() -> eyre::Result<()> {
         // `exclude foo when testing` — the workspace subcommand override adds an
         // exclusion only for `cargo fc test`.
         let mut ws = WorkspaceConfig::default();
@@ -1922,22 +1923,23 @@ mod test {
 
         let for_test = Chain::workspace(&ws, &[], Some("test"), Some("test"))
             .exclude_packages(&base)
-            .expect("exclude resolution should succeed");
+            .wrap_err("exclude resolution should succeed")?;
         assert!(for_test.contains("gpu-pkg"));
 
         // A different command, and the command-less (matrix) path, are unaffected.
         let for_build = Chain::workspace(&ws, &[], Some("build"), Some("build"))
             .exclude_packages(&base)
-            .expect("exclude resolution should succeed");
+            .wrap_err("exclude resolution should succeed")?;
         assert!(!for_build.contains("gpu-pkg"));
         let command_less = Chain::workspace(&ws, &[], None, None)
             .exclude_packages(&base)
-            .expect("exclude resolution should succeed");
+            .wrap_err("exclude resolution should succeed")?;
         assert!(!command_less.contains("gpu-pkg"));
+        Ok(())
     }
 
-    #[test]
-    fn subcommand_exclude_packages_remove_reincludes_for_command() {
+    #[test_util::test]
+    fn subcommand_exclude_packages_remove_reincludes_for_command() -> eyre::Result<()> {
         // The workspace base excludes `foo`; the `test` subcommand `remove`s it,
         // re-including foo for `cargo fc test` only — the case that requires
         // command-aware resolution at execution time.
@@ -1957,16 +1959,17 @@ mod test {
 
         let for_test = Chain::workspace(&ws, &[], Some("test"), Some("test"))
             .exclude_packages(&base)
-            .expect("exclude resolution should succeed");
+            .wrap_err("exclude resolution should succeed")?;
         assert!(!for_test.contains("foo"));
 
         let for_build = Chain::workspace(&ws, &[], Some("build"), Some("build"))
             .exclude_packages(&base)
-            .expect("exclude resolution should succeed");
+            .wrap_err("exclude resolution should succeed")?;
         assert!(for_build.contains("foo"));
+        Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn workspace_target_subcommand_exclude_and_replace_apply() -> eyre::Result<()> {
         // `[ws.target.'cfg(unix)'.subcommands.test]` with `replace = true` and
         // `exclude_packages = ["foo"]`: for `cargo fc test` on a unix
@@ -1991,7 +1994,9 @@ mod test {
         );
         let matched = vec![(
             "cfg(unix)".to_string(),
-            ws.targets.get("cfg(unix)").expect("override should exist"),
+            ws.targets
+                .get("cfg(unix)")
+                .ok_or_eyre("override should exist")?,
         )];
         let base = HashSet::from(["base-excluded".to_string()]);
 
@@ -2013,7 +2018,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn empty_triple_in_list_is_rejected() -> eyre::Result<()> {
         let pkg = package("a")?;
         let cfg = config_with_targets(Some(&["linux", "  "]));

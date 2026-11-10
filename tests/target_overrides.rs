@@ -68,7 +68,7 @@ impl CfgEvaluator for StubEval {
     }
 }
 
-#[test]
+#[test_util::test]
 fn target_override_additive_exclude_features_affects_matrix() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']
@@ -110,7 +110,7 @@ fn target_override_additive_exclude_features_affects_matrix() -> eyre::Result<()
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations]
@@ -148,7 +148,7 @@ fn target_override_override_array_replaces_base_value() -> eyre::Result<()> {
     Ok(())
 }
 
-#[test]
+#[test_util::test]
 fn legacy_replace_true_rejects_add_remove() -> eyre::Result<()> {
     let settings = indoc::indoc! {r#"
         [package.metadata.cargo-feature-combinations.target.'cfg(target_os = "linux")']

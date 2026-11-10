@@ -238,7 +238,7 @@ mod test {
         (counts, written)
     }
 
-    #[test]
+    #[test_util::test]
     fn counts_warnings_and_errors() {
         let input = include_str!("../test-data/diagnostics_only_json_output.txt");
         let mut seen = HashSet::new();
@@ -248,7 +248,7 @@ mod test {
         sim_assert_eq!(counts.suppressed, 0);
     }
 
-    #[test]
+    #[test_util::test]
     fn rendered_diagnostics_are_written() {
         let input = include_str!("../test-data/diagnostics_only_json_output.txt");
         let mut seen = HashSet::new();
@@ -258,7 +258,7 @@ mod test {
         assert!(written.contains("cannot find value"));
     }
 
-    #[test]
+    #[test_util::test]
     fn non_diagnostic_json_is_skipped() {
         let input = include_str!("../test-data/diagnostics_only_json_output.txt");
         let mut seen = HashSet::new();
@@ -267,7 +267,7 @@ mod test {
         assert!(!written.contains("build-finished"));
     }
 
-    #[test]
+    #[test_util::test]
     fn non_json_lines_are_passed_through() {
         let input = indoc! {"
             running 5 tests
@@ -283,7 +283,7 @@ mod test {
         sim_assert_eq!(counts.errors, 0);
     }
 
-    #[test]
+    #[test_util::test]
     fn mixed_json_and_non_json_lines() {
         let diagnostic = diag_json("warning", "warning: foo\n");
         let artifact = artifact_json();
@@ -302,7 +302,7 @@ mod test {
         assert!(!written.contains("compiler-artifact"));
     }
 
-    #[test]
+    #[test_util::test]
     fn duplicate_rendered_text_is_preserved_without_dedupe() {
         let line = diag_json("warning", "warning: duplicate\n");
         let input = formatdoc! {"
@@ -316,7 +316,7 @@ mod test {
         sim_assert_eq!(written.matches("warning: duplicate").count(), 2);
     }
 
-    #[test]
+    #[test_util::test]
     fn dedupe_folds_duplicate_rendered_text_within_one_invocation() {
         // Cargo may emit the same lint once per compiled target in a single
         // invocation. Count and print only one copy; the rest are cargo target
@@ -334,7 +334,7 @@ mod test {
         sim_assert_eq!(written.matches("warning: duplicate").count(), 1);
     }
 
-    #[test]
+    #[test_util::test]
     fn repeated_two_target_diagnostic_reports_zero_then_one_suppressed() {
         // Regression test for --all-targets-style output: a lint emitted twice
         // in each invocation reports no suppressed diagnostics on the first
@@ -357,7 +357,7 @@ mod test {
         assert!(!o2.contains("too many lines"));
     }
 
-    #[test]
+    #[test_util::test]
     fn dedupe_preserves_distinct_diagnostics() {
         let first = diag_json("warning", "warning: first\n");
         let second = diag_json("warning", "warning: second\n");
@@ -373,7 +373,7 @@ mod test {
         assert!(written.contains("warning: second"));
     }
 
-    #[test]
+    #[test_util::test]
     fn dedupe_works_across_multiple_calls() {
         let input = diag_json("warning", "warning: shared\n");
         let mut seen = HashSet::new();
@@ -391,7 +391,7 @@ mod test {
         assert!(!o2.contains("warning: shared"));
     }
 
-    #[test]
+    #[test_util::test]
     fn empty_input_produces_zero_counts() {
         let mut seen = HashSet::new();
         let (counts, written) = run_lines("", false, &mut seen);
@@ -401,7 +401,7 @@ mod test {
         sim_assert_eq!(written, "");
     }
 
-    #[test]
+    #[test_util::test]
     fn cargo_level_error_lines_are_not_silently_swallowed() {
         let input = indoc! {r"
             error: failed to parse manifest at `/tmp/foo/Cargo.toml`
@@ -417,7 +417,7 @@ mod test {
         assert!(written.contains("duplicate key"));
     }
 
-    #[test]
+    #[test_util::test]
     fn rendered_text_with_special_characters_survives_roundtrip() {
         let rendered = indoc! {"
             error[E0308]: mismatched types

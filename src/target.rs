@@ -206,7 +206,7 @@ mod test {
         values.iter().copied().map(String::from).collect()
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_separate_value() {
         assert_eq!(
             parse_cli_target(&owned(&["check", "--target", "wasm32-unknown-unknown"])).unwrap(),
@@ -214,7 +214,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_equals_form() {
         assert_eq!(
             parse_cli_target(&owned(&["check", "--target=wasm32-unknown-unknown"])).unwrap(),
@@ -222,7 +222,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_ignores_value_after_double_dash() {
         // `cargo fc run -- --target value-for-the-binary` must not be treated as
         // cargo's target triple.
@@ -232,7 +232,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_does_not_consume_double_dash_as_value() {
         assert_eq!(
             parse_cli_target(&owned(&["check", "--target", "--"])).unwrap(),
@@ -240,7 +240,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_before_double_dash_still_parsed() {
         assert_eq!(
             parse_cli_target(&owned(&[
@@ -256,7 +256,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_absent() {
         assert_eq!(
             parse_cli_target(&owned(&["check", "--all-features"])).unwrap(),
@@ -264,7 +264,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn parse_cli_target_rejects_repeated_targets() {
         let err = parse_cli_target(&owned(&["check", "--target=a", "--target", "b"]))
             .expect_err("repeated targets should fail");

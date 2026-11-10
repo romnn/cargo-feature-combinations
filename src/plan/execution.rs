@@ -378,7 +378,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_util::test]
     fn target_scoped_no_targets_skips_configured_assignments() -> eyre::Result<()> {
         let package = package("a")?;
         let config = crate::config::Config::default();
@@ -421,7 +421,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn target_scoped_lib_filter_false_can_reinclude_package() -> eyre::Result<()> {
         let mut package = package("bin-only")?;
         package.targets.clear();
@@ -481,7 +481,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn package_replace_does_not_clear_workspace_exclude_packages() -> eyre::Result<()> {
         let package = package("drop")?;
         let mut config = Config::default();
@@ -515,7 +515,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    #[test_util::test]
     fn build_execution_plans_keeps_pruned_entries_for_summary() -> eyre::Result<()> {
         let mut package = crate::package::test::package_with_metadata(
             &["A", "B", "C"],
@@ -625,7 +625,7 @@ mod test {
 
     /// The host row must run exactly like a bare `cargo check`, so it lands in
     /// `target/debug` where an ordinary build can reuse it.
-    #[test]
+    #[test_util::test]
     fn host_only_invocation_injects_no_target_flag() {
         let plan_set = plan_set_with_host(Some("host"));
 
@@ -635,7 +635,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn cross_only_invocation_keeps_its_target_flag() {
         let plan_set = plan_set_with_host(Some("host"));
 
@@ -647,7 +647,7 @@ mod test {
 
     /// Dropping the host flag from an aggregated group would narrow what Cargo
     /// builds to the cross targets alone.
-    #[test]
+    #[test_util::test]
     fn aggregated_group_keeps_the_host_flag_alongside_cross_targets() {
         let plan_set = plan_set_with_host(Some("host"));
 
@@ -657,7 +657,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn undetectable_host_keeps_every_configured_target_flag() {
         let plan_set = plan_set_with_host(None);
 
@@ -668,7 +668,7 @@ mod test {
     }
 
     /// `--target` on the CLI and `CARGO_BUILD_TARGET` reach Cargo on their own.
-    #[test]
+    #[test_util::test]
     fn sources_cargo_already_sees_are_never_injected() {
         let plan_set = plan_set_with_host(Some("host"));
         let cli = EffectiveTarget {
@@ -682,7 +682,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn omit_host_target_flag_false_injects_the_host_flag() {
         let plan_set = plan_set_with_host(Some("host"));
 
@@ -694,7 +694,7 @@ mod test {
 
     /// The opt-out only ever adds the host's own flag back; a source Cargo
     /// already sees stays uninjected.
-    #[test]
+    #[test_util::test]
     fn omit_host_target_flag_false_still_skips_cli_targets() {
         let plan_set = plan_set_with_host(Some("host"));
         let cli = EffectiveTarget {

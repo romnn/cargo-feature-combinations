@@ -312,7 +312,7 @@ mod test {
     use crate::cli::{CargoSubcommand, cargo_subcommand};
     use similar_asserts::assert_eq as sim_assert_eq;
 
-    #[test]
+    #[test_util::test]
     fn appends_generated_args_before_double_dash_for_cargo_run() {
         let invocation_args = PreparedInvocationArgs::new(
             vec!["run", "--package", "app", "--", "arg"],
@@ -335,7 +335,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn wrapper_outer_run_receives_cargo_fc_manifest() {
         let invocation_args = PreparedInvocationArgs::new(
             vec!["run", "--package", "wrapper", "--", "lint"],
@@ -363,7 +363,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn wrapper_manifest_keeps_alias_manifest_and_skips_cargo_commands() {
         let wrapper = PreparedInvocationArgs::new(
             vec!["run", "--manifest-path=../tool/Cargo.toml", "--"],
@@ -383,7 +383,7 @@ mod test {
         sim_assert_eq!(command.with_generated_args(Vec::new()), vec!["check"]);
     }
 
-    #[test]
+    #[test_util::test]
     fn detects_manifest_only_where_generated_args_go() {
         let alias_manifest = PreparedInvocationArgs::new(
             vec![
@@ -423,7 +423,7 @@ mod test {
         assert!(wrapped_manifest.has_manifest_path_arg_for_generated_args());
     }
 
-    #[test]
+    #[test_util::test]
     fn appends_generated_args_after_double_dash_for_run_wrapper_aliases() {
         let invocation_args = PreparedInvocationArgs::new(
             vec!["run", "--package", "clippy-wrapper", "--", "lint"],
@@ -454,7 +454,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn inserts_generated_args_before_wrapped_command_double_dash() {
         let invocation_args = PreparedInvocationArgs::new(
             vec![
@@ -497,7 +497,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn detects_user_message_format_after_double_dash_for_run_wrapper_aliases() {
         let wrapper = PreparedInvocationArgs::new(
             vec![
@@ -519,7 +519,7 @@ mod test {
         assert!(!direct_run.has_message_format_arg_for_generated_args());
     }
 
-    #[test]
+    #[test_util::test]
     fn ignores_message_format_after_wrapped_command_double_dash() {
         let wrapper = PreparedInvocationArgs::new(
             vec![
@@ -537,7 +537,7 @@ mod test {
         assert!(!wrapper.has_message_format_arg_for_generated_args());
     }
 
-    #[test]
+    #[test_util::test]
     fn ignores_wrapper_cargo_message_format_for_run_wrapper_aliases() {
         let wrapper = PreparedInvocationArgs::new(
             vec![
@@ -554,7 +554,7 @@ mod test {
         assert!(!wrapper.has_message_format_arg_for_generated_args());
     }
 
-    #[test]
+    #[test_util::test]
     fn message_format_detection_requires_the_cargo_flag_name() {
         let wrapper = PreparedInvocationArgs::new(
             vec![
@@ -571,7 +571,7 @@ mod test {
         assert!(!wrapper.has_message_format_arg_for_generated_args());
     }
 
-    #[test]
+    #[test_util::test]
     fn leaves_feature_selection_flags_after_double_dash_untouched() {
         let invocation_args = PreparedInvocationArgs::new(
             vec![
@@ -604,7 +604,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[test_util::test]
     fn preserves_wrapper_cargo_feature_flags_for_run_wrapper_aliases() {
         let invocation_args = PreparedInvocationArgs::new(
             vec![
@@ -633,7 +633,7 @@ mod test {
         sim_assert_eq!(invocation_args.args_after_separator(), vec!["--", "lint"]);
     }
 
-    #[test]
+    #[test_util::test]
     fn strips_feature_selection_flags_for_known_cargo_commands() {
         let normalization = normalize_feature_selection_args(vec![
             "--config",
@@ -667,7 +667,7 @@ mod test {
         assert!(normalization.saw_feature_selection);
     }
 
-    #[test]
+    #[test_util::test]
     fn preserves_known_cargo_command_args_when_no_feature_selection_is_present() {
         let normalization = normalize_feature_selection_args(vec![
             "--config",
@@ -688,7 +688,7 @@ mod test {
         assert!(!normalization.saw_feature_selection);
     }
 
-    #[test]
+    #[test_util::test]
     fn preserves_feature_selection_flags_for_unknown_aliases() {
         let normalization = normalize_feature_selection_args(vec!["lint", "--all-features"]);
 
