@@ -1,0 +1,14 @@
+warning: `package.homepage` is redundant with `package.repository`
+ --> a/Cargo.toml:5:1
+  |
+5 | homepage.workspace = true
+  | ^^^^^^^^
+6 | repository.workspace = true
+  | ----------
+  |
+  = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+warning: `a` (manifest) generated 1 warning
+    Checking a v0.1.0 (/ws/a)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+error: warnings are denied by `build.warnings` configuration

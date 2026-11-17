@@ -64,17 +64,27 @@ impl Summary {
     }
 }
 
-/// Extract per-crate warning counts from cargo output.
+/// Extract per-unit warning counts from cargo output.
 ///
-/// The iterator yields the number of warnings for each compiled crate that
-/// matches the summary line produced by cargo.
-pub(super) fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+/// The iterator yields the number of warnings from each summary line Cargo
+/// prints, both for compiled crates (`` `a` (lib) generated 2 warnings ``) and
+/// for Cargo's own manifest lints (`` `a` (manifest) generated 1 warning ``,
+/// `workspace (manifest) generated 2 warnings`).
+///
+/// Under `build.warnings = "deny"` Cargo prints these lines with an `error:`
+/// prefix instead of `warning:`, so both prefixes count.
+/// The unit name and kind must match Cargo's shape, so a diagnostic message that
+/// merely contains "generated 7 warnings" is not mistaken for a summary.
+pub(crate) fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static WARNING_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         #[allow(
             clippy::expect_used,
             reason = "hard-coded regex pattern is expected to be valid"
         )]
-        Regex::new(r"warning: .* generated (\d+) warnings?").expect("valid warning regex")
+        Regex::new(
+            r"(?m)^(?:warning|error): (?:`[^`\n]+`|workspace) \([^)\n]+\) generated (\d+) warnings?",
+        )
+        .expect("valid warning regex")
     });
     WARNING_REGEX
         .captures_iter(output)
@@ -86,7 +96,7 @@ pub(super) fn warning_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
 ///
 /// The iterator yields the number of errors for each compiled crate that
 /// matches the summary line produced by cargo.
-pub(super) fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
+pub(crate) fn error_counts(output: &str) -> impl Iterator<Item = usize> + '_ {
     static ERROR_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         #[allow(
             clippy::expect_used,
@@ -465,5 +475,52 @@ mod test {
         let stderr = include_str!("../../test-data/two_mods_warnings_stderr.txt");
         let warnings: Vec<_> = warning_counts(stderr).collect();
         sim_assert_eq!(&warnings, &vec![6, 7]);
+    }
+
+    /// Under `build.warnings = "deny"`, Cargo prefixes the crate's summary
+    /// line with `error:`, and its manifest lint keeps `warning:`.
+    #[test_util::test]
+    fn warning_regex_counts_manifest_lints_and_denied_crate_warnings() {
+        let stderr = include_str!("../../test-data/build_warnings_deny_stderr.txt");
+        let warnings: Vec<_> = warning_counts(stderr).collect();
+        let errors: Vec<_> = error_counts(stderr).collect();
+
+        // One manifest lint and one rustc warning, and the denial is no error.
+        sim_assert_eq!(&warnings, &vec![1, 1]);
+        sim_assert_eq!(&errors, &Vec::<usize>::new());
+
+        // CRLF line endings from a wrapper or driver count the same.
+        let crlf = stderr.replace('\n', "\r\n");
+        sim_assert_eq!(warning_counts(&crlf).collect::<Vec<_>>(), warnings);
+    }
+
+    #[test_util::test]
+    fn warning_regex_counts_workspace_manifest_lints() {
+        let stderr = "warning: workspace (manifest) generated 2 warnings\n";
+        let warnings: Vec<_> = warning_counts(stderr).collect();
+        sim_assert_eq!(&warnings, &vec![2]);
+    }
+
+    /// A diagnostic whose message happens to read like a summary is not one.
+    #[test_util::test]
+    fn warning_regex_ignores_summary_like_diagnostic_messages() {
+        let stderr = indoc::indoc! {"
+            error: the generator generated 7 warnings
+            warning: unused variable: `x` generated 3 warnings
+        "};
+        let warnings: Vec<_> = warning_counts(stderr).collect();
+        sim_assert_eq!(&warnings, &Vec::<usize>::new());
+    }
+
+    /// A failed compile reports its warnings in both the crate summary and the
+    /// `could not compile` line, and only the summary counts.
+    #[test_util::test]
+    fn warning_regex_ignores_the_could_not_compile_line() {
+        let stderr = indoc::indoc! {"
+            error: `a` (lib) generated 1 warning
+            error: could not compile `a` (lib) due to 1 previous error; 1 warning emitted
+        "};
+        let warnings: Vec<_> = warning_counts(stderr).collect();
+        sim_assert_eq!(&warnings, &vec![1]);
     }
 }

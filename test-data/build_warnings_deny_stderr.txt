@@ -1,0 +1,22 @@
+warning: `package.homepage` is redundant with `package.repository`
+ --> a/Cargo.toml:5:1
+  |
+5 | homepage.workspace = true
+  | ^^^^^^^^
+6 | repository.workspace = true
+  | ----------
+  |
+  = note: `cargo::redundant_homepage` is set to `warn` by default
+help: consider removing `package.homepage`
+warning: `a` (manifest) generated 1 warning
+    Checking a v0.1.0 (/ws/a)
+warning: unused variable: `x`
+ --> a/src/lib.rs:1:18
+  |
+1 | pub fn g() { let x = 1; }
+  |                  ^ help: if this is intentional, prefix it with an underscore: `_x`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+error: `a` (lib) generated 1 warning (run `cargo fix --lib -p a` to apply 1 suggestion)
+error: warnings are denied by `build.warnings` configuration

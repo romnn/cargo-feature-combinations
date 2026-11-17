@@ -1,2 +1,5 @@
 docs/assets/terminals/** linguist-generated=true
 docs/static/images/** linguist-generated=true
+# Captured Cargo output, compared byte for byte, so a Windows checkout must
+# keep the LF line endings Cargo printed.
+test-data/*.txt text eol=lf

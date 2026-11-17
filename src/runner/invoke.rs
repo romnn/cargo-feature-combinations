@@ -429,9 +429,9 @@ pub(super) fn run_single_combination(
     // In diagnostics-only mode, cargo-level failures (bad CLI arguments,
     // dependency resolution errors, …) produce no JSON diagnostics — so the
     // user would only see "FAIL … 0 errors, 0 warnings" with no explanation.
-    // When that happens the output buffer holds the captured stderr which is
-    // the only clue about what went wrong. Print it unconditionally (even in
-    // --summary-only mode) so the failure is never silent.
+    // Cargo's stderr diagnostics are the only clue about what went wrong.
+    // They were already printed live unless --summary-only buffered them, so
+    // print the buffer then, and the failure is never silent.
     if diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
         stderr.write_all(&result.output)?;
         stderr.flush().ok();

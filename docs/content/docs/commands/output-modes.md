@@ -17,6 +17,8 @@ cargo fc --diagnostics-only clippy
 
 {{< terminal name="diagnostics" >}}
 
+Cargo's own warnings, such as the manifest lints `cargo::redundant_homepage` and `cargo::unused_workspace_dependencies`, are shown and counted too.
+
 The command must accept `--message-format` and emit rustc JSON diagnostics. That is true for `build`, `check`, `clippy`, and `doc` — and any alias or wrapper that does the same. It is **not** safe for `test` or `run`, which is why broad diagnostics defaults don't apply to them automatically.
 
 ## `--dedupe`
@@ -52,6 +54,8 @@ cargo fc --fail-fast test
 ## `--pedantic`
 
 Treat warnings as failures in the summary and under `--fail-fast`. A combination with warnings but no errors is then reported as failing.
+
+Warnings count whether rustc or Cargo itself reports them. Cargo's own warnings, such as manifest lints, count when Cargo summarizes them with a `generated N warnings` line; ones it prints without such a line, such as a build script's `cargo::warning`, do not.
 
 ```bash
 cargo fc --pedantic --fail-fast clippy
