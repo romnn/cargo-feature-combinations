@@ -50,6 +50,65 @@ impl Diagnostic {
     }
 }
 
+/// `--dedupe` state for one invocation.
+///
+/// `shown` holds the diagnostics earlier invocations put on the terminal.
+/// A diagnostic printed live joins it at once, while one buffered for
+/// `--summary-only` joins it only when [`ProcessResult::deferred_shown`] is
+/// published after the buffer is printed, so a hidden copy never suppresses a
+/// later one that would explain a failure.
+///
+/// [`ProcessResult::deferred_shown`]: crate::runner::ProcessResult::deferred_shown
+pub(crate) struct Dedupe<'a> {
+    shown: &'a mut HashSet<String>,
+    /// Diagnostics this invocation handled on either stream.
+    this_run: HashSet<String>,
+    /// Keys to publish once buffered output is printed, or `None` when output
+    /// is printed live.
+    deferred: Option<Vec<String>>,
+}
+
+/// What `--dedupe` does with one diagnostic.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// A repeat within this invocation: neither counted nor shown.
+    Fold,
+    /// Already shown by an earlier invocation: counted as suppressed.
+    Suppress,
+    /// Shown, or buffered to be shown.
+    Show,
+}
+
+impl<'a> Dedupe<'a> {
+    pub(crate) fn new(shown: &'a mut HashSet<String>, buffered: bool) -> Self {
+        Self {
+            shown,
+            this_run: HashSet::new(),
+            deferred: buffered.then(Vec::new),
+        }
+    }
+
+    fn check(&mut self, rendered: &str) -> Verdict {
+        if !self.this_run.insert(rendered.to_owned()) {
+            return Verdict::Fold;
+        }
+        if self.shown.contains(rendered) {
+            return Verdict::Suppress;
+        }
+        match &mut self.deferred {
+            Some(deferred) => deferred.push(rendered.to_owned()),
+            None => {
+                self.shown.insert(rendered.to_owned());
+            }
+        }
+        Verdict::Show
+    }
+
+    fn into_deferred(self) -> Vec<String> {
+        self.deferred.unwrap_or_default()
+    }
+}
+
 /// Diagnostic counts returned by [`process_lines`].
 struct DiagnosticCounts {
     warnings: usize,
@@ -67,26 +126,22 @@ struct DiagnosticCounts {
 ///   and their `rendered` text is written to `writer`.
 /// - Non-JSON lines (e.g. test runner output) are passed through to `writer`.
 /// - All other JSON messages (artifacts, build-finished) are silently skipped.
-/// - When `dedupe` is true:
+/// - With `dedupe`:
 ///   - Re-emissions of the same diagnostic within this invocation are folded
 ///     into the first copy: not counted, not written, and not tallied as
 ///     `suppressed`.
-///   - Diagnostics already present in `seen` from an earlier invocation are
-///     counted and tallied as `suppressed`, but not written.
-///
-/// `seen` is shared across feature-combination invocations. The per-run set
-/// keeps duplicate cargo target emissions from inflating the per-combination
-/// warning/error totals or the duplicate-diagnostic note.
+///     The fold keeps duplicate cargo target emissions from inflating the
+///     per-combination totals or the duplicate-diagnostic note.
+///   - Diagnostics an earlier invocation already showed are counted and
+///     tallied as `suppressed`, but not written.
 fn process_lines(
     reader: impl BufRead,
     writer: &mut impl Write,
-    dedupe: bool,
-    seen: &mut HashSet<String>,
+    mut dedupe: Option<&mut Dedupe<'_>>,
 ) -> DiagnosticCounts {
     let mut warnings: usize = 0;
     let mut errors: usize = 0;
     let mut suppressed: usize = 0;
-    let mut seen_this_run: Option<HashSet<String>> = dedupe.then(HashSet::new);
 
     for line in reader.lines() {
         let Ok(line) = line else { break };
@@ -96,10 +151,11 @@ fn process_lines(
                     continue;
                 };
 
-                if let (Some(seen_this_run), Some(rendered)) =
-                    (seen_this_run.as_mut(), diag.rendered.as_ref())
-                    && !seen_this_run.insert(rendered.clone())
-                {
+                let verdict = match (dedupe.as_deref_mut(), diag.rendered.as_deref()) {
+                    (Some(dedupe), Some(rendered)) => dedupe.check(rendered),
+                    _ => Verdict::Show,
+                };
+                if verdict == Verdict::Fold {
                     continue;
                 }
 
@@ -109,12 +165,10 @@ fn process_lines(
                     _ => {}
                 }
 
-                if let Some(ref rendered) = diag.rendered {
-                    if dedupe && !seen.insert(rendered.clone()) {
-                        suppressed += 1;
-                    } else {
-                        let _ = writer.write_all(rendered.as_bytes());
-                    }
+                if verdict == Verdict::Suppress {
+                    suppressed += 1;
+                } else if let Some(rendered) = &diag.rendered {
+                    let _ = writer.write_all(rendered.as_bytes());
                 }
             }
             Ok(_) => {
@@ -263,16 +317,20 @@ fn is_status_line(line: &str) -> bool {
 /// its summarized warnings are counted; see [`cargo_stderr`].
 ///
 /// When `dedupe` is `true`, diagnostics are deduplicated by exact rendered
-/// text. Duplicate target emissions within this cargo invocation are folded,
-/// while diagnostics already present in `seen` from earlier invocations are
-/// counted as suppressed but not printed.
+/// text across both streams, as [`Dedupe`] describes.
+/// Diagnostics buffered under `summary_only` are returned in
+/// [`ProcessResult::deferred_shown`] for the caller to add to `shown` once it
+/// prints the buffer.
+///
+/// [`ProcessResult::deferred_shown`]: crate::runner::ProcessResult::deferred_shown
 pub(crate) fn process_output(
     child: &mut process::Child,
     summary_only: bool,
     dedupe: bool,
-    seen: &mut HashSet<String>,
+    shown: &mut HashSet<String>,
     stderr: &mut StandardStream,
 ) -> io::Result<crate::runner::ProcessResult> {
+    let mut dedupe = dedupe.then(|| Dedupe::new(shown, summary_only));
     let mut output_buf = Vec::<u8>::new();
     let proc_stderr = child.stderr.take();
     let proc_stdout = child.stdout.take();
@@ -301,10 +359,10 @@ pub(crate) fn process_output(
             let reader = io::BufReader::new(proc_stdout);
             if summary_only {
                 // Buffer everything for potential --fail-fast dump.
-                counts = process_lines(reader, &mut output_buf, dedupe, seen);
+                counts = process_lines(reader, &mut output_buf, dedupe.as_mut());
             } else {
                 // Stream diagnostics directly to the terminal.
-                counts = process_lines(reader, stderr, dedupe, seen);
+                counts = process_lines(reader, stderr, dedupe.as_mut());
                 let _ = stderr.flush();
             }
         }
@@ -315,21 +373,18 @@ pub(crate) fn process_output(
 
         // Cargo's own diagnostics, such as manifest lints, never reach the
         // JSON stream, so they are counted and shown from stderr.
-        // Its warnings fold within a run like compiler diagnostics.
-        // They are suppressed across runs only when shown live, because a
-        // `--summary-only` buffer is printed only for a failing row, which an
-        // earlier hidden copy must not leave unexplained.
+        // Its warnings fold and suppress like compiler diagnostics.
         let cargo = cargo_stderr(&stderr_buf);
         counts.warnings += cargo.warnings;
-        let mut seen_this_run = HashSet::new();
         for block in cargo.blocks {
-            if dedupe && block.warning {
-                if !seen_this_run.insert(block.text.clone()) {
-                    continue;
-                }
-                if !summary_only && !seen.insert(block.text.clone()) {
-                    counts.suppressed += 1;
-                    continue;
+            if let Some(dedupe) = dedupe.as_mut().filter(|_| block.warning) {
+                match dedupe.check(&block.text) {
+                    Verdict::Fold => continue,
+                    Verdict::Suppress => {
+                        counts.suppressed += 1;
+                        continue;
+                    }
+                    Verdict::Show => {}
                 }
             }
             if summary_only {
@@ -351,12 +406,13 @@ pub(crate) fn process_output(
         num_errors: counts.errors,
         num_suppressed: counts.suppressed,
         output: output_buf,
+        deferred_shown: dedupe.map(Dedupe::into_deferred).unwrap_or_default(),
     })
 }
 
 #[cfg(test)]
 mod test {
-    use super::{DiagnosticCounts, cargo_stderr, process_lines};
+    use super::{Dedupe, DiagnosticCounts, Verdict, cargo_stderr, process_lines};
     use indoc::{formatdoc, indoc};
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::HashSet;
@@ -399,9 +455,55 @@ mod test {
     ) -> (DiagnosticCounts, String) {
         let reader = std::io::BufReader::new(input.as_bytes());
         let mut writer = Vec::new();
-        let counts = process_lines(reader, &mut writer, dedupe, seen);
+        let mut dedupe = dedupe.then(|| Dedupe::new(seen, false));
+        let counts = process_lines(reader, &mut writer, dedupe.as_mut());
         let written = String::from_utf8(writer).unwrap_or_default();
         (counts, written)
+    }
+
+    /// Buffered output reads what earlier rows showed but defers its own keys
+    /// until the buffer is printed, so a hidden copy suppresses nothing.
+    #[test_util::test]
+    fn buffered_diagnostics_defer_their_shown_keys() {
+        let unused = diag_json("warning", "warning: unused variable\n");
+        let shadowed = diag_json("warning", "warning: shadowed earlier\n");
+        let mut shown = HashSet::from(["warning: shadowed earlier\n".to_string()]);
+
+        let mut dedupe = Dedupe::new(&mut shown, true);
+        let mut buffer = Vec::new();
+        let counts = process_lines(
+            std::io::BufReader::new(format!("{unused}\n{shadowed}\n{unused}").as_bytes()),
+            &mut buffer,
+            Some(&mut dedupe),
+        );
+        let deferred = dedupe.into_deferred();
+
+        // The repeat folds, the earlier-shown warning is suppressed, and the
+        // new one is buffered without joining `shown` yet.
+        sim_assert_eq!(counts.warnings, 2);
+        sim_assert_eq!(counts.suppressed, 1);
+        sim_assert_eq!(
+            String::from_utf8_lossy(&buffer),
+            "warning: unused variable\n"
+        );
+        sim_assert_eq!(deferred, ["warning: unused variable\n"]);
+        assert!(!shown.contains("warning: unused variable\n"));
+    }
+
+    /// One fold covers both streams, so a warning that reaches stdout as JSON
+    /// and stderr as text shows once.
+    #[test_util::test]
+    fn one_invocation_folds_a_warning_across_both_streams() {
+        let mut shown = HashSet::new();
+        let mut dedupe = Dedupe::new(&mut shown, false);
+
+        sim_assert_eq!(dedupe.check("warning: x\n"), Verdict::Show);
+        sim_assert_eq!(dedupe.check("warning: x\n"), Verdict::Fold);
+        drop(dedupe);
+
+        // A later invocation suppresses it, as it was shown live.
+        let mut later = Dedupe::new(&mut shown, true);
+        sim_assert_eq!(later.check("warning: x\n"), Verdict::Suppress);
     }
 
     #[test_util::test]

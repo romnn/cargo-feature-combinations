@@ -13,6 +13,11 @@
   `cargo fc check --message-format=json`, now counts the compiler warnings
   Cargo prints on stdout, which cargo-fc relays unchanged. A `pedantic` row
   with such a warning now fails instead of passing with `0 warnings` (#33).
+- Under `--summary-only --dedupe`, a diagnostic hidden on an earlier row no
+  longer suppresses the same diagnostic in the output printed for a failing
+  row, which then lacked its cause. Diagnostics now count as shown only once
+  they are printed, so the `suppressed` column counts repeats of diagnostics
+  actually shown (#34).
 - Counts no longer include rustc's closing `N warnings emitted` and `aborting
   due to …` tallies, which Cargo 1.82 and older forward as diagnostics.
 - Warning counts recognize the `error: … generated N warnings` lines Cargo

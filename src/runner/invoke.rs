@@ -122,6 +122,9 @@ pub(crate) struct ProcessResult {
     pub num_errors: usize,
     pub num_suppressed: usize,
     pub output: Vec<u8>,
+    /// Diagnostics `output` holds that count as shown once it is printed; see
+    /// [`crate::diagnostics_only::Dedupe`].
+    pub deferred_shown: Vec<String>,
 }
 
 /// Capture cargo stderr, optionally tee-ing it to the terminal.
@@ -158,6 +161,7 @@ fn capture_stderr(
         num_errors,
         num_suppressed: 0,
         output: output_cursor.into_inner(),
+        deferred_shown: Vec::new(),
     })
 }
 
@@ -544,6 +548,8 @@ pub(super) fn run_single_combination(
     if diagnostics_only && fail && result.num_errors == 0 && !result.output.is_empty() {
         stderr.write_all(&result.output)?;
         stderr.flush().ok();
+        // The printed diagnostics now suppress later copies under --dedupe.
+        seen_diagnostics.extend(std::mem::take(&mut result.deferred_shown));
         // Clear the buffer so the --fail-fast dump does not print it a
         // second time.
         result.output.clear();

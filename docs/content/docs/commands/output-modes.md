@@ -35,6 +35,8 @@ cargo fc --dedupe clippy
 
 `--dedupe` implies `--diagnostics-only`.
 
+A diagnostic counts as shown once a deduplicated combination prints it. Under `--summary-only`, a combination's diagnostics are printed only when it fails without a compiler error, or when it stops `--fail-fast`, so a hidden copy never suppresses the one that explains a later failure, and the `suppressed` column counts repeats of diagnostics actually shown.
+
 ## `--summary-only`
 
 Hide cargo output entirely and print only the final per-combination result table.
