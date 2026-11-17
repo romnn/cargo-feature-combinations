@@ -30,6 +30,24 @@ pub(crate) struct Diagnostic {
     #[serde(default)]
     pub rendered: Option<String>,
     pub level: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    spans: Vec<serde::de::IgnoredAny>,
+}
+
+impl Diagnostic {
+    /// Whether this is rustc's closing tally, such as `1 warning emitted` or
+    /// `aborting due to 2 previous errors`, rather than a diagnostic of its own.
+    ///
+    /// Cargo 1.82 and older forward the tally as a `compiler-message`, which
+    /// would count every warning or error a second time.
+    pub(crate) fn is_tally(&self) -> bool {
+        let warnings_emitted = self.message.split_once(' ').is_some_and(|(count, rest)| {
+            count.parse::<usize>().is_ok() && matches!(rest, "warning emitted" | "warnings emitted")
+        });
+        self.spans.is_empty() && (warnings_emitted || self.message.starts_with("aborting due to"))
+    }
 }
 
 /// Diagnostic counts returned by [`process_lines`].
@@ -74,7 +92,9 @@ fn process_lines(
         let Ok(line) = line else { break };
         match serde_json::from_str::<CargoMessage>(&line) {
             Ok(msg) if msg.reason == "compiler-message" => {
-                let Some(diag) = msg.message else { continue };
+                let Some(diag) = msg.message.filter(|diag| !diag.is_tally()) else {
+                    continue;
+                };
 
                 if let (Some(seen_this_run), Some(rendered)) =
                     (seen_this_run.as_mut(), diag.rendered.as_ref())
@@ -535,6 +555,40 @@ mod test {
         sim_assert_eq!(c2.warnings, 1);
         sim_assert_eq!(c2.suppressed, 1);
         assert!(!o2.contains("warning: shared"));
+    }
+
+    /// Cargo 1.82 and older forward rustc's closing tally as a diagnostic.
+    #[test_util::test]
+    fn rustc_tallies_are_neither_counted_nor_shown() {
+        let tally = |level: &str, message: &str| {
+            serde_json::json!({
+                "reason": "compiler-message",
+                "message": {
+                    "level": level,
+                    "message": message,
+                    "spans": [],
+                    "rendered": format!("{level}: {message}\n"),
+                },
+            })
+            .to_string()
+        };
+        let input = [
+            diag_json("warning", "warning: unused variable\n"),
+            tally("warning", "1 warning emitted"),
+            diag_json("error", "error: mismatched types\n"),
+            tally(
+                "error",
+                "aborting due to 1 previous error; 1 warning emitted",
+            ),
+        ]
+        .join("\n");
+
+        let (counts, written) = run_lines(&input, false, &mut HashSet::new());
+
+        sim_assert_eq!(counts.warnings, 1);
+        sim_assert_eq!(counts.errors, 1);
+        assert!(!written.contains("emitted"), "{written}");
+        assert!(!written.contains("aborting"), "{written}");
     }
 
     #[test_util::test]

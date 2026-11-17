@@ -21,6 +21,8 @@ Cargo's own warnings, such as the manifest lints `cargo::redundant_homepage` and
 
 The command must accept `--message-format` and emit rustc JSON diagnostics. That is true for `build`, `check`, `clippy`, and `doc` — and any alias or wrapper that does the same. It is **not** safe for `test` or `run`, which is why broad diagnostics defaults don't apply to them automatically.
 
+A `--message-format` you pass to the command wins over `--diagnostics-only`. With a JSON format other than `json-render-diagnostics`, Cargo prints compiler warnings as JSON on stdout. For `build` and `check`, cargo-fc relays that stdout unchanged, even under `--summary-only`, and counts the warnings in it. Other commands keep stdout to themselves, so the warnings they print as JSON are not counted: `test` and `run` print program output there, and an alias may shadow short forms such as `c` and external subcommands such as `clippy`. For build-only commands such as `clippy`, use `--diagnostics-only` to count their warnings instead.
+
 ## `--dedupe`
 
 Like `--diagnostics-only`, but also collapses identical diagnostics that repeat across combinations, so a warning present in twenty combinations is shown once.

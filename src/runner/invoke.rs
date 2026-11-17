@@ -1,7 +1,8 @@
 //! One Cargo child invocation: environment, spawning, and output capture.
 
-use crate::cli::{CargoSubcommand, cargo_subcommand};
+use crate::cli::{CargoSubcommand, cargo_subcommand, cargo_subcommand_token};
 use crate::config::{ResolvedEnv, ResolvedFlags};
+use crate::invocation_args::PreparedInvocationArgs;
 use crate::print_warning;
 use crate::toolchain::ToolchainOverride;
 
@@ -9,7 +10,7 @@ use color_eyre::eyre;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::io::{self, IsTerminal as _, Write};
+use std::io::{self, IsTerminal as _, Read, Write};
 use std::path::Path;
 use std::process;
 use termcolor::{StandardStream, WriteColor};
@@ -157,6 +158,109 @@ fn capture_stderr(
         num_errors,
         num_suppressed: 0,
         output: output_cursor.into_inner(),
+    })
+}
+
+/// Whether cargo-fc relays the child's stdout to count the compiler warnings a
+/// forwarded JSON `--message-format` puts there.
+///
+/// Only `build` and `check` qualify: they compile without running anything,
+/// so their stdout carries Cargo's JSON messages alone, and Cargo never lets an
+/// alias shadow these full command names, so no alias in the environment, an
+/// `env` patch, or a config file can turn them into another command.
+/// Everything else keeps an inherited stdout, as for non-JSON formats:
+///
+/// - `run` and `test` print program output that may resemble Cargo's messages,
+///   and a program they start may outlive the command while holding a relayed
+///   stdout open.
+/// - Short forms such as `c` and external subcommands such as `clippy` may be
+///   shadowed by an alias that runs one of those.
+fn relays_json_stdout(args: &[&str], invocation_args: &PreparedInvocationArgs<'_>) -> bool {
+    invocation_args.has_json_message_format_arg_for_generated_args()
+        && matches!(
+            cargo_subcommand_token(args).as_deref(),
+            Some("build" | "check")
+        )
+}
+
+/// Relays a child's JSON stdout to `writer` unchanged and counts the compiler
+/// warnings in it.
+///
+/// Bytes are forwarded as they arrive, and lines are assembled only to parse
+/// them.
+/// When `writer` fails, the stream is still drained and counted so the child
+/// never blocks on a full pipe.
+///
+/// # Errors
+///
+/// Returns an error when reading fails, or after draining when writing failed
+/// for a reason other than a closed pipe, such as a full disk.
+fn relay_json_stdout(mut reader: impl Read, writer: &mut impl Write) -> io::Result<usize> {
+    let mut warnings = 0;
+    let mut write_error = None;
+    let mut line = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        let bytes = chunk.get(..read).unwrap_or_default();
+        if write_error.is_none()
+            && let Err(err) = writer.write_all(bytes).and_then(|()| writer.flush())
+        {
+            write_error = Some(err);
+        }
+        line.extend_from_slice(bytes);
+        while let Some(end) = line.iter().position(|&byte| byte == b'\n') {
+            let rest = line.split_off(end + 1);
+            warnings += usize::from(is_json_compiler_warning(&line));
+            line = rest;
+        }
+    }
+    warnings += usize::from(is_json_compiler_warning(&line));
+    match write_error {
+        Some(err) if err.kind() != io::ErrorKind::BrokenPipe => Err(err),
+        _ => Ok(warnings),
+    }
+}
+
+/// Whether `line` is a JSON `compiler-message` carrying a warning.
+fn is_json_compiler_warning(line: &[u8]) -> bool {
+    serde_json::from_slice::<crate::diagnostics_only::CargoMessage>(line).is_ok_and(|message| {
+        message.reason == "compiler-message"
+            && message
+                .message
+                .is_some_and(|diagnostic| diagnostic.level == "warning" && !diagnostic.is_tally())
+    })
+}
+
+/// Captures stderr as [`capture_stderr`] does while relaying the child's stdout
+/// through [`relay_json_stdout`] when it was piped, adding its warnings to the
+/// count.
+///
+/// Both pipes drain concurrently, and the relay finishes before this returns,
+/// so the child's stdout precedes the summary cargo-fc prints there later.
+fn capture_output(
+    child: &mut process::Child,
+    summary_only: bool,
+    stderr: &mut StandardStream,
+) -> io::Result<ProcessResult> {
+    let proc_stdout = child.stdout.take();
+    std::thread::scope(|scope| {
+        let relay = proc_stdout.map(|proc_stdout| {
+            scope.spawn(move || relay_json_stdout(proc_stdout, &mut io::stdout().lock()))
+        });
+        let mut result = capture_stderr(child, summary_only, stderr)?;
+        if let Some(relay) = relay {
+            let json_warnings = relay
+                .join()
+                .map_err(|_| io::Error::other("stdout relay thread panicked"))??;
+            result.num_warnings += json_warnings;
+        }
+        Ok(result)
     })
 }
 
@@ -395,21 +499,26 @@ pub(super) fn run_single_combination(
     );
 
     cmd.args(&args);
-    let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only)?;
+    // A forwarded JSON `--message-format` puts compiler warnings on stdout.
+    let json_stdout = !diagnostics_only && relays_json_stdout(&args, ctx.invocation_args);
+    let mut child = spawn_cargo_command(cmd, inv.driver, diagnostics_only || json_stdout)?;
 
-    let mut result = if diagnostics_only {
+    // Wait for the child even when capturing failed, so it never outlives the
+    // row.
+    let captured = if diagnostics_only {
         crate::diagnostics_only::process_output(
             &mut child,
             inv.flags.summary_only,
             dedupe,
             seen_diagnostics,
             stderr,
-        )?
+        )
     } else {
-        capture_stderr(&mut child, inv.flags.summary_only, stderr)?
+        capture_output(&mut child, inv.flags.summary_only, stderr)
     };
 
     let exit_status = child.wait()?;
+    let mut result = captured?;
 
     // Print per-combination dedup note after diagnostics
     if result.num_suppressed > 0 && !inv.flags.summary_only {
@@ -500,9 +609,11 @@ fn errors_only_rustflags_env(
 mod test {
     use super::{
         apply_cargo_driver, apply_errors_only_rustflags, errors_only_rustflags_env,
-        feature_selection_flag, force_color_env, package_selection_args,
+        feature_selection_flag, force_color_env, package_selection_args, relay_json_stdout,
+        relays_json_stdout,
     };
     use crate::config::ResolvedEnv;
+    use crate::invocation_args::{GeneratedArgPlacement, PreparedInvocationArgs};
     use crate::package::test::package_with_manifest_path;
     use color_eyre::eyre;
     use similar_asserts::assert_eq as sim_assert_eq;
@@ -685,6 +796,182 @@ mod test {
             .find(|(key, _)| *key == "CARGO_DRIVER")
             .and_then(|(_, value)| value);
         sim_assert_eq!(driver, Some(std::ffi::OsStr::new("configured-driver")));
+        Ok(())
+    }
+
+    /// A `compiler-message` line with the given level and message text.
+    fn compiler_message(level: &str, message: &str, spans: usize) -> String {
+        let spans = vec![serde_json::json!({}); spans];
+        let line = serde_json::json!({
+            "reason": "compiler-message",
+            "message": { "level": level, "message": message, "spans": spans },
+        });
+        format!("{line}\n")
+    }
+
+    const BUILD_FINISHED: &str = "{\"reason\":\"build-finished\",\"success\":true}\n";
+
+    #[test_util::test]
+    fn relay_forwards_every_byte_and_counts_compiler_warnings() -> eyre::Result<()> {
+        let mut input = Vec::new();
+        input.extend(compiler_message("warning", "unused variable: `x`", 1).bytes());
+        input.extend(compiler_message("error", "mismatched types", 1).bytes());
+        input.extend(b"plain text \xff\xfe not UTF-8\n");
+        // rustc's tally, which Cargo 1.82 and older forward
+        input.extend(compiler_message("warning", "1 warning emitted", 0).bytes());
+        // A final warning without a trailing newline
+        input.extend(
+            compiler_message("warning", "unused import", 1)
+                .trim_end()
+                .bytes(),
+        );
+
+        let mut output = Vec::new();
+        let warnings = relay_json_stdout(input.as_slice(), &mut output)?;
+
+        // Errors stay counted from stderr, and the tally is no warning of its own.
+        sim_assert_eq!(warnings, 2);
+        sim_assert_eq!(output, input);
+        Ok(())
+    }
+
+    /// A driver may run several builds in one invocation, each ending in its
+    /// own `build-finished`, and every build's warnings count.
+    #[test_util::test]
+    fn relay_counts_across_build_finished_records() -> eyre::Result<()> {
+        let warning = compiler_message("warning", "unused variable: `x`", 1);
+        let input = format!("{warning}{BUILD_FINISHED}{warning}{BUILD_FINISHED}");
+
+        let warnings = relay_json_stdout(input.as_bytes(), &mut Vec::new())?;
+
+        sim_assert_eq!(warnings, 2);
+        Ok(())
+    }
+
+    /// Only commands that compile without running anything relay stdout.
+    #[test_util::test]
+    fn relays_stdout_only_for_build_only_commands_with_json_output() {
+        let relays = |args: Vec<&'static str>, placement| {
+            let invocation_args = PreparedInvocationArgs::new(args.clone(), placement);
+            relays_json_stdout(&args, &invocation_args)
+        };
+        let direct = GeneratedArgPlacement::CargoCommand;
+
+        // Build-only commands no alias can shadow
+        for command in ["check", "build"] {
+            assert!(
+                relays(vec![command, "--message-format=json"], direct),
+                "{command}"
+            );
+        }
+        assert!(relays(
+            vec!["+nightly", "check", "--message-format=json"],
+            direct
+        ));
+
+        // Commands that run programs, and names an alias may shadow
+        for command in [
+            "test", "run", "bench", "doc", "c", "b", "clippy", "my-alias",
+        ] {
+            assert!(
+                !relays(vec![command, "--message-format=json"], direct),
+                "{command}"
+            );
+        }
+
+        // Non-JSON formats and wrapper aliases
+        assert!(!relays(vec!["check", "--message-format=short"], direct));
+        assert!(!relays(
+            vec![
+                "run",
+                "--package",
+                "wrapper",
+                "--",
+                "lint",
+                "--message-format=json"
+            ],
+            GeneratedArgPlacement::AliasWrapper,
+        ));
+    }
+
+    /// A reader that hands out a prompt without a newline, then fails the test
+    /// if the prompt has not reached the writer by the next read.
+    struct Prompt {
+        written: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+        reads: usize,
+    }
+
+    impl std::io::Read for Prompt {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads == 1 {
+                let prompt = b"Continue? ";
+                buf[..prompt.len()].copy_from_slice(prompt);
+                return Ok(prompt.len());
+            }
+            assert_eq!(self.written.borrow().as_slice(), b"Continue? ");
+            Ok(0)
+        }
+    }
+
+    struct Shared(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test_util::test]
+    fn relay_forwards_a_prompt_before_reading_on() -> eyre::Result<()> {
+        let written = std::rc::Rc::default();
+        let prompt = Prompt {
+            written: std::rc::Rc::clone(&written),
+            reads: 0,
+        };
+
+        relay_json_stdout(prompt, &mut Shared(written))?;
+        Ok(())
+    }
+
+    /// A writer that always fails with `kind`.
+    struct Failing(std::io::ErrorKind);
+
+    impl std::io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A closed stdout, such as `| head`, must not leave the child blocked on
+    /// a full pipe or lose the count, while a real write failure is reported.
+    #[test_util::test]
+    fn relay_drains_after_its_writer_fails_and_reports_real_failures() -> eyre::Result<()> {
+        let warning = compiler_message("warning", "unused variable: `x`", 1);
+        let input = warning.repeat(3);
+
+        let closed = relay_json_stdout(
+            input.as_bytes(),
+            &mut Failing(std::io::ErrorKind::BrokenPipe),
+        )?;
+        let full = relay_json_stdout(
+            input.as_bytes(),
+            &mut Failing(std::io::ErrorKind::StorageFull),
+        );
+
+        sim_assert_eq!(closed, 3);
+        assert!(
+            full.is_err_and(|err| err.kind() == std::io::ErrorKind::StorageFull),
+            "a full disk must not pass silently"
+        );
         Ok(())
     }
 }
