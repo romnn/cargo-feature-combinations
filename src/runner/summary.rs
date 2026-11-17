@@ -488,6 +488,10 @@ mod test {
         // One manifest lint and one rustc warning, and the denial is no error.
         sim_assert_eq!(&warnings, &vec![1, 1]);
         sim_assert_eq!(&errors, &Vec::<usize>::new());
+
+        // CRLF line endings from a wrapper or driver count the same.
+        let crlf = stderr.replace('\n', "\r\n");
+        sim_assert_eq!(warning_counts(&crlf).collect::<Vec<_>>(), warnings);
     }
 
     #[test_util::test]

@@ -614,6 +614,24 @@ mod test {
         );
     }
 
+    /// A wrapper or driver may emit CRLF line endings, which every line keeps
+    /// while counting and filtering work as with LF.
+    #[test_util::test]
+    fn cargo_stderr_handles_crlf_line_endings() {
+        let lf = include_str!("../test-data/build_warnings_deny_json_stderr.txt");
+        let crlf = lf.replace('\n', "\r\n");
+
+        let (lf_warnings, lf_blocks) = blocks(lf);
+        let (crlf_warnings, crlf_blocks) = blocks(&crlf);
+
+        sim_assert_eq!(crlf_warnings, lf_warnings);
+        let expected: Vec<_> = lf_blocks
+            .into_iter()
+            .map(|(text, warning)| (text.replace('\n', "\r\n"), warning))
+            .collect();
+        sim_assert_eq!(crlf_blocks, expected);
+    }
+
     #[test_util::test]
     fn cargo_stderr_counts_every_summary() {
         let stderr = indoc! {"
