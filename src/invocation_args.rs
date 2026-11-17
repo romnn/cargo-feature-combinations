@@ -110,6 +110,16 @@ impl<'a> PreparedInvocationArgs<'a> {
         has_message_format_arg(self.args_beside_generated_args())
     }
 
+    /// Whether a forwarded `--message-format` makes Cargo print compiler
+    /// diagnostics as JSON on stdout, which any `json…` value other than
+    /// `json-render-diagnostics` does.
+    ///
+    /// `json-render-diagnostics` renders compiler diagnostics to stderr, as
+    /// human output does, so stdout then carries no `compiler-message`.
+    pub(crate) fn has_json_message_format_arg_for_generated_args(&self) -> bool {
+        json_message_format(self.args_beside_generated_args())
+    }
+
     /// Whether the args that receive generated args already name a manifest,
     /// as in an alias body `check --manifest-path ws/Cargo.toml`.
     pub(crate) fn has_manifest_path_arg_for_generated_args(&self) -> bool {
@@ -304,6 +314,31 @@ fn has_manifest_path_arg(args: &[&str]) -> bool {
 fn has_message_format_arg(args: &[&str]) -> bool {
     args.iter()
         .any(|arg| *arg == "--message-format" || arg.starts_with("--message-format="))
+}
+
+/// Whether the `--message-format` values in `args`, given as `=value` or as the
+/// next argument, comma-separated or repeated, put compiler diagnostics on
+/// stdout as JSON.
+fn json_message_format(args: &[&str]) -> bool {
+    let mut values = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if *arg == "--message-format" {
+            values.extend(args.next());
+        } else if let Some(value) = arg.strip_prefix("--message-format=") {
+            values.push(value);
+        }
+    }
+    // Cargo matches the values case-insensitively.
+    let formats: Vec<String> = values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(|format| format.trim().to_ascii_lowercase())
+        .collect();
+    formats.iter().any(|format| format.starts_with("json"))
+        && !formats
+            .iter()
+            .any(|format| format == "json-render-diagnostics")
 }
 
 #[cfg(test)]
@@ -552,6 +587,66 @@ mod test {
         );
 
         assert!(!wrapper.has_message_format_arg_for_generated_args());
+    }
+
+    #[test_util::test]
+    fn detects_json_message_formats_in_every_spelling() {
+        let json = |args: Vec<&'static str>| {
+            PreparedInvocationArgs::new(args, GeneratedArgPlacement::CargoCommand)
+                .has_json_message_format_arg_for_generated_args()
+        };
+
+        // JSON diagnostics on stdout
+        assert!(json(vec!["check", "--message-format=json"]));
+        assert!(json(vec![
+            "check",
+            "--message-format",
+            "json-diagnostic-short"
+        ]));
+        assert!(json(vec!["check", "--message-format=short,json"]));
+        assert!(json(vec!["check", "--message-format=JSON"]));
+        assert!(json(vec![
+            "check",
+            "--message-format=json",
+            "--message-format=json-diagnostic-rendered-ansi",
+        ]));
+
+        // Diagnostics on stderr
+        assert!(!json(vec!["check"]));
+        assert!(!json(vec!["check", "--message-format=short"]));
+        assert!(!json(vec!["check", "--message-format", "human"]));
+        assert!(!json(vec![
+            "check",
+            "--message-format=json-render-diagnostics"
+        ]));
+        assert!(!json(vec![
+            "check",
+            "--message-format=json,Json-Render-Diagnostics"
+        ]));
+        assert!(!json(vec![
+            "check",
+            "--message-format=json",
+            "--message-format=json-render-diagnostics",
+        ]));
+
+        // Program arguments after `--`
+        assert!(!json(vec!["run", "--", "--message-format=json"]));
+    }
+
+    #[test_util::test]
+    fn wrapper_alias_json_message_format_belongs_to_the_wrapped_command() {
+        let outer = PreparedInvocationArgs::new(
+            vec!["run", "--message-format=json", "--", "lint"],
+            GeneratedArgPlacement::AliasWrapper,
+        );
+        let wrapped = PreparedInvocationArgs::new(
+            vec!["run", "--", "lint", "--message-format=json"],
+            GeneratedArgPlacement::AliasWrapper,
+        );
+
+        // The outer flag configures the wrapper's own build, not the matrix.
+        assert!(!outer.has_json_message_format_arg_for_generated_args());
+        assert!(wrapped.has_json_message_format_arg_for_generated_args());
     }
 
     #[test_util::test]

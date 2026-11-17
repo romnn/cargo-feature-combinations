@@ -9,6 +9,12 @@
   `cargo::unused_workspace_dependencies`, which Cargo prints outside its JSON
   diagnostics. A `pedantic` row with such a warning now fails instead of
   passing with `0 warnings` (#31).
+- A JSON `--message-format` forwarded to `build` or `check`, such as
+  `cargo fc check --message-format=json`, now counts the compiler warnings
+  Cargo prints on stdout, which cargo-fc relays unchanged. A `pedantic` row
+  with such a warning now fails instead of passing with `0 warnings` (#33).
+- Counts no longer include rustc's closing `N warnings emitted` and `aborting
+  due to …` tallies, which Cargo 1.82 and older forward as diagnostics.
 - Warning counts recognize the `error: … generated N warnings` lines Cargo
   prints under `build.warnings = "deny"`, and no longer mistake a diagnostic
   whose message reads like such a line for one.
