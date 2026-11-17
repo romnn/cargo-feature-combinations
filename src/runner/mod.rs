@@ -5,7 +5,7 @@ mod invoke;
 mod summary;
 
 pub(crate) use invoke::ProcessResult;
-pub(crate) use summary::print_feature_combination_error;
+pub(crate) use summary::{error_counts, print_feature_combination_error, warning_counts};
 
 use invoke::{CombinationResult, run_single_combination};
 use summary::{Summary, SummaryTarget, append_pruned_summaries, print_summary};

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- `--diagnostics-only` and `--dedupe` now show and count Cargo's own warnings,
+  such as the manifest lints `cargo::redundant_homepage` and
+  `cargo::unused_workspace_dependencies`, which Cargo prints outside its JSON
+  diagnostics. A `pedantic` row with such a warning now fails instead of
+  passing with `0 warnings` (#31).
+- Warning counts recognize the `error: … generated N warnings` lines Cargo
+  prints under `build.warnings = "deny"`, and no longer mistake a diagnostic
+  whose message reads like such a line for one.
+
 ## [0.9.0]
 
 ### Added

@@ -114,10 +114,133 @@ fn process_lines(
     }
 }
 
+/// Cargo's own output on stderr, reduced to what diagnostics-only mode shows.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CargoStderr {
+    /// The total from Cargo's `generated N warnings` summary lines.
+    warnings: usize,
+    /// Each diagnostic block as Cargo rendered it, colors included, in order.
+    blocks: Vec<StderrBlock>,
+}
+
+/// One diagnostic block from Cargo's stderr.
+#[derive(Debug, PartialEq, Eq)]
+struct StderrBlock {
+    /// The block's lines, colors included.
+    text: String,
+    /// Whether the block is a warning, which `--dedupe` may suppress.
+    warning: bool,
+}
+
+/// Splits Cargo's stderr into the diagnostics it carries.
+///
+/// In JSON message-format mode rustc's diagnostics arrive on stdout, while
+/// Cargo prints its own warnings and errors, such as manifest lints, to stderr
+/// as text.
+/// Every line is kept except Cargo's progress chatter: status lines such as
+/// `Checking`, the `generated N warnings` and `could not compile` summaries,
+/// and the `build failed, waiting for other jobs` notice.
+/// A misjudged line is therefore shown rather than hidden.
+///
+/// The warning count comes from the summary lines alone, the same lines plain
+/// output counts.
+/// Cargo's unsummarized warnings, such as a build script's `cargo::warning`,
+/// are shown but not counted, as in plain output.
+fn cargo_stderr(stderr: &[u8]) -> CargoStderr {
+    let mut cargo = CargoStderr::default();
+    let mut current: Option<StderrBlock> = None;
+    for raw in String::from_utf8_lossy(stderr).split_inclusive('\n') {
+        let stripped = strip_ansi_escapes::strip_str(raw);
+        if let Some(count) = crate::runner::warning_counts(&stripped).next() {
+            // Warning summary
+            cargo.warnings += count;
+            cargo.blocks.extend(current.take());
+        } else if is_cargo_chatter(&stripped) {
+            cargo.blocks.extend(current.take());
+        } else if let Some(warning) = diagnostic_header(&stripped) {
+            // Next diagnostic
+            cargo.blocks.extend(current.replace(StderrBlock {
+                text: raw.to_string(),
+                warning,
+            }));
+        } else if let Some(block) = current.as_mut() {
+            // Snippet, note, or help line of the current diagnostic
+            block.text.push_str(raw);
+        } else {
+            // Text outside any diagnostic
+            current = Some(StderrBlock {
+                text: raw.to_string(),
+                warning: false,
+            });
+        }
+    }
+    cargo.blocks.extend(current);
+    cargo
+}
+
+/// Whether `line` is Cargo progress output rather than a diagnostic.
+fn is_cargo_chatter(line: &str) -> bool {
+    is_status_line(line)
+        || crate::runner::error_counts(line).next().is_some()
+        || line.starts_with("warning: build failed, waiting for other jobs")
+}
+
+/// Whether `line` starts a diagnostic, and if so whether it is a warning, such
+/// as `warning: unused manifest key` or `error[E0308]: mismatched types`.
+fn diagnostic_header(line: &str) -> Option<bool> {
+    let (warning, rest) = if let Some(rest) = line.strip_prefix("warning") {
+        (true, rest)
+    } else {
+        (false, line.strip_prefix("error")?)
+    };
+    let message = match rest.strip_prefix('[') {
+        Some(code) => code.split_once(']')?.1,
+        None => rest,
+    };
+    message.starts_with(':').then_some(warning)
+}
+
+/// Whether `line` is a Cargo status line, a known verb right-aligned to
+/// column 12 such as `    Checking a v0.1.0` or `   Doc-tests a`.
+///
+/// Requiring a known verb keeps indented error context such as
+/// `  Permission denied (os error 13)` from passing for one.
+/// A status Cargo adds later is shown rather than hidden.
+fn is_status_line(line: &str) -> bool {
+    const STATUS_WIDTH: usize = 12;
+    const VERBS: &[&str] = &[
+        "Adding",
+        "Blocking",
+        "Building",
+        "Checking",
+        "Compiling",
+        "Doc-tests",
+        "Documenting",
+        "Downloaded",
+        "Downloading",
+        "Executable",
+        "Finished",
+        "Fresh",
+        "Generated",
+        "Locking",
+        "Running",
+        "Scraping",
+        "Updating",
+        "Waiting",
+    ];
+    let unindented = line.trim_start_matches(' ');
+    let indent = line.len() - unindented.len();
+    unindented.split_once(' ').is_some_and(|(verb, _)| {
+        indent > 0 && indent + verb.len() == STATUS_WIDTH && VERBS.contains(&verb)
+    })
+}
+
 /// Process cargo's JSON stdout in diagnostics-only mode.
 ///
 /// Reads JSON lines from the child's stdout, prints rendered diagnostics, and
 /// drains stderr in a background thread to prevent pipe deadlocks.
+/// Cargo's own diagnostics on stderr are printed after the compiler's, and
+/// its summarized warnings are counted; see [`cargo_stderr`].
 ///
 /// When `dedupe` is `true`, diagnostics are deduplicated by exact rendered
 /// text. Duplicate target emissions within this cargo invocation are folded,
@@ -142,7 +265,6 @@ pub(crate) fn process_output(
 
     std::thread::scope(|scope| {
         // Drain stderr in background to prevent deadlock.
-        // Capture it in case we need to dump on cargo-level failure.
         let stderr_handle = scope.spawn(move || -> io::Result<Vec<u8>> {
             let mut stderr_buf = Vec::new();
             if let Some(stderr) = proc_stderr {
@@ -167,14 +289,38 @@ pub(crate) fn process_output(
             }
         }
 
-        // Join stderr thread and check for cargo-level failures.
-        // If cargo itself failed (e.g. bad Cargo.toml syntax) without emitting
-        // any JSON diagnostics, forward the stderr so the user sees the error.
-        if let Ok(Ok(stderr_buf)) = stderr_handle.join()
-            && counts.errors == 0
-            && !stderr_buf.is_empty()
-        {
-            output_buf.extend(&stderr_buf);
+        let Ok(Ok(stderr_buf)) = stderr_handle.join() else {
+            return io::Result::Ok(());
+        };
+
+        // Cargo's own diagnostics, such as manifest lints, never reach the
+        // JSON stream, so they are counted and shown from stderr.
+        // Its warnings fold within a run like compiler diagnostics.
+        // They are suppressed across runs only when shown live, because a
+        // `--summary-only` buffer is printed only for a failing row, which an
+        // earlier hidden copy must not leave unexplained.
+        let cargo = cargo_stderr(&stderr_buf);
+        counts.warnings += cargo.warnings;
+        let mut seen_this_run = HashSet::new();
+        for block in cargo.blocks {
+            if dedupe && block.warning {
+                if !seen_this_run.insert(block.text.clone()) {
+                    continue;
+                }
+                if !summary_only && !seen.insert(block.text.clone()) {
+                    counts.suppressed += 1;
+                    continue;
+                }
+            }
+            if summary_only {
+                // Buffered for the failure and `--fail-fast` dumps.
+                output_buf.extend(block.text.as_bytes());
+            } else {
+                stderr.write_all(block.text.as_bytes())?;
+            }
+        }
+        if !summary_only {
+            let _ = stderr.flush();
         }
 
         io::Result::Ok(())
@@ -190,7 +336,7 @@ pub(crate) fn process_output(
 
 #[cfg(test)]
 mod test {
-    use super::{DiagnosticCounts, process_lines};
+    use super::{DiagnosticCounts, cargo_stderr, process_lines};
     use indoc::{formatdoc, indoc};
     use similar_asserts::assert_eq as sim_assert_eq;
     use std::collections::HashSet;
@@ -433,5 +579,193 @@ mod test {
         sim_assert_eq!(counts.errors, 1);
         assert!(written.contains("mismatched types"));
         assert!(written.contains("expected `&str`, found `i32`"));
+    }
+
+    /// The text of each block, and whether it is a warning.
+    fn blocks(stderr: &str) -> (usize, Vec<(String, bool)>) {
+        let cargo = cargo_stderr(stderr.as_bytes());
+        let blocks = cargo
+            .blocks
+            .into_iter()
+            .map(|block| (block.text, block.warning))
+            .collect();
+        (cargo.warnings, blocks)
+    }
+
+    /// Cargo 1.100's stderr for `check --message-format=json-…` with a
+    /// redundant `homepage` and denied warnings.
+    #[test_util::test]
+    fn cargo_stderr_keeps_manifest_lints_and_errors_without_chatter() {
+        let stderr = include_str!("../test-data/build_warnings_deny_json_stderr.txt");
+
+        let (warnings, blocks) = blocks(stderr);
+
+        // The lint and its snippet form one warning block, and the denial an
+        // error block; the summary and status lines are dropped.
+        sim_assert_eq!(warnings, 1);
+        let [(lint, true), (denial, false)] = blocks.as_slice() else {
+            panic!("expected a warning and an error block, got {blocks:?}");
+        };
+        assert!(lint.starts_with("warning: `package.homepage` is redundant"));
+        assert!(lint.ends_with("help: consider removing `package.homepage`\n"));
+        sim_assert_eq!(
+            denial,
+            "error: warnings are denied by `build.warnings` configuration\n"
+        );
+    }
+
+    #[test_util::test]
+    fn cargo_stderr_counts_every_summary() {
+        let stderr = indoc! {"
+            warning: unused field `homepage` in `workspace.package`
+             --> Cargo.toml:5:1
+            warning: unused field `repository` in `workspace.package`
+            warning: workspace (manifest) generated 2 warnings
+            warning: a/Cargo.toml: unused manifest key: package.foo
+            warning: `a` (manifest) generated 1 warning
+                Checking a v0.1.0 (/ws/a)
+                Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+        "};
+
+        let (warnings, blocks) = blocks(stderr);
+
+        sim_assert_eq!(warnings, 3);
+        sim_assert_eq!(
+            blocks,
+            [
+                (
+                    indoc! {"
+                        warning: unused field `homepage` in `workspace.package`
+                         --> Cargo.toml:5:1
+                    "}
+                    .to_string(),
+                    true
+                ),
+                (
+                    "warning: unused field `repository` in `workspace.package`\n".to_string(),
+                    true
+                ),
+                (
+                    "warning: a/Cargo.toml: unused manifest key: package.foo\n".to_string(),
+                    true
+                ),
+            ]
+        );
+    }
+
+    /// Warnings without a summary line, such as a build script's, are shown but
+    /// not counted, as in plain output, wherever they land between other lines.
+    #[test_util::test]
+    fn cargo_stderr_shows_unsummarized_warnings_without_counting_them() {
+        let stderr = indoc! {"
+            warning[E0133]: call to unsafe function is unsafe
+             --> src/lib.rs:1:1
+                Blocking waiting for file lock on build directory
+            warning: b@0.1.0: hello from build script
+               Compiling b v0.1.0 (/ws/b)
+            warning: `a` (lib) generated 1 warning
+        "};
+
+        let (warnings, blocks) = blocks(stderr);
+
+        sim_assert_eq!(warnings, 1);
+        sim_assert_eq!(
+            blocks,
+            [
+                (
+                    indoc! {"
+                        warning[E0133]: call to unsafe function is unsafe
+                         --> src/lib.rs:1:1
+                    "}
+                    .to_string(),
+                    true
+                ),
+                (
+                    "warning: b@0.1.0: hello from build script\n".to_string(),
+                    true
+                ),
+            ]
+        );
+    }
+
+    /// A failed compile's summaries are chatter, and a Cargo-level error keeps
+    /// its `Caused by` context.
+    #[test_util::test]
+    fn cargo_stderr_drops_compile_summaries_and_keeps_error_context() {
+        let stderr = indoc! {"
+            error: `a` (lib) generated 1 warning
+            error: could not compile `a` (lib) due to 1 previous error; 1 warning emitted
+            warning: build failed, waiting for other jobs to finish...
+            error: failed to load manifest for workspace member `/ws/b`
+
+            Caused by:
+              unknown variant `bogus`
+        "};
+
+        let (warnings, blocks) = blocks(stderr);
+
+        sim_assert_eq!(warnings, 1);
+        sim_assert_eq!(
+            blocks,
+            [(
+                indoc! {"
+                    error: failed to load manifest for workspace member `/ws/b`
+
+                    Caused by:
+                      unknown variant `bogus`
+                "}
+                .to_string(),
+                false
+            )]
+        );
+    }
+
+    /// Indented error context is no status line, however it is capitalized.
+    #[test_util::test]
+    fn cargo_stderr_keeps_indented_error_context() {
+        let stderr = indoc! {"
+            error: could not execute process `/nonexistent/rustc -vV` (never executed)
+
+            Caused by:
+              No such file or directory (os error 2)
+              Permission denied (os error 13)
+             Documenting a v0.1.0 (/ws/a)
+        "};
+
+        let (_, blocks) = blocks(stderr);
+
+        sim_assert_eq!(
+            blocks,
+            [(
+                indoc! {"
+                    error: could not execute process `/nonexistent/rustc -vV` (never executed)
+
+                    Caused by:
+                      No such file or directory (os error 2)
+                      Permission denied (os error 13)
+                "}
+                .to_string(),
+                false
+            )]
+        );
+    }
+
+    #[test_util::test]
+    fn cargo_stderr_strips_colors_only_for_matching() {
+        let stderr = "\x1b[1m\x1b[33mwarning\x1b[0m: unused manifest key: package.foo\n\
+                      \x1b[1m\x1b[33mwarning\x1b[0m: `a` (manifest) generated 1 warning\n";
+
+        let (warnings, blocks) = blocks(stderr);
+
+        // The summary is recognized through the colors, and the warning is
+        // shown with them.
+        sim_assert_eq!(warnings, 1);
+        sim_assert_eq!(
+            blocks,
+            [(
+                "\x1b[1m\x1b[33mwarning\x1b[0m: unused manifest key: package.foo\n".to_string(),
+                true
+            )]
+        );
     }
 }
