@@ -10,13 +10,13 @@
 //! subcommand visible to both, so `cargo fc lint` behaves like `cargo fc clippy`
 //! by default.
 
+use crate::config::ResolvedEnv;
 use crate::print_warning;
+use color_eyre::eyre;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-
-const MAX_ALIAS_EXPANSIONS: usize = 50;
 
 pub(crate) struct AliasExpansion {
     pub(crate) args: Vec<String>,
@@ -52,25 +52,24 @@ impl AliasValue {
     }
 }
 
-/// Built-in cargo subcommands (and their short forms) that an alias can never
-/// shadow — cargo always resolves these to the built-in, so cargo-fc must too.
+/// Built-in cargo subcommands that an alias can never shadow — cargo always
+/// resolves these to the built-in, so cargo-fc must too.
+///
+/// The short forms and `clippy` are left out; see [`is_shadowable_builtin`].
 fn is_builtin(token: &str) -> bool {
     matches!(
         token,
         "add"
             | "bench"
             | "build"
-            | "b"
             | "check"
-            | "c"
             | "clean"
-            | "clippy"
             | "config"
             | "doc"
-            | "d"
             | "fetch"
             | "fix"
             | "generate-lockfile"
+            | "git-checkout"
             | "help"
             | "info"
             | "init"
@@ -86,14 +85,12 @@ fn is_builtin(token: &str) -> bool {
             | "publish"
             | "read-manifest"
             | "remove"
-            | "rm"
+            | "report"
             | "run"
-            | "r"
             | "rustc"
             | "rustdoc"
             | "search"
             | "test"
-            | "t"
             | "tree"
             | "uninstall"
             | "update"
@@ -104,94 +101,133 @@ fn is_builtin(token: &str) -> bool {
     )
 }
 
-/// Expand a leading cargo command alias in `args` the way Cargo would when run
-/// from `cwd`.
+/// Built-in short forms, which are built-in aliases, and the external `clippy`,
+/// all of which a user alias of the same name shadows in Cargo.
 ///
-/// A `CARGO_ALIAS_<NAME>` environment variable wins over the `[alias]` tables
-/// of the cargo config hierarchy that Cargo discovers from `cwd`.
+/// cargo-fc follows such an alias only when it resolves to a command cargo-fc
+/// has a policy for; otherwise the name keeps its built-in meaning, as it did
+/// before cargo-fc followed these aliases, and Cargo expands it.
+fn is_shadowable_builtin(token: &str) -> bool {
+    matches!(token, "b" | "c" | "d" | "r" | "t" | "rm" | "clippy")
+}
+
+/// Expand a leading cargo command alias in `args` the way Cargo would when run
+/// from `cwd`, or from the directory a leading `-C <dir>` names.
+///
+/// A `CARGO_ALIAS_<NAME>` environment variable, as `env` resolves it, wins over
+/// the `[alias]` tables of the cargo config hierarchy Cargo discovers from that
+/// directory.
 ///
 /// Reports whether the argv changed so callers can preserve Cargo's alias
-/// argument placement for generated cargo-fc arguments. Expansion is iterative
-/// (an alias may reference another alias) and capped to avoid infinite loops.
-pub(crate) fn expand_aliases_with_info(args: Vec<String>, cwd: &Path) -> AliasExpansion {
-    expand_aliases_with_env(args, cwd, |key| std::env::var(key).ok())
+/// argument placement for generated cargo-fc arguments. Expansion is iterative,
+/// since an alias may name another alias.
+///
+/// # Errors
+///
+/// Returns an error, as Cargo does, for an alias that names itself again
+/// through a chain.
+pub(crate) fn expand_aliases_with_info(
+    args: Vec<String>,
+    cwd: &Path,
+    env: &ResolvedEnv,
+) -> eyre::Result<AliasExpansion> {
+    expand_aliases_with_env(args, cwd, |key| {
+        env.effective_var(key)
+            .and_then(|value| value.into_string().ok())
+    })
 }
 
 fn expand_aliases_with_env(
     args: Vec<String>,
     cwd: &Path,
     env_var: impl Fn(&str) -> Option<String>,
-) -> AliasExpansion {
-    let Some(idx) = crate::cli::subcommand_token_index(&args) else {
-        return AliasExpansion {
-            args,
-            expanded: false,
-            alias_provided_double_dash: false,
-        };
+) -> eyre::Result<AliasExpansion> {
+    let unchanged = |args| AliasExpansion {
+        args,
+        expanded: false,
+        alias_provided_double_dash: false,
     };
-    match args.get(idx) {
-        Some(token) if !is_builtin(token) => {}
-        _ => {
-            return AliasExpansion {
-                args,
-                expanded: false,
-                alias_provided_double_dash: false,
-            };
-        }
+    let Some(first) = crate::cli::subcommand_token_index(&args) else {
+        return Ok(unchanged(args));
+    };
+    if args.get(first).is_none_or(|token| is_builtin(token)) {
+        return Ok(unchanged(args));
     }
-    let file_aliases = load_aliases(cwd);
+    let config_dir = config_dir(args.get(..first).unwrap_or_default(), cwd);
+    let file_aliases = load_aliases(&config_dir);
     let alias = |name: &str| resolve_alias(name, file_aliases.get(name), &env_var);
 
-    // Args before the subcommand token (e.g. `+toolchain`) are preserved.
-    let mut head: Vec<String> = args.get(..idx).unwrap_or_default().to_vec();
-    let original_rest: Vec<String> = args.get(idx..).unwrap_or_default().to_vec();
-    let mut rest: Vec<String> = args.get(idx..).unwrap_or_default().to_vec();
-    let mut expansions = 0;
-    let mut changed = false;
+    // Like Cargo, expansion replaces the leading token and goes on while the
+    // new leading token is another alias, so a body that starts with a flag or
+    // a `+toolchain` ends the chain and Cargo resolves the rest.
+    let mut args = args;
+    let mut rest = args.split_off(first);
+    let mut chain: Vec<String> = Vec::new();
     let mut alias_provided_double_dash = false;
-    for _ in 0..MAX_ALIAS_EXPANSIONS {
-        let Some(token) = rest.first().cloned() else {
+    // The state before the chain first expanded a shadowable name, restored
+    // when the chain ends at a command cargo-fc has no policy for.
+    let mut before_shadowing = None;
+    while let Some(token) = rest.first().filter(|token| !is_builtin(token)).cloned() {
+        // An empty alias (`x = ""` / `x = []`) cannot stand in for the
+        // subcommand; leave args untouched rather than dropping the token.
+        let Some(expanded) = alias(&token).filter(|expanded| !expanded.is_empty()) else {
             break;
         };
-        if is_builtin(&token) {
-            break;
+        if let Some(first) = chain.first().filter(|_| chain.contains(&token)) {
+            eyre::bail!(
+                "alias {first} has unresolvable recursive definition: {} -> {token}",
+                chain.join(" -> ")
+            );
         }
-        let Some(mut expanded) = alias(&token) else {
-            break;
-        };
-        // An empty alias (`x = ""` / `x = []`) cannot stand in for the subcommand;
-        // leave args untouched rather than dropping the subcommand token.
-        if expanded.is_empty() {
-            break;
+        if is_shadowable_builtin(&token) && before_shadowing.is_none() {
+            before_shadowing = Some((rest.clone(), chain.len(), alias_provided_double_dash));
         }
         alias_provided_double_dash |= expanded.iter().any(|arg| arg == "--");
-        expanded.extend_from_slice(rest.get(1..).unwrap_or_default());
-        rest = expanded;
-        expansions += 1;
-        changed = true;
+        rest.splice(..1, expanded);
+        chain.push(token);
     }
 
-    // Only a run that exhausted the iteration cap is a suspected cycle; breaking
-    // early (builtin reached, unknown token, empty alias) is normal termination.
-    if expansions == MAX_ALIAS_EXPANSIONS
-        && let Some(token) = rest.first()
-        && !is_builtin(token)
-        && alias(token).is_some()
+    // A shadowed built-in keeps its built-in meaning unless its alias resolves
+    // to a command cargo-fc plans for, so `t = "nextest run"` still plans as
+    // `test` while `c = "clippy"` plans as `clippy`.
+    let ends_at_known_command = rest
+        .first()
+        .and_then(|token| crate::cli::builtin_canonical_command(token))
+        .is_some();
+    if let Some((saved_rest, saved_chain, saved_double_dash)) = before_shadowing
+        && !ends_at_known_command
     {
-        print_warning!(
-            "stopped expanding cargo aliases after {MAX_ALIAS_EXPANSIONS} expansions; possible alias cycle involving `{token}`"
-        );
-        rest = original_rest;
-        changed = false;
-        alias_provided_double_dash = false;
+        rest = saved_rest;
+        chain.truncate(saved_chain);
+        alias_provided_double_dash = saved_double_dash;
     }
 
-    head.extend(rest);
-    AliasExpansion {
-        args: head,
-        expanded: changed,
+    args.extend(rest);
+    Ok(AliasExpansion {
+        args,
+        expanded: !chain.is_empty(),
         alias_provided_double_dash,
+    })
+}
+
+/// The directory Cargo reads config from: `cwd`, or the directory a global
+/// `-C <dir>` or `-C<dir>` among the args before the subcommand names.
+fn config_dir(global_args: &[String], cwd: &Path) -> PathBuf {
+    let mut dir = None;
+    let mut args = global_args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "-C" {
+            dir = args.next().map(String::as_str);
+        } else if let Some(value) = arg.strip_prefix("-C") {
+            dir = Some(value);
+        }
     }
+    let Some(dir) = dir else {
+        return cwd.to_path_buf();
+    };
+    // Resolve `..` so the walk over ancestors starts where Cargo moves to.
+    let dir = cwd.join(dir);
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 /// Combine an alias's config-file value with its `CARGO_ALIAS_<NAME>`
@@ -310,7 +346,9 @@ mod tests {
     }
 
     fn expand_aliases(args: Vec<String>, cwd: &Path) -> Vec<String> {
-        expand_aliases_with_env(args, cwd, |_| None).args
+        expand_aliases_with_env(args, cwd, |_| None)
+            .expect("alias expansion without cycles")
+            .args
     }
 
     #[test_util::test]
@@ -437,7 +475,11 @@ mod tests {
             "#},
         )?;
 
-        let wrapper = expand_aliases_with_info(vec!["wrapper".to_string()], tmp.path());
+        let wrapper = expand_aliases_with_info(
+            vec!["wrapper".to_string()],
+            tmp.path(),
+            &ResolvedEnv::default(),
+        )?;
         let serve = expand_aliases_with_info(
             vec![
                 "serve".to_string(),
@@ -445,7 +487,8 @@ mod tests {
                 "program-arg".to_string(),
             ],
             tmp.path(),
-        );
+            &ResolvedEnv::default(),
+        )?;
 
         // Only separators from alias bodies select after-separator placement;
         // user-provided trailing args stay program argv for a normal run alias.
@@ -455,18 +498,123 @@ mod tests {
     }
 
     #[test_util::test]
-    fn leaves_builtin_subcommand_untouched() -> eyre::Result<()> {
+    fn user_alias_shadows_short_forms_and_clippy() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
             &tmp,
             indoc! {r#"
                 [alias]
                 clippy = "build"
+                c = "test --no-run"
+                check = "test"
+                report = "version"
+                t = "nextest run"
+                lint = "t"
             "#},
         )?;
-        let args = vec!["clippy".to_string()];
+        let expand = |name: &str| expand_aliases(vec![name.to_string()], tmp.path());
 
-        assert_eq!(expand_aliases(args.clone(), tmp.path()), args);
+        // Cargo lets a user alias shadow an external subcommand and a built-in
+        // short form, warning about the first.
+        assert_eq!(expand("clippy"), ["build"]);
+        assert_eq!(expand("c"), ["test", "--no-run"]);
+        // A shadowing alias to a command cargo-fc plans no policy for keeps the
+        // built-in meaning, also when reached through another alias.
+        assert_eq!(expand("t"), ["t"]);
+        assert_eq!(expand("lint"), ["t"]);
+        // Without an alias, a short form stays as it is.
+        assert_eq!(expand("b"), ["b"]);
+        // A full built-in name always wins, as in Cargo.
+        assert_eq!(expand("check"), ["check"]);
+        assert_eq!(expand("report"), ["report"]);
+        Ok(())
+    }
+
+    /// A body that starts with a flag ends the chain, leaving the rest to
+    /// Cargo, and a shadowed short form reached that way keeps its meaning.
+    #[test_util::test]
+    fn chain_stops_at_a_leading_flag() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                outer = "--quiet inner"
+                inner = "clippy"
+                c = "--quiet inner"
+            "#},
+        )?;
+        let expand = |name: &str| expand_aliases(vec![name.to_string()], tmp.path());
+
+        assert_eq!(expand("outer"), ["--quiet", "inner"]);
+        assert_eq!(expand("c"), ["c"]);
+        Ok(())
+    }
+
+    /// A `+toolchain` in an alias body stays in front of the command, where
+    /// cargo-fc applies it as the toolchain override, although Cargo itself
+    /// rejects one there.
+    #[test_util::test]
+    fn keeps_a_toolchain_from_an_alias_body() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                unused = "+nightly udeps --all-targets"
+            "#},
+        )?;
+
+        let out = expand_aliases(vec!["unused".to_string()], tmp.path());
+
+        assert_eq!(out, ["+nightly", "udeps", "--all-targets"]);
+        Ok(())
+    }
+
+    /// `-C ..` leaves a directory, so that directory's aliases no longer apply.
+    #[test_util::test]
+    fn c_to_a_parent_leaves_the_childs_aliases_behind() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        let child = tmp.child("child");
+        child.child(".cargo").create_dir_all()?;
+        child.child(".cargo/config.toml").write_str(indoc! {r#"
+            [alias]
+            t = "test --no-run"
+        "#})?;
+
+        let out = expand_aliases(
+            vec!["-C".to_string(), "..".to_string(), "t".to_string()],
+            child.path(),
+        );
+
+        assert_eq!(out, ["-C", "..", "t"]);
+        Ok(())
+    }
+
+    /// `-C <dir>` moves Cargo, and so its config discovery, to `<dir>`.
+    #[test_util::test]
+    fn reads_aliases_from_the_directory_c_names() -> eyre::Result<()> {
+        let tmp = TempDir::new()?;
+        write(
+            &tmp,
+            indoc! {r#"
+                [alias]
+                t = "test --no-run"
+            "#},
+        )?;
+        let elsewhere = TempDir::new()?;
+        let ws = tmp.path().to_string_lossy().into_owned();
+
+        let here = expand_aliases(vec!["t".to_string()], elsewhere.path());
+        let moved = expand_aliases(
+            vec!["-C".to_string(), ws.clone(), "t".to_string()],
+            elsewhere.path(),
+        );
+        let inline = expand_aliases(vec![format!("-C{ws}"), "t".to_string()], elsewhere.path());
+
+        assert_eq!(here, ["t"]);
+        assert_eq!(moved, ["-C", ws.as_str(), "test", "--no-run"]);
+        assert_eq!(inline, [format!("-C{ws}").as_str(), "test", "--no-run"]);
         Ok(())
     }
 
@@ -537,7 +685,7 @@ mod tests {
                 .then(|| "run --manifest-path /abs/tool/Cargo.toml --".to_string())
         };
 
-        let out = expand_aliases_with_env(vec!["my-tool".to_string()], tmp.path(), env_var).args;
+        let out = expand_aliases_with_env(vec!["my-tool".to_string()], tmp.path(), env_var)?.args;
 
         // Cargo maps `alias.my-tool` to `CARGO_ALIAS_MY_TOOL` and lets the
         // environment win over config files.
@@ -554,7 +702,7 @@ mod tests {
         let env_var =
             |key: &str| (key == "CARGO_ALIAS_LINT").then(|| "clippy --no-deps".to_string());
 
-        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var).args;
+        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var)?.args;
 
         assert_eq!(out, ["clippy", "--no-deps"]);
         Ok(())
@@ -573,7 +721,7 @@ mod tests {
         let env_var =
             |key: &str| (key == "CARGO_ALIAS_LINT").then(|| "--all-targets --locked".to_string());
 
-        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var).args;
+        let out = expand_aliases_with_env(vec!["lint".to_string()], tmp.path(), env_var)?.args;
 
         // Cargo merges an environment value into a list instead of replacing it.
         assert_eq!(out, ["check", "--all-targets", "--locked"]);
@@ -636,7 +784,7 @@ mod tests {
     }
 
     #[test_util::test]
-    fn caps_cyclic_alias_expansion() -> eyre::Result<()> {
+    fn cyclic_alias_is_an_error_like_cargo() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         write(
             &tmp,
@@ -644,15 +792,23 @@ mod tests {
                 [alias]
                 alpha = "beta"
                 beta = "alpha"
+                c = "c --locked"
             "#},
         )?;
+        let expand = |name: &str| {
+            expand_aliases_with_env(vec![name.to_string()], tmp.path(), |_| None)
+                .err()
+                .map(|err| err.to_string())
+        };
 
-        let out = expand_aliases(
-            vec!["alpha".to_string(), "--locked".to_string()],
-            tmp.path(),
+        assert_eq!(
+            expand("alpha").as_deref(),
+            Some("alias alpha has unresolvable recursive definition: alpha -> beta -> alpha")
         );
-
-        assert_eq!(out, ["alpha", "--locked"]);
+        assert_eq!(
+            expand("c").as_deref(),
+            Some("alias c has unresolvable recursive definition: c -> c")
+        );
         Ok(())
     }
 }

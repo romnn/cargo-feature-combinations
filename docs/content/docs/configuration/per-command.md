@@ -52,6 +52,8 @@ env = { add = { ORT_STRATEGY = "download" } }
 
 Built-in short aliases (`t` → `test`, `b` → `build`, …) and your own `.cargo/config.toml` aliases that resolve to a built-in inherit the override automatically, the same way [configured targets]({{< relref "../targets/configured-targets.md" >}}) and flag defaults resolve aliases.
 
+cargo-fc resolves aliases as Cargo does. A user alias may shadow the short forms `b`, `c`, `d`, `r`, `t`, and `rm` and the external `clippy`, but never a full built-in name such as `check`. A shadowing alias that resolves to `build`, `check`, `clippy`, `doc`, `test`, or `run` takes the override, diagnostics mode, and target handling of that command: with `c = "clippy"`, `subcommands.c` applies if present, and otherwise `subcommands.clippy`. One that resolves to any other command, such as `t = "nextest run"`, keeps its built-in meaning, so `cargo fc t` plans as `test` and Cargo runs the alias. Aliases come from `.cargo/config.toml`, looked up from the directory cargo-fc runs in or the one `-C` names, and from `CARGO_ALIAS_*` variables, including those `--env` and `--unset-env` change when commands run (`cargo fc matrix` ignores both). An `env` patch in the manifest cannot redirect an alias, because the patch itself depends on the command the alias selects.
+
 ## Composing target and command
 
 A `target.'cfg(...)'.subcommands.<command>` section applies only when **both** conditions hold — the target matches *and* the command is selected:

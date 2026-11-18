@@ -241,21 +241,24 @@ fn target_command_entries<'a>(
     (command_name, entries)
 }
 
+/// The `subcommands` entry for the command the user typed (`raw`) or the one
+/// its aliases resolved to (`resolved`).
+///
+/// An exact entry for `raw` wins.
+/// A built-in short form such as `b` falls back to its full command's entry
+/// only when no alias replaced it; once `b = "test"` expands, the resolved
+/// `test` supplies the policy, since that is the command Cargo runs.
 fn selected_command_entry<'a>(
     raw: Option<&str>,
     resolved: Option<&str>,
     subcommands: &'a std::collections::BTreeMap<String, ScopeConfig>,
 ) -> Option<(&'a str, &'a ScopeConfig)> {
-    if let Some(raw) = raw
-        && let Some(entry) = command_entry_for_token(raw, subcommands)
-    {
-        return Some(entry);
-    }
     if resolved == raw {
-        None
-    } else {
-        resolved.and_then(|token| command_entry_for_token(token, subcommands))
+        return raw.and_then(|token| command_entry_for_token(token, subcommands));
     }
+    raw.and_then(|raw| subcommands.get_key_value(raw))
+        .map(|(name, scope)| (name.as_str(), scope))
+        .or_else(|| resolved.and_then(|token| command_entry_for_token(token, subcommands)))
 }
 
 fn command_entry_for_token<'a>(
@@ -273,7 +276,7 @@ fn command_entry_for_token<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::command_entry_for_token;
+    use super::{command_entry_for_token, selected_command_entry};
     use crate::config::ScopeConfig;
     use color_eyre::eyre;
     use color_eyre::eyre::OptionExt as _;
@@ -322,6 +325,32 @@ mod tests {
             override_config.and_then(|(_name, config)| config.expand_targets),
             Some(true)
         );
+    }
+
+    /// A short form an alias replaced takes the policy of the command it runs,
+    /// not of the built-in it shadows, unless it has an exact entry.
+    #[test_util::test]
+    fn expanded_short_form_takes_the_resolved_command_policy() {
+        let scope = |expand_targets| ScopeConfig {
+            expand_targets: Some(expand_targets),
+            ..ScopeConfig::default()
+        };
+        let mut subcommands = BTreeMap::from([
+            ("build".to_string(), scope(false)),
+            ("test".to_string(), scope(true)),
+        ]);
+        let selected = |subcommands: &BTreeMap<String, ScopeConfig>, raw, resolved| {
+            selected_command_entry(Some(raw), Some(resolved), subcommands)
+                .map(|(name, _config)| name.to_string())
+        };
+
+        // `b = "test"` and a plain `b`
+        assert_eq!(selected(&subcommands, "b", "test").as_deref(), Some("test"));
+        assert_eq!(selected(&subcommands, "b", "b").as_deref(), Some("build"));
+
+        // An exact entry for the typed name still wins.
+        subcommands.insert("b".to_string(), scope(false));
+        assert_eq!(selected(&subcommands, "b", "test").as_deref(), Some("b"));
     }
 
     #[test_util::test]

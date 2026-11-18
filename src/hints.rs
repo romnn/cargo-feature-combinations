@@ -46,9 +46,9 @@ pub(crate) fn warn_if_configured_targets_ignored(
                 ))
     });
     let warning_token = raw_token.or(resolved_token);
-    if cli::known_quiet_cargo_subcommand(raw_token)
-        || cli::known_quiet_cargo_subcommand(resolved_token)
-    {
+    // The command that runs decides, so an alias that shadows a quiet command
+    // such as `rm` still gets the hint.
+    if cli::known_quiet_cargo_subcommand(resolved_token.or(raw_token)) {
         return;
     }
     if has_implicitly_skipped_configured_targets
@@ -83,9 +83,7 @@ pub(crate) fn warn_ignored_diagnostics_config(
     plan_set: &plan::execution::ExecutionPlanSet<'_>,
 ) {
     let cli_flags = options.flags;
-    if cli::known_quiet_cargo_subcommand(raw_token)
-        || cli::known_quiet_cargo_subcommand(resolved_token)
-    {
+    if cli::known_quiet_cargo_subcommand(resolved_token.or(raw_token)) {
         return;
     }
     if cli_flags.diagnostics_only != Some(true)
