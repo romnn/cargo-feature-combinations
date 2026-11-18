@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.10.0]
+
 ### Fixed
 
 - A user alias named `b`, `c`, `d`, `r`, `t`, `rm`, or `clippy` that resolves
