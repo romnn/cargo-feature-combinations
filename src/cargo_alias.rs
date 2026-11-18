@@ -573,7 +573,7 @@ mod tests {
 
     /// `-C ..` leaves a directory, so that directory's aliases no longer apply.
     #[test_util::test]
-    fn c_to_a_parent_leaves_the_childs_aliases_behind() -> eyre::Result<()> {
+    fn c_to_a_parent_leaves_the_child_directory_aliases_behind() -> eyre::Result<()> {
         let tmp = TempDir::new()?;
         let child = tmp.child("child");
         child.child(".cargo").create_dir_all()?;
