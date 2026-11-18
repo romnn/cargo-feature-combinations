@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- A user alias named `b`, `c`, `d`, `r`, `t`, `rm`, or `clippy` that resolves
+  to `build`, `check`, `clippy`, `doc`, `test`, or `run`, such as
+  `c = "clippy"`, now plans with that command's configuration, diagnostics
+  mode, and target handling instead of the built-in it shadows (#35). Other
+  shadowing aliases, such as `t = "nextest run"`, keep their built-in meaning
+  as before. Alias resolution also reads config from the directory `-C` names
+  and honors `--env` and `--unset-env` for `CARGO_ALIAS_*` when commands run.
+- A recursive alias is now an error, as in Cargo, instead of a warning
+  followed by planning the unexpanded command.
+
 - `--diagnostics-only` and `--dedupe` now show and count Cargo's own warnings,
   such as the manifest lints `cargo::redundant_homepage` and
   `cargo::unused_workspace_dependencies`, which Cargo prints outside its JSON

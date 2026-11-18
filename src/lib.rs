@@ -268,7 +268,8 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
 
     // Cargo discovers alias config from its working directory, which cargo-fc
     // children inherit, not from the workspace root.
-    let prepared = prepare_cargo_command(cargo_args, &std::env::current_dir()?)?;
+    let alias_env = cli_alias_env(&options);
+    let prepared = prepare_cargo_command(cargo_args, &std::env::current_dir()?, &alias_env)?;
     let tokens = prepared.tokens();
     let selected =
         selected_packages_for_target_planning(&packages, &configs, &options, &ws_config, tokens)?;
@@ -360,15 +361,37 @@ pub fn run(bin_name: &str) -> eyre::Result<()> {
     }
 }
 
+/// The environment cargo-fc resolves aliases in: its own, with the
+/// `--env` and `--unset-env` overrides every child receives.
+///
+/// Manifest `env` patches are left out, because they depend on the command and
+/// target that alias resolution selects.
+/// Matrix mode spawns no child, so the overrides have no effect there, as its
+/// note about them says.
+fn cli_alias_env(options: &Options) -> config::ResolvedEnv {
+    let mut env = config::ResolvedEnv::default();
+    if matches!(options.command, Some(Command::FeatureMatrix { .. })) {
+        return env;
+    }
+    for name in &options.env_remove {
+        env.remove(name);
+    }
+    for (name, value) in &options.env_set {
+        env.set(name.clone(), value.clone());
+    }
+    env
+}
+
 fn prepare_cargo_command(
     args: Vec<String>,
     cwd: &std::path::Path,
+    env: &config::ResolvedEnv,
 ) -> eyre::Result<PreparedCargoCommand> {
     let raw_token = cli::cargo_subcommand_token(&args);
     let raw_cli_target = target::parse_cli_target(&args)?;
     // Resolve cargo command aliases so target policy and build-driver dispatch
     // see the underlying built-in subcommand when one is configured.
-    let alias_expansion = cargo_alias::expand_aliases_with_info(args, cwd);
+    let alias_expansion = cargo_alias::expand_aliases_with_info(args, cwd, env)?;
     let expanded_args = alias_expansion.args;
     let resolved_token = cli::cargo_subcommand_token(&expanded_args);
     // Expanded `run` aliases keep generated args after `--` only when the alias
@@ -711,6 +734,28 @@ mod test {
         ))
     }
 
+    /// `--env` and `--unset-env` steer aliases only where a child runs, so
+    /// matrix output resolves them as without the overrides.
+    #[test_util::test]
+    fn cli_env_steers_aliases_in_run_mode_only() -> eyre::Result<()> {
+        let mut options = Options::default();
+        options.env_set.push((
+            "FC_TEST_ALIAS_ENV".to_string(),
+            serde_json::from_value(serde_json::json!("test"))?,
+        ));
+
+        let run = cli_alias_env(&options);
+        options.command = Some(Command::FeatureMatrix { pretty: false });
+        let matrix = cli_alias_env(&options);
+
+        assert_eq!(
+            run.effective_var("FC_TEST_ALIAS_ENV").as_deref(),
+            Some(std::ffi::OsStr::new("test"))
+        );
+        assert_eq!(matrix.effective_var("FC_TEST_ALIAS_ENV"), None);
+        Ok(())
+    }
+
     #[test_util::test]
     fn prepare_cargo_command_marks_nested_run_wrapper_aliases() -> eyre::Result<()> {
         let workspace = workspace_with_aliases(indoc! {r#"
@@ -719,7 +764,11 @@ mod test {
             lint = "clippy-wrapper lint"
         "#})?;
 
-        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
+        let prepared = prepare_cargo_command(
+            vec!["lint".to_string()],
+            workspace.path(),
+            &config::ResolvedEnv::default(),
+        )?;
 
         // Nested aliases still need wrapper placement once the final expansion
         // is `cargo run ... -- <wrapped-command>`.
@@ -743,6 +792,7 @@ mod test {
         let prepared = prepare_cargo_command(
             vec!["run".to_string(), "--".to_string(), "lint".to_string()],
             workspace.path(),
+            &config::ResolvedEnv::default(),
         )?;
 
         // A user-provided `--` for direct `cargo run` is program argv, not an
@@ -766,6 +816,7 @@ mod test {
         let prepared = prepare_cargo_command(
             vec!["serve".to_string(), "--".to_string(), "lint".to_string()],
             workspace.path(),
+            &config::ResolvedEnv::default(),
         )?;
 
         // The alias did not provide `--`; the user's trailing args remain the
@@ -787,7 +838,11 @@ mod test {
             serve = "run --package app -- serve"
         "#})?;
 
-        let prepared = prepare_cargo_command(vec!["serve".to_string()], workspace.path())?;
+        let prepared = prepare_cargo_command(
+            vec!["serve".to_string()],
+            workspace.path(),
+            &config::ResolvedEnv::default(),
+        )?;
 
         // A `--` inside the alias body owns the argument boundary; generated
         // args must preserve that alias-defined position.
@@ -819,6 +874,7 @@ mod test {
                 "wasm32-unknown-unknown".to_string(),
             ],
             workspace.path(),
+            &config::ResolvedEnv::default(),
         )?;
 
         // The user's explicit `--target` still wins even when the alias expands
@@ -854,7 +910,11 @@ mod test {
             lint = "run --package clippy-wrapper --target x86_64-unknown-linux-gnu -- lint"
         "#})?;
 
-        let prepared = prepare_cargo_command(vec!["lint".to_string()], workspace.path())?;
+        let prepared = prepare_cargo_command(
+            vec!["lint".to_string()],
+            workspace.path(),
+            &config::ResolvedEnv::default(),
+        )?;
 
         // The expanded `--target` configures the wrapper package, not the
         // command behind `--`, so target planning must ignore it.
@@ -885,7 +945,11 @@ mod test {
             wasm-check = "check --target wasm32-unknown-unknown"
         "#})?;
 
-        let prepared = prepare_cargo_command(vec!["wasm-check".to_string()], workspace.path())?;
+        let prepared = prepare_cargo_command(
+            vec!["wasm-check".to_string()],
+            workspace.path(),
+            &config::ResolvedEnv::default(),
+        )?;
 
         // Non-wrapper aliases still expose their expanded Cargo `--target` as
         // an explicit target override.
